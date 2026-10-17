@@ -45,5 +45,6 @@ contextBridge.exposeInMainWorld('pv', {
   onTheme: (cb) => ipcRenderer.on('app:theme', (_e, theme) => cb(theme)),
   onTogglePreview: (cb) => ipcRenderer.on('app:toggle-preview', () => cb()),
   onRescan: (cb) => ipcRenderer.on('app:rescan', () => cb()),
-  onFocusSearch: (cb) => ipcRenderer.on('app:focus-search', () => cb())
+  onFocusSearch: (cb) => ipcRenderer.on('app:focus-search', () => cb()),
+  onToggleFavorite: (cb) => ipcRenderer.on('app:toggle-favorite', (_e, node) => cb(node))
 });

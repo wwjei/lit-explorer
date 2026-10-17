@@ -37,7 +37,8 @@ function argValue(prefix) {
 protocol.registerSchemesAsPrivileged([
   {
     scheme: 'pv',
-    privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true }
+    // corsEnabled 让预览页里的 ES module / fetch 能请求 pv:// 资源
+    privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true }
   }
 ]);
 
@@ -67,7 +68,10 @@ function registerPreviewProtocol() {
       return new Response(data, {
         headers: {
           'content-type': fsApi.mimeFor(abs),
-          'cache-control': 'no-store'
+          'cache-control': 'no-store',
+          // 预览 iframe 是不透明源（sandbox 无 allow-same-origin），
+          // ES module / fetch 会走 CORS，必须允许跨源读取
+          'access-control-allow-origin': '*'
         }
       });
     } catch {
@@ -324,6 +328,15 @@ function showContextMenu(payload) {
   }
 
   if (target) {
+    items.push({
+      label: payload && payload.favorited ? '从快速访问中移除' : '添加到快速访问',
+      click: () => win.webContents.send('app:toggle-favorite', {
+        path: target,
+        name: path.basename(target),
+        isDir: kind === 'folder'
+      })
+    });
+    items.push({ type: 'separator' });
     items.push({ label: '复制路径', click: () => clipboard.writeText(target) });
     items.push({ label: '复制名称', click: () => clipboard.writeText(path.basename(target)) });
     items.push({ label: '在资源管理器中显示', click: () => shell.showItemInFolder(target) });

@@ -30,7 +30,10 @@
     query: '',
     theme: 'light',
     previewOpen: true,
-    pendingScroll: false
+    pendingScroll: false,
+    hideDot: false,          // 是否隐藏以 . 开头的条目
+    favs: [],                // 当前工作区的快速访问项 [{ path, name, isDir, kind }]
+    favoritesByRoot: {}      // 持久化的快速访问项（按工作区根目录分组）
   };
 
   /** 路径 -> { size, mtime }，由主进程异步补发 */
@@ -72,19 +75,199 @@
     return rel.replace(/^[\\/]+/, '');
   }
 
+  /* ============================ 快速访问 ============================ */
+  /** 快速访问项按工作区分组；Windows 路径大小写不敏感，统一成小写作为键 */
+  function favKey(dir) {
+    return String(dir || '').replace(/[\\/]+$/, '').toLowerCase();
+  }
+
+  function normalizeFavorites(list) {
+    if (!Array.isArray(list)) return [];
+    const root = (state.root || '').replace(/[\\/]+$/, '').toLowerCase();
+    return list.map((item) => {
+      if (typeof item === 'string') {
+        return {
+          path: item,
+          name: item.split(/[\\/]/).filter(Boolean).pop() || item,
+          isDir: false,
+          kind: 'txt'
+        };
+      }
+      if (!item || !item.path) return null;
+      return {
+        path: item.path,
+        name: item.name || item.path.split(/[\\/]/).filter(Boolean).pop() || item.path,
+        isDir: !!item.isDir,
+        kind: item.kind || (item.isDir ? 'folder' : 'txt')
+      };
+    }).filter((f) => {
+      if (!f) return false;
+      const p = f.path.replace(/[\\/]+$/, '').toLowerCase();
+      return !root || p === root || p.startsWith(root + '\\') || p.startsWith(root + '/');
+    });
+  }
+
+  function findLoadedNode(target) {
+    for (let ci = 0; ci < state.cols.length; ci++) {
+      const col = state.cols[ci];
+      if (!col || !col.entries) continue;
+      const hit = col.entries.find((e) => e.path === target);
+      if (hit) return hit;
+    }
+    return null;
+  }
+
+  function isFavorite(path) {
+    return state.favs.some((f) => f.path === path);
+  }
+
+  function saveFavorites() {
+    if (!state.root) return;
+    state.favoritesByRoot[favKey(state.root)] = state.favs.slice();
+    pv.setState({ favorites: state.favoritesByRoot });
+  }
+
+  function toggleFavorite(target) {
+    if (!target || !target.path) return;
+    const node = findLoadedNode(target.path) || target;
+    const at = state.favs.findIndex((f) => f.path === node.path);
+    if (at >= 0) {
+      state.favs.splice(at, 1);
+    } else {
+      state.favs.push({
+        path: node.path,
+        name: node.name || node.path.split(/[\\/]/).filter(Boolean).pop() || node.path,
+        isDir: !!node.isDir,
+        kind: node.isDir ? 'folder' : (node.kind || 'txt')
+      });
+    }
+    saveFavorites();
+    updateRowStates();
+    renderFavorites();
+    toast(at >= 0 ? '已从快速访问移除：' + (node.name || '') : '已加入快速访问：' + (node.name || ''));
+  }
+
+  /** 快速访问项相对当前工作区根目录的各段名字 */
+  function partsUnderRoot(absPath) {
+    if (!state.root) return null;
+    const root = state.root.replace(/[\\/]+$/, '');
+    const p = String(absPath || '').replace(/[\\/]+$/, '');
+    if (p.toLowerCase() === root.toLowerCase()) return [];
+    const base = root.toLowerCase();
+    const low = p.toLowerCase();
+    if (!low.startsWith(base + '\\') && !low.startsWith(base + '/')) return null;
+    return p.slice(root.length).split(/[\\/]+/).filter(Boolean);
+  }
+
+  async function openFavorite(fav) {
+    if (!state.root || !fav) return;
+    const parts = partsUnderRoot(fav.path);
+    if (!parts) { toast('快速访问项不在当前工作区内'); return; }
+    if (!parts.length) { goToPathIndex(-1); return; }
+
+    // 目标位于隐藏目录里时先恢复显示，否则导航后列中不会出现对应行
+    if (state.hideDot && parts.some((p) => p.charAt(0) === '.')) {
+      state.hideDot = false;
+      pv.setState({ hideDot: false });
+    }
+    if (state.query) {
+      state.query = '';
+      $('#search').value = '';
+    }
+
+    const rootNode = state.path[0]
+      || { name: state.rootName, path: state.root, isDir: true, kind: 'folder' };
+    state.path = [rootNode];
+    state.cols = [];
+    state.sel = null;
+    state.mode = 'preview';
+
+    let target = null;
+    let targetCol = -1;
+    for (let i = 0; i < parts.length; i++) {
+      await loadColumn(i);
+      const col = state.cols[i];
+      if (!col || col.state !== 'ready') { toast('无法打开快速访问项'); render(); return; }
+      const entry = (col.entries || []).find((e) => e.name === parts[i]);
+      if (!entry) { toast('快速访问项已不存在：' + parts[i]); render(); return; }
+      if (i === parts.length - 1) {
+        target = entry;
+        targetCol = i;
+      } else if (entry.isDir) {
+        state.path.push(entry);
+      } else {
+        toast('快速访问项的路径已变化');
+        render();
+        return;
+      }
+    }
+    if (!target) return;
+
+    state.sel = { col: targetCol, node: target };
+    if (target.isDir) {
+      state.path.push(target);
+    } else if (!state.previewOpen) {
+      state.previewOpen = true;
+      $('#btn-preview').classList.remove('is-on');
+      pv.setState({ previewOpen: true });
+    }
+    state.pendingScroll = true;
+    renderedPreviewKey = '';
+    render();
+
+    const idx = itemsOf(targetCol).findIndex((n) => n.path === target.path);
+    if (idx >= 0) ensureVisible(targetCol, idx);
+    if (target.isDir) await loadColumn(targetCol + 1);
+  }
+
+  function renderFavorites() {
+    const colEl = colsEl.children[0];
+    if (!colEl) return;
+    const panel = colEl.querySelector('.fav-panel');
+    if (!panel) return;
+    if (!state.favs.length) {
+      panel.hidden = true;
+      panel.innerHTML = '';
+      return;
+    }
+    panel.hidden = false;
+    const selPath = state.sel ? state.sel.node.path : '';
+    const rows = state.favs.map((f) => {
+      return '<div class="row fav-row' + (f.path === selPath ? ' is-sel' : '')
+        + '" data-fav-path="' + esc(f.path) + '" title="' + esc(f.path) + '" role="button">'
+        + nodeIcon({ name: f.name, isDir: f.isDir, kind: f.kind }, 14)
+        + '<span class="nm">' + esc(f.name) + '</span>'
+        + '</div>';
+    }).join('');
+    panel.innerHTML = '<div class="fav-head">' + icon('zapFilled', 'fav-head-ic', 12)
+      + '<span>快速访问</span></div>'
+      + '<div class="fav-scroll"><div class="fav-list">' + rows + '</div></div>';
+  }
+
   /* ============================ 数据 ============================ */
+  /** 应用「隐藏点文件」过滤后的原始条目（搜索前） */
+  function baseItemsOf(ci) {
+    const col = state.cols[ci];
+    if (!col || !col.entries) return [];
+    return state.hideDot
+      ? col.entries.filter((e) => e.name.charAt(0) !== '.')
+      : col.entries;
+  }
+
   function itemsOf(ci) {
     const col = state.cols[ci];
     if (!col || !col.entries) return [];
-    if (col._items && col._itemsQuery === state.query) return col._items;
+    const cacheKey = state.query + '\u0001' + (state.hideDot ? 'hide' : 'show');
+    if (col._items && col._itemsKey === cacheKey) return col._items;
     const q = state.query.toLowerCase();
-    const list = q ? col.entries.filter((e) => e.name.toLowerCase().indexOf(q) >= 0) : col.entries.slice();
+    const base = baseItemsOf(ci);
+    const list = q ? base.filter((e) => e.name.toLowerCase().indexOf(q) >= 0) : base.slice();
     list.sort((a, b) => {
       if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
       return a.name.localeCompare(b.name, 'zh-Hans-CN', { numeric: true });
     });
     col._items = list;
-    col._itemsQuery = state.query;
+    col._itemsKey = cacheKey;
     return list;
   }
 
@@ -114,6 +297,8 @@
     } else {
       state.cols[ci] = { dir: folder.path, state: 'ready', version, entries: res.entries, error: null };
     }
+    // 选中的文件夹摘要依赖下一栏的内容，加载完成后要强制刷新预览头/卡片
+    if (state.sel && state.sel.node.isDir && state.sel.col + 1 === ci) renderedPreviewKey = '';
     render();
   }
 
@@ -136,23 +321,31 @@
     state.cols = [];
     state.sel = null;
     state.mode = 'preview';
+    state.favs = normalizeFavorites(state.favoritesByRoot[favKey(dir)]);
     setWelcome(false);
     render();
     await loadColumn(0);
   }
 
   async function selectNode(node, ci, options) {
+    const opts = options || {};
     state.sel = { col: ci, node };
     state.mode = 'preview';
     if (node.isDir) {
       state.path = state.path.slice(0, ci + 1).concat([node]);
-      state.pendingScroll = !options || options.scroll !== false;
+      state.pendingScroll = opts.scroll !== false;
       render();
       await loadColumn(ci + 1);
     } else {
       state.path = state.path.slice(0, ci + 1);
       state.cols.length = ci + 1;
       state.pendingScroll = false;
+      // 预览被收起时，重新单击文件应当把预览内容带回来
+      if (!state.previewOpen && opts.revealPreview) {
+        state.previewOpen = true;
+        $('#btn-preview').classList.remove('is-on');
+        pv.setState({ previewOpen: true });
+      }
       render();
     }
   }
@@ -194,7 +387,9 @@
     if (!state.path.length) { crumbsEl.innerHTML = ''; return; }
     let html = '<button class="crumb" data-crumb="-1" title="工作区根目录">' + icon('home', '', 14) + '</button>';
     const last = state.path.length - 1;
+    // 根目录已经由 home 图标代表，不再重复渲染项目名
     state.path.forEach((folder, i) => {
+      if (i === 0) return;
       html += '<span class="crumb-sep">' + icon('chevron', '', 13) + '</span>';
       html += '<button class="crumb' + (i === last ? ' is-last' : '') + '" data-crumb="' + i + '" title="'
         + esc(folder.path) + '">' + esc(folder.name) + '</button>';
@@ -224,7 +419,7 @@
     const col = state.cols[ci];
     if (!folder) return '';
     const phase = !col ? 'init' : col.state + ':' + col.version + (col.error ? ':' + (col.error.error || '') : '');
-    return folder.path + '\u0001' + phase + '\u0001' + state.query;
+    return folder.path + '\u0001' + phase + '\u0001' + state.query + '\u0001' + (state.hideDot ? 'hide' : 'show');
   }
 
   function applyRowClass(row, node) {
@@ -232,6 +427,13 @@
     row.classList.toggle('is-sel', selected);
     row.classList.toggle('is-trail', !selected && isInPath(node));
     row.classList.toggle('is-broken', !!node.broken);
+    const fav = isFavorite(node.path);
+    const favBtn = row.querySelector('.row-fav');
+    if (favBtn) {
+      favBtn.classList.toggle('is-on', fav);
+      favBtn.title = fav ? '从快速访问中移除' : '添加到快速访问';
+      favBtn.innerHTML = icon(fav ? 'zapFilled' : 'zap', '', 14);
+    }
   }
 
   function rowEl(node, ci, idx) {
@@ -244,6 +446,7 @@
     row.innerHTML = nodeIcon(node)
       + '<span class="nm">' + esc(node.name) + '</span>'
       + '<span class="meta">' + esc(metaText(node)) + '</span>'
+      + '<button class="row-fav" tabindex="-1" aria-label="快速访问"></button>'
       + (node.isDir ? '<span class="chev">' + icon('chevron', '', 14) + '</span>' : '');
     applyRowClass(row, node);
     return row;
@@ -292,15 +495,32 @@
 
     const head = document.createElement('div');
     head.className = 'col-head';
-    const total = col && col.entries ? col.entries.length : 0;
-    const countText = state.query && total !== items.length ? items.length + ' / ' + total : String(items.length);
-    head.innerHTML = '<b>' + esc(folder.name) + '</b><span>'
-      + (col && col.state === 'ready' ? countText : '') + '</span>';
+    if (ci === 0) {
+      // 根目录栏：项目名 + 点文件显隐开关，不再占用空间显示文件数
+      head.innerHTML = '<b>' + esc(folder.name) + '</b>'
+        + '<button class="col-toggle' + (state.hideDot ? ' is-on' : '') + '" data-toggle-dot title="'
+        + (state.hideDot ? '显示以 . 开头的文件/文件夹' : '隐藏以 . 开头的文件/文件夹') + '" aria-label="切换点文件显示">'
+        + icon(state.hideDot ? 'eyeOff' : 'eye', '', 14) + '</button>';
+    } else {
+      const total = baseItemsOf(ci).length;
+      const countText = state.query && total !== items.length ? items.length + ' / ' + total : String(items.length);
+      head.innerHTML = '<b>' + esc(folder.name) + '</b><span>'
+        + (col && col.state === 'ready' ? countText : '') + '</span>';
+    }
     el.appendChild(head);
 
     const list = document.createElement('div');
     list.className = 'col-list';
     el.appendChild(list);
+
+    if (ci === 0) {
+      // 快速访问面板固定在根目录栏底部，最多占该栏一半高度
+      const favPanel = document.createElement('div');
+      favPanel.className = 'fav-panel';
+      favPanel.hidden = true;
+      el.appendChild(favPanel);
+    }
+
     colsEl.appendChild(el);
 
     if (!col || col.state === 'loading') {
@@ -369,6 +589,7 @@
 
     renderedColKeys = keys;
     updateRowStates();
+    renderFavorites();
 
     if (state.pendingScroll) {
       state.pendingScroll = false;
@@ -625,21 +846,64 @@
 
   /* 列点击 / 双击 */
   colsEl.addEventListener('click', (e) => {
+    // 点文件显隐开关
+    if (e.target.closest('[data-toggle-dot]')) {
+      state.hideDot = !state.hideDot;
+      pv.setState({ hideDot: state.hideDot });
+      render();
+      return;
+    }
+
+    // 点击快速访问项：导航到它并选中
+    const favRow = e.target.closest('.fav-row');
+    if (favRow) {
+      const fav = state.favs.find((f) => f.path === favRow.dataset.favPath);
+      if (fav) openFavorite(fav);
+      return;
+    }
+
+    // 行尾的快速访问按钮
+    const star = e.target.closest('.row-fav');
+    if (star) {
+      e.stopPropagation();
+      const row = star.closest('.row');
+      const node = row ? nodeAt(+row.dataset.col, +row.dataset.idx) : null;
+      if (node) toggleFavorite(node);
+      return;
+    }
+
     const row = e.target.closest('.row');
     if (!row) return;
-    const node = nodeAt(+row.dataset.col, +row.dataset.idx);
-    if (node) selectNode(node, +row.dataset.col);
+    const ci = +row.dataset.col;
+    if (!Number.isFinite(ci)) return;
+    const node = nodeAt(ci, +row.dataset.idx);
+    // 预览收起时，单击文件应当重新展开预览
+    if (node) selectNode(node, ci, { revealPreview: true });
   });
 
   colsEl.addEventListener('dblclick', (e) => {
     const row = e.target.closest('.row');
-    if (!row) return;
+    if (!row || row.classList.contains('fav-row')) return;
     const node = nodeAt(+row.dataset.col, +row.dataset.idx);
     if (node && !node.isDir) openWithSystem(node);
   });
 
   colsEl.addEventListener('contextmenu', (e) => {
     e.preventDefault();
+
+    const favRow = e.target.closest('.fav-row');
+    if (favRow) {
+      const fav = state.favs.find((f) => f.path === favRow.dataset.favPath);
+      if (fav) {
+        pv.openContextMenu({
+          path: fav.path,
+          kind: fav.isDir ? 'folder' : 'file',
+          favorited: true
+        });
+      }
+      return;
+    }
+
     const row = e.target.closest('.row');
     if (!row) { pv.openContextMenu({ kind: 'empty' }); return; }
     const node = nodeAt(+row.dataset.col, +row.dataset.idx);
@@ -647,7 +911,11 @@
     if (state.sel && state.sel.node.path !== node.path) {
       selectNode(node, +row.dataset.col);
     }
-    pv.openContextMenu({ path: node.path, kind: node.isDir ? 'folder' : 'file' });
+    pv.openContextMenu({
+      path: node.path,
+      kind: node.isDir ? 'folder' : 'file',
+      favorited: isFavorite(node.path)
+    });
   });
 
   /* 面包屑 */
@@ -864,6 +1132,11 @@
     for (let ci = 0; ci < state.path.length; ci++) renderColumnWindow(ci);
   });
 
+  /* 根目录栏是 sticky 的：横向滚动后加一层投影，和后面的栏区分开 */
+  colsEl.addEventListener('scroll', () => {
+    colsEl.classList.toggle('is-scrolled', colsEl.scrollLeft > 0);
+  }, { passive: true });
+
   /* ============================ 主进程事件 ============================ */
   // 异步链路上的异常必须显式暴露，否则预览会静默停在旧内容上
   window.addEventListener('unhandledrejection', (e) => {
@@ -914,6 +1187,9 @@
     $('#search').focus();
     $('#search').select();
   });
+  pv.onToggleFavorite((node) => {
+    if (node && node.path) toggleFavorite(node);
+  });
 
   /* ============================ 启动 ============================ */
   (async function init() {
@@ -923,6 +1199,13 @@
     $('#theme-ic').innerHTML = state.theme === 'light' ? PV.icons.ICONS.moon : PV.icons.ICONS.sun;
     state.previewOpen = st.previewOpen !== false;
     $('#btn-preview').classList.toggle('is-on', !state.previewOpen);
+    state.hideDot = !!st.hideDot;
+    state.favoritesByRoot = st.favorites && typeof st.favorites === 'object' ? st.favorites : {};
+    // 主进程有可能在读取设置期间就已经把工作区打开了，这时补上该工作区的快速访问项
+    if (state.root) {
+      state.favs = normalizeFavorites(state.favoritesByRoot[favKey(state.root)]);
+      render();
+    }
     if (st.previewWidth > 0) $('#preview').style.width = st.previewWidth + 'px';
     applyMaximized(await pv.isMaximized());
     // 主进程可能在读设置的同时已经把工作区打开了，这里不能反过来盖住它

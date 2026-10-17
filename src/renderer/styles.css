@@ -158,11 +158,15 @@ body.is-maximized .app{box-shadow:none}
 .crumb-sep{color:var(--line-strong);flex:none;display:grid;place-items:center}
 
 /* ============ 栏 ============ */
-.cols{flex:1;display:flex;min-height:0;overflow-x:auto;overflow-y:hidden}
+.cols{flex:1;display:flex;min-height:0;overflow-x:auto;overflow-y:hidden;position:relative}
 .col{
   width:246px;flex:none;min-height:0;display:flex;flex-direction:column;
   border-right:1px solid var(--line);background:var(--panel);
 }
+/* 根目录栏固定在左侧：横向滚动浏览深层目录时不会被推走 */
+.col:first-child{position:sticky;left:0;z-index:3;background:var(--panel)}
+.cols.is-scrolled>.col:first-child{box-shadow:9px 0 16px -10px rgba(16,24,40,.4)}
+[data-theme="dark"] .cols.is-scrolled>.col:first-child{box-shadow:9px 0 16px -10px rgba(0,0,0,.75)}
 /* 只有新展开的栏才播放入场动画 */
 .col.is-new{animation:colIn .16s ease both}
 @keyframes colIn{from{opacity:0;transform:translateX(-6px)}to{opacity:1;transform:none}}
@@ -171,8 +175,14 @@ body.is-maximized .app{box-shadow:none}
   padding:0 12px;border-bottom:1px solid var(--line-soft);
   font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);
 }
-.col-head b{font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.col-head b{flex:1;min-width:0;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .col-head span{flex:none;font-variant-numeric:tabular-nums}
+.col-toggle{
+  flex:none;width:22px;height:22px;margin-right:-4px;border-radius:6px;
+  display:grid;place-items:center;color:var(--muted);
+}
+.col-toggle:hover{background:var(--hover);color:var(--text)}
+.col-toggle.is-on{background:var(--sel);color:var(--accent-ink)}
 .col-list{flex:1;overflow-y:auto;overflow-x:hidden;padding:8px 6px 16px}
 .col-list.is-virt{padding:0 6px;position:relative}
 .vspace{position:relative;width:100%}
@@ -196,6 +206,16 @@ body.is-maximized .app{box-shadow:none}
 .row .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px}
 .row .meta{flex:none;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
 .row .chev{flex:none;color:var(--muted);opacity:0;margin-right:-2px}
+.row .row-fav{
+  flex:none;width:22px;height:22px;border-radius:5px;
+  display:grid;place-items:center;color:var(--muted);opacity:0;
+}
+.row:hover .row-fav,
+.row.is-sel .row-fav,
+.row .row-fav.is-on{opacity:1}
+.row .row-fav.is-on{color:#e3a63c}
+[data-theme="dark"] .row .row-fav.is-on{color:#e8b155}
+.row .row-fav:hover{background:var(--hover);color:var(--text)}
 .row:hover{background:var(--hover)}
 .row:hover .chev{opacity:1}
 .row.is-trail{background:var(--panel-2);box-shadow:inset 0 0 0 1px var(--line)}
@@ -205,6 +225,26 @@ body.is-maximized .app{box-shadow:none}
 .row.is-sel .chev{opacity:1;color:var(--accent-ink)}
 .row.is-sel .meta{color:color-mix(in srgb,var(--accent-ink) 60%,var(--muted))}
 .row.is-broken .nm{color:var(--muted);text-decoration:line-through}
+
+/* ============ 快速访问（根目录栏下半部分） ============ */
+.fav-panel{
+  flex:0 1 auto;max-height:50%;min-height:0;
+  display:flex;flex-direction:column;
+  border-top:1px solid var(--line);background:var(--panel);
+}
+.fav-head{
+  flex:none;height:26px;display:flex;align-items:center;gap:6px;
+  padding:0 12px;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);
+}
+.fav-head-ic{flex:none;color:#e3a63c}
+.fav-scroll{
+  flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;
+  padding:0 6px 8px;display:flex;flex-direction:column;
+}
+/* 条目少时吸附在面板最下方 */
+.fav-list{margin-top:auto;width:100%}
+.fav-row{height:26px;width:100%;cursor:default}
+.fav-row .nm{font-size:12px}
 
 .c-folder{color:#e3a63c}.c-md{color:#3b82f6}.c-html{color:#e2603a}
 .c-js{color:#cfa01a}.c-json{color:#3f9a6d}.c-css{color:#8b5cf6}
