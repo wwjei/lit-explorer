@@ -17,8 +17,11 @@
   const $ = (sel, root) => (root || document).querySelector(sel);
   const colsEl = $('#cols');
   const crumbsEl = $('#crumbs');
-  const pvHead = $('#pv-head');
-  const pvBody = $('#pv-body');
+  const previewEl = $('#preview');
+  const panesEl = $('#panes');
+
+  /** 最多固定几个预览窗格（加上临时预览列，最多三列并行） */
+  const MAX_PINS = 2;
 
   const state = {
     root: null,
@@ -26,7 +29,7 @@
     path: [],        // 每级目录节点，path[0] 是工作区根
     cols: [],        // 每栏的加载状态与原始条目
     sel: null,       // { col, node }
-    mode: 'preview',
+    mode: 'preview', // 临时预览列的「预览 / 源码」模式
     query: '',
     theme: 'light',
     previewOpen: true,
@@ -35,14 +38,14 @@
     previewDocx: true,       // 是否内嵌预览 .docx（设置里可关）
     previewPptx: true,       // 是否内嵌预览 .pptx（设置里可关）
     favs: [],                // 当前工作区的快速访问项 [{ path, name, isDir, kind }]
-    favoritesByRoot: {}      // 持久化的快速访问项（按工作区根目录分组）
+    favoritesByRoot: {},     // 持久化的快速访问项（按工作区根目录分组）
+    pins: [],                // 固定住的预览列（最多 MAX_PINS 个），顺序即从左到右
+    favTop: false            // 最左栏：快速访问面板是否在上（false = 项目根目录在上）
   };
 
   /** 路径 -> { size, mtime }，由主进程异步补发 */
   const meta = new Map();
   let renderedColKeys = [];
-  let renderedPreviewKey = '';
-  let previewSig = '';
   let welcomeVisible = false;
 
   /* ============================ 格式化 ============================ */
@@ -214,7 +217,6 @@
       pv.setState({ previewOpen: true });
     }
     state.pendingScroll = true;
-    renderedPreviewKey = '';
     render();
 
     const idx = itemsOf(targetCol).findIndex((n) => n.path === target.path);
@@ -222,28 +224,45 @@
     if (target.isDir) await loadColumn(targetCol + 1);
   }
 
+  /** 快速访问的一行：栏内启动列表与最左栏面板共用同一套标记 */
+  function favRowHtml(f, selPath) {
+    return '<div class="row fav-row' + (f.path === selPath ? ' is-sel' : '')
+      + '" data-fav-path="' + esc(f.path) + '" title="' + esc(f.path) + '" role="button">'
+      + nodeIcon({ name: f.name, isDir: f.isDir, kind: f.kind }, 14)
+      + '<span class="nm">' + esc(f.name) + '</span>'
+      + '</div>';
+  }
+
+  /**
+   * 最左栏下部的快速访问面板。
+   * 面板常驻（没有收藏时给出加入方式），否则交换上下的按钮会无处安放。
+   * 置顶按钮只出现在当前处于下方的那一个面板的标题栏上。
+   */
   function renderFavorites() {
     const colEl = colsEl.children[0];
     if (!colEl) return;
     const panel = colEl.querySelector('.fav-panel');
     if (!panel) return;
-    if (!state.favs.length) {
-      panel.hidden = true;
-      panel.innerHTML = '';
-      return;
-    }
     panel.hidden = false;
     const selPath = state.sel ? state.sel.node.path : '';
-    const rows = state.favs.map((f) => {
-      return '<div class="row fav-row' + (f.path === selPath ? ' is-sel' : '')
-        + '" data-fav-path="' + esc(f.path) + '" title="' + esc(f.path) + '" role="button">'
-        + nodeIcon({ name: f.name, isDir: f.isDir, kind: f.kind }, 14)
-        + '<span class="nm">' + esc(f.name) + '</span>'
-        + '</div>';
-    }).join('');
+    const rows = state.favs.length
+      ? state.favs.map((f) => favRowHtml(f, selPath)).join('')
+      : '<div class="col-note">右键或行尾闪电图标加入快速访问</div>';
+    const swap = state.favTop
+      ? ''
+      : '<button class="col-toggle" data-swap-panels title="与上方面板交换位置" aria-label="交换上下面板">'
+        + icon('toTop', '', 14) + '</button>';
     panel.innerHTML = '<div class="fav-head">' + icon('zapFilled', 'fav-head-ic', 12)
-      + '<span>快速访问</span></div>'
+      + '<span class="fav-title">快速访问</span>' + swap + '</div>'
       + '<div class="fav-scroll"><div class="fav-list">' + rows + '</div></div>';
+  }
+
+  /** 交换最左栏「项目根目录 / 快速访问」两个面板的上下位置 */
+  function swapLeftPanels() {
+    state.favTop = !state.favTop;
+    pv.setState({ favTop: state.favTop });
+    render();
+    toast(state.favTop ? '快速访问已移到上方' : '项目根目录已移到上方');
   }
 
   /* ============================ 数据 ============================ */
@@ -300,7 +319,7 @@
       state.cols[ci] = { dir: folder.path, state: 'ready', version, entries: res.entries, error: null };
     }
     // 选中的文件夹摘要依赖下一栏的内容，加载完成后要强制刷新预览头/卡片
-    if (state.sel && state.sel.node.isDir && state.sel.col + 1 === ci) renderedPreviewKey = '';
+    if (state.sel && state.sel.node.isDir && state.sel.col + 1 === ci) renderPane(tempPane, true);
     render();
   }
 
@@ -421,7 +440,8 @@
     const col = state.cols[ci];
     if (!folder) return '';
     const phase = !col ? 'init' : col.state + ':' + col.version + (col.error ? ':' + (col.error.error || '') : '');
-    return folder.path + '\u0001' + phase + '\u0001' + state.query + '\u0001' + (state.hideDot ? 'hide' : 'show');
+    return folder.path + '\u0001' + phase + '\u0001' + state.query + '\u0001' + (state.hideDot ? 'hide' : 'show')
+      + '\u0001' + (ci === 0 && state.favTop ? 'favtop' : 'norm');
   }
 
   function applyRowClass(row, node) {
@@ -492,17 +512,23 @@
     const items = itemsOf(ci);
 
     const el = document.createElement('div');
-    el.className = 'col' + (animate ? ' is-new' : '');
+    el.className = 'col' + (animate ? ' is-new' : '') + (ci === 0 && state.favTop ? ' is-fav-top' : '');
     el.dataset.col = ci;
 
     const head = document.createElement('div');
     head.className = 'col-head';
     if (ci === 0) {
       // 根目录栏：项目名 + 点文件显隐开关，不再占用空间显示文件数
+      // 快速访问被置顶时，这一栏落到下方，交换按钮就出现在这里
+      const swap = state.favTop
+        ? '<button class="col-toggle" data-swap-panels title="与上方面板交换位置" aria-label="交换上下面板">'
+          + icon('toTop', '', 14) + '</button>'
+        : '';
       head.innerHTML = '<b>' + esc(folder.name) + '</b>'
         + '<button class="col-toggle' + (state.hideDot ? ' is-on' : '') + '" data-toggle-dot title="'
         + (state.hideDot ? '显示以 . 开头的文件/文件夹' : '隐藏以 . 开头的文件/文件夹') + '" aria-label="切换点文件显示">'
-        + icon(state.hideDot ? 'eyeOff' : 'eye', '', 14) + '</button>';
+        + icon(state.hideDot ? 'eyeOff' : 'eye', '', 14) + '</button>'
+        + swap;
     } else {
       const total = baseItemsOf(ci).length;
       const countText = state.query && total !== items.length ? items.length + ' / ' + total : String(items.length);
@@ -632,8 +658,13 @@
 
   function folderCard(node, ci) {
     const col = state.cols[ci];
-    const items = col && col.entries ? itemsOf(ci) : [];
+    // 该栏必须正好装的是这个目录才拿来用：固定住的窗格可能早已指向别处
+    const own = col && col.entries && col.dir === node.path ? col : null;
+    const items = own ? itemsOf(ci) : [];
     const m = meta.get(node.path);
+    const count = own
+      ? own.entries.length + ' 个项目'
+      : (col && col.dir === node.path && col.state === 'loading' ? '读取中…' : '目录内容未展开');
     const rows = items.slice(0, 300).map((child) =>
       '<button class="frow" data-open="' + esc(child.name) + '">'
       + nodeIcon(child, 15)
@@ -643,8 +674,7 @@
     return '<div class="folder-card">'
       + '<div class="folder-hero">'
       + '<span class="big">' + icon('folder', 'c-folder', 24) + '</span>'
-      + '<div><h3>' + esc(node.name) + '</h3><p>'
-      + (col && col.entries ? col.entries.length + ' 个项目' : '读取中…')
+      + '<div><h3>' + esc(node.name) + '</h3><p>' + count
       + (m ? ' · 修改于 ' + fmtTime(m.mtime) : '') + '</p></div>'
       + '</div>'
       + '<div class="folder-list">' + rows + '</div>'
@@ -672,17 +702,18 @@
   }
 
   /** docx / pptx：整份字节读进渲染进程，交给 vendor/docpreview.js 里的纯前端解析器 */
-  async function renderDocPreview(node, kind, stale) {
+  async function renderDocPreview(pane, node, kind, stale) {
+    const box = pane.body;
     if (!PV.docpreview) {
-      pvBody.innerHTML = fallbackCard(node, '预览组件未构建：请先运行 npm run build');
+      box.innerHTML = fallbackCard(node, '预览组件未构建：请先运行 npm run build');
       return;
     }
-    pvBody.innerHTML = loadingState('正在解析 ' + (kind === 'docx' ? 'Word' : 'PowerPoint') + ' 文档…');
+    box.innerHTML = loadingState('正在解析 ' + (kind === 'docx' ? 'Word' : 'PowerPoint') + ' 文档…');
     const res = await pv.readBytes(node.path);
     if (stale()) return;
-    if (res.error) { pvBody.innerHTML = fallbackCard(node, '读取失败：' + res.error); return; }
+    if (res.error) { box.innerHTML = fallbackCard(node, '读取失败：' + res.error); return; }
     if (res.tooLarge) {
-      pvBody.innerHTML = fallbackCard(node, '文件较大（' + fmtSize(res.size) + '），暂不内嵌预览');
+      box.innerHTML = fallbackCard(node, '文件较大（' + fmtSize(res.size) + '），暂不内嵌预览');
       return;
     }
 
@@ -693,21 +724,21 @@
 
     const wrap = document.createElement('div');
     wrap.className = 'docview';
-    pvBody.innerHTML = '';
-    pvBody.appendChild(wrap);
+    box.innerHTML = '';
+    box.appendChild(wrap);
     try {
       if (kind === 'docx') await PV.docpreview.renderDocx(buf, wrap);
       else await PV.docpreview.renderPptx(buf, wrap);
       if (stale()) return;
     } catch (err) {
       console.error('[docpreview]', err);
-      pvBody.innerHTML = fallbackCard(node, '预览失败：' + ((err && err.message) || err));
+      box.innerHTML = fallbackCard(node, '预览失败：' + ((err && err.message) || err));
     }
   }
 
-  /** 源码视图用的语言 id：按当前模式取，未知语言返回 null（纯文本） */
-  function langForNode(node) {
-    if (state.mode === 'source') {
+  /** 源码视图用的语言 id：按当前窗格的模式取，未知语言返回 null（纯文本） */
+  function langForNode(node, mode) {
+    if (mode === 'source') {
       if (node.kind === 'md') return 'markdown';
       if (node.kind === 'html') return 'html';
       if (node.kind === 'svg') return 'xml';
@@ -715,109 +746,203 @@
     return PV.highlight.langFor(node.name);
   }
 
-  async function renderPreview(force) {
-    // 注意：局部变量不要叫 pv，会遮蔽 preload 暴露的 window.pv
-    const panel = $('#preview');
-    $('#gutter').hidden = !state.previewOpen;
-    if (!state.previewOpen) {
-      panel.hidden = true;
-      renderedPreviewKey = '';
-      return;
-    }
-    panel.hidden = false;
+  /* ============================ 预览窗格 ============================ *
+   * 预览区由若干「窗格」组成：最左边一个临时预览（跟随栏内选中项），
+   * 右边最多 MAX_PINS 个被固定住的窗格。固定住的窗格各自记住自己的文件与
+   * 「预览 / 源码」模式，浏览下一个文件时不会把它们顶掉。
+   * ------------------------------------------------------------------ */
+  let paneSeq = 0;
+  const panes = new Map();
 
+  function createPane(opts) {
+    const o = opts || {};
+    const el = document.createElement('div');
+    el.className = 'pane' + (o.pinned ? ' is-pinned' : '');
+    const head = document.createElement('div');
+    head.className = 'pv-head';
+    const body = document.createElement('div');
+    body.className = 'pv-body is-empty';
+    el.appendChild(head);
+    el.appendChild(body);
+    const pane = {
+      id: ++paneSeq,
+      pinned: !!o.pinned,
+      el: el,
+      head: head,
+      body: body,
+      node: o.node || null,
+      col: typeof o.col === 'number' ? o.col : -1,
+      mode: o.mode || 'preview',
+      bodyKey: '',
+      view: null
+    };
+    el.dataset.pane = String(pane.id);
+    panes.set(pane.id, pane);
+    return pane;
+  }
+
+  /** 临时预览列：始终在最左，内容跟随 state.sel */
+  const tempPane = createPane({});
+
+  function destroyPane(pane) {
+    dropPaneView(pane);
+    panes.delete(pane.id);
+    pane.el.remove();
+  }
+
+  /** 代码视图自带 ResizeObserver，换内容前必须销毁，否则越挂越多 */
+  function dropPaneView(pane) {
+    if (pane.view && pane.view.destroy) pane.view.destroy();
+    pane.view = null;
+  }
+
+  function paneOf(el) {
+    const host = el && el.closest ? el.closest('.pane') : null;
+    if (!host) return null;
+    return panes.get(Number(host.dataset.pane)) || null;
+  }
+
+  /** 窗格展示的节点：固定住的是自己记的那份，临时预览跟随当前选中项 */
+  function paneNode(pane) {
+    if (pane.pinned) return pane.node;
+    return state.sel ? state.sel.node : null;
+  }
+
+  function paneCol(pane) {
+    if (pane.pinned) return pane.col;
+    return state.sel ? state.sel.col : -1;
+  }
+
+  function paneMode(pane) {
+    return pane.pinned ? pane.mode : state.mode;
+  }
+
+  function allPanes() {
+    return [tempPane].concat(state.pins);
+  }
+
+  /** 顺序固定为「临时预览 | 固定 1 | 固定 2」：新预览永远出现在固定列的左边 */
+  function syncPaneOrder() {
+    panesEl.appendChild(tempPane.el);
+    for (let i = 0; i < state.pins.length; i++) panesEl.appendChild(state.pins[i].el);
+  }
+
+  function pinCurrent() {
     const sel = state.sel;
-    const sig = sel
-      ? [state.root, state.path.map((f) => f.name).join('/'), sel.node.path, state.mode].join('\u0001')
-      : 'none';
-
-    if (!force && sig === renderedPreviewKey) return;
-    renderedPreviewKey = sig;
-    previewSig = sig;
-    const stale = () => previewSig !== sig;
-
-    if (!sel) {
-      pvHead.innerHTML = '';
-      pvBody.className = 'pv-body is-empty';
-      pvBody.innerHTML = emptyState();
+    if (!sel) return;
+    if (state.pins.length >= MAX_PINS) {
+      toast('最多固定 ' + MAX_PINS + ' 个预览，先取消一个再固定');
       return;
     }
+    state.pins.push(createPane({ pinned: true, node: sel.node, col: sel.col, mode: state.mode }));
+    renderPreview();
+    toast('已固定到右侧：' + sel.node.name);
+  }
 
-    const node = sel.node;
+  function unpinPane(pane) {
+    const at = state.pins.indexOf(pane);
+    if (at < 0) return;
+    state.pins.splice(at, 1);
+    destroyPane(pane);
+    renderPreview();
+    toast('已取消固定：' + ((pane.node && pane.node.name) || ''));
+  }
+
+  function paneHeadHtml(pane, node) {
     const m = meta.get(node.path);
     const sub = [subPath(node) || node.name];
-    if (!node.isDir) sub.push(node.kind.toUpperCase());
+    if (!node.isDir) sub.push(String(node.kind || '').toUpperCase());
     if (m) { sub.push(fmtSize(m.size)); sub.push(fmtTime(m.mtime)); }
 
+    const mode = paneMode(pane);
     const canSource = !node.isDir && ['html', 'md', 'svg'].indexOf(node.kind) >= 0;
     const seg = canSource
       ? '<div class="seg">'
-        + '<button data-mode="preview" class="' + (state.mode === 'preview' ? 'is-on' : '') + '">预览</button>'
-        + '<button data-mode="source" class="' + (state.mode === 'source' ? 'is-on' : '') + '">源码</button>'
+        + '<button data-mode="preview" class="' + (mode === 'preview' ? 'is-on' : '') + '">预览</button>'
+        + '<button data-mode="source" class="' + (mode === 'source' ? 'is-on' : '') + '">源码</button>'
         + '</div>'
       : '';
 
-    pvHead.innerHTML = '<span class="pv-ic">' + nodeIcon(node, 17) + '</span>'
+    return '<span class="pv-ic">' + nodeIcon(node, 17) + '</span>'
       + '<div class="pv-name"><div class="pv-nm" title="' + esc(node.name) + '">' + esc(node.name) + '</div>'
       + '<div class="pv-sub" title="' + esc(sub.join(' · ')) + '">' + esc(sub.join(' · ')) + '</div></div>'
       + '<div class="pv-actions">' + seg
+      + '<button class="iconbtn pinbtn' + (pane.pinned ? ' is-on' : '') + '" data-act="pin" title="'
+      + (pane.pinned ? '取消固定' : '固定到右侧') + '" aria-label="固定预览">'
+      + icon(pane.pinned ? 'pinFilled' : 'pin', '', 15) + '</button>'
       + '<button class="iconbtn" data-act="reload" title="重新读取">' + icon('refresh', '', 15) + '</button>'
       + '<button class="iconbtn" data-act="copy" title="复制路径">' + icon('copy', '', 15) + '</button>'
       + '<button class="iconbtn" data-act="reveal" title="在资源管理器中显示">' + icon('reveal', '', 15) + '</button>'
       + '<button class="iconbtn" data-act="external" title="用默认程序打开">' + icon('external', '', 15) + '</button>'
-      + '<button class="iconbtn" data-act="close" title="收起预览">' + icon('close', '', 15) + '</button>'
+      + '<button class="iconbtn" data-act="close" title="' + (pane.pinned ? '关闭此预览列' : '收起预览') + '">'
+      + icon('close', '', 15) + '</button>'
       + '</div>';
+  }
 
-    pvBody.className = 'pv-body';
+  /** 渲染一个窗格：头部每次重建（元信息会异步补发），内容按 key 增量渲染 */
+  function renderPane(pane, force) {
+    const node = paneNode(pane);
+    const col = paneCol(pane);
+    const mode = paneMode(pane);
+
+    pane.head.innerHTML = node ? paneHeadHtml(pane, node) : '';
+    pane.el.classList.toggle('is-pinned', pane.pinned);
+
+    if (!node) {
+      if (force || pane.bodyKey !== 'none') {
+        pane.bodyKey = 'none';
+        dropPaneView(pane);
+        pane.body.className = 'pv-body is-empty';
+        pane.body.innerHTML = emptyState();
+      }
+      return;
+    }
+
+    const key = [node.path, mode, node.isDir ? 'd' : 'f', col,
+      node.kind === 'docx' && !state.previewDocx ? 'docx-off' : '',
+      node.kind === 'pptx' && !state.previewPptx ? 'pptx-off' : ''].join('\u0001');
+    if (!force && key === pane.bodyKey) return;
+    pane.bodyKey = key;
+    pane.body.className = 'pv-body';
+    dropPaneView(pane);
+    renderPaneBody(pane, node, col, mode, key);
+  }
+
+  async function renderPaneBody(pane, node, col, mode, key) {
+    const box = pane.body;
+    const stale = () => pane.bodyKey !== key;
 
     if (node.isDir) {
-      pvBody.innerHTML = folderCard(node, sel.col + 1);
+      box.innerHTML = folderCard(node, col + 1);
       return;
     }
 
-    if (node.kind === 'html' && state.mode === 'preview') {
+    // 交给协议地址直接渲染的类型：HTML 迷你浏览器 / 图片 / PDF 内置阅读器
+    if (mode === 'preview' && ['html', 'image', 'svg', 'pdf'].indexOf(node.kind) >= 0) {
+      box.innerHTML = loadingState();
       const res = await pv.previewUrl(node.path);
       if (stale()) return;
-      pvBody.innerHTML = res.url ? browserChrome(node, res.url) : fallbackCard(node, '无法生成预览地址');
-      return;
-    }
-
-    if ((node.kind === 'image' || node.kind === 'svg') && state.mode === 'preview') {
-      const res = await pv.previewUrl(node.path);
-      if (stale()) return;
-      pvBody.innerHTML = res.url
-        ? '<div class="img-wrap"><img src="' + esc(res.url) + '" alt="' + esc(node.name) + '"></div>'
-        : fallbackCard(node, '无法生成预览地址');
-      return;
-    }
-
-    if (node.kind === 'pdf' && state.mode === 'preview') {
-      const res = await pv.previewUrl(node.path);
-      if (stale()) return;
-      pvBody.innerHTML = res.url ? pdfFrame(node, res.url) : fallbackCard(node, '无法生成预览地址');
+      if (!res.url) { box.innerHTML = fallbackCard(node, '无法生成预览地址'); return; }
+      if (node.kind === 'html') box.innerHTML = browserChrome(node, res.url);
+      else if (node.kind === 'pdf') box.innerHTML = pdfFrame(node, res.url);
+      else box.innerHTML = '<div class="img-wrap"><img src="' + esc(res.url) + '" alt="' + esc(node.name) + '"></div>';
       return;
     }
 
     // 设置里关掉时不再内嵌解析，走下面的通用分支落到兜底卡片
-    if (node.kind === 'docx' && state.previewDocx) {
-      await renderDocPreview(node, 'docx', stale);
-      return;
-    }
-    if (node.kind === 'pptx' && state.previewPptx) {
-      await renderDocPreview(node, 'pptx', stale);
-      return;
-    }
+    if (node.kind === 'docx' && state.previewDocx) { await renderDocPreview(pane, node, 'docx', stale); return; }
+    if (node.kind === 'pptx' && state.previewPptx) { await renderDocPreview(pane, node, 'pptx', stale); return; }
 
-    pvBody.innerHTML = loadingState();
+    box.innerHTML = loadingState();
     const res = await pv.read(node.path);
     if (stale()) return;
 
     if (res.error) {
-      pvBody.innerHTML = fallbackCard(node, res.error === 'IS_DIR' ? '这是一个目录' : '读取失败：' + res.error);
+      box.innerHTML = fallbackCard(node, res.error === 'IS_DIR' ? '这是一个目录' : '读取失败：' + res.error);
       return;
     }
     if (res.binary) {
-      pvBody.innerHTML = fallbackCard(node, '该类型暂不支持内嵌预览');
+      box.innerHTML = fallbackCard(node, '该类型暂不支持内嵌预览');
       return;
     }
 
@@ -826,21 +951,30 @@
     if (res.lossy) notice.push('编码无法识别，可能存在乱码');
     const noticeHtml = notice.length ? '<div class="notice">' + notice.join(' · ') + '</div>' : '';
 
-    if (node.kind === 'md' && state.mode === 'preview') {
-      pvBody.innerHTML = noticeHtml + '<div class="prose-wrap"><article class="prose">' + mdToHtml(res.text) + '</article></div>';
-      PV.highlight.highlightFences(pvBody.querySelector('.prose'));
+    if (node.kind === 'md' && mode === 'preview') {
+      box.innerHTML = noticeHtml + '<div class="prose-wrap"><article class="prose">' + mdToHtml(res.text) + '</article></div>';
+      PV.highlight.highlightFences(box.querySelector('.prose'));
       return;
     }
 
     // 其余一律走代码视图：分词在 Worker 里做，主线程只渲染可见窗口
-    pvBody.innerHTML = noticeHtml;
-    PV.highlight.mount(pvBody, {
+    box.innerHTML = noticeHtml;
+    pane.view = PV.highlight.mount(box, {
       text: res.text,
       size: res.size,
       mtime: res.mtime,
       path: node.path,
-      lang: langForNode(node)
+      lang: langForNode(node, mode)
     });
+  }
+
+  function renderPreview(force) {
+    previewEl.hidden = !state.previewOpen;
+    $('#gutter').hidden = !state.previewOpen;
+    if (!state.previewOpen) return;
+    syncPaneOrder();
+    const list = allPanes();
+    for (let i = 0; i < list.length; i++) renderPane(list[i], force);
   }
 
   /* ============================ 总渲染 ============================ */
@@ -878,7 +1012,6 @@
   function togglePreview(force) {
     state.previewOpen = typeof force === 'boolean' ? force : !state.previewOpen;
     $('#btn-preview').classList.toggle('is-on', !state.previewOpen);
-    renderedPreviewKey = '';
     renderPreview();
     pv.setState({ previewOpen: state.previewOpen });
   }
@@ -905,6 +1038,12 @@
 
   /* 列点击 / 双击 */
   colsEl.addEventListener('click', (e) => {
+    // 最左栏两个面板上下互换
+    if (e.target.closest('[data-swap-panels]')) {
+      swapLeftPanels();
+      return;
+    }
+
     // 点文件显隐开关
     if (e.target.closest('[data-toggle-dot]')) {
       state.hideDot = !state.hideDot;
@@ -984,49 +1123,45 @@
     goToPathIndex(+btn.dataset.crumb);
   });
 
-  /* 预览头操作 */
-  pvHead.addEventListener('click', (e) => {
-    const btn = e.target.closest('button');
-    if (!btn || !state.sel) return;
-    const node = state.sel.node;
-    if (btn.dataset.mode) {
-      state.mode = btn.dataset.mode;
-      renderPreview(true);
-      return;
-    }
-    const act = btn.dataset.act;
-    if (act === 'reload') {
-      btn.classList.add('spin');
-      setTimeout(() => btn.classList.remove('spin'), 520);
-      renderPreview(true);
-    } else if (act === 'copy') {
-      pv.copyText(node.path).then(() => toast('已复制路径：' + node.path));
-    } else if (act === 'reveal') {
-      pv.reveal(node.path);
-    } else if (act === 'external') {
-      openWithSystem(node);
-    } else if (act === 'close') {
-      togglePreview(false);
-    }
-  });
+  /* 预览区操作：所有窗格的头部按钮与卡片内按钮走同一套分派 */
+  previewEl.addEventListener('click', (e) => {
+    const pane = paneOf(e.target);
+    if (!pane) return;
+    const node = paneNode(pane);
+    const col = paneCol(pane);
 
-  /* 预览体操作 */
-  pvBody.addEventListener('click', (e) => {
-    const btn = e.target.closest('[data-act]');
-    if (btn && state.sel) {
-      if (btn.dataset.act === 'reload') {
+    const btn = e.target.closest('button[data-act], button[data-mode]');
+    if (btn) {
+      if (btn.dataset.mode) {
+        if (!node) return;
+        // 临时预览列沿用全局模式，固定住的窗格各记一份
+        if (pane.pinned) pane.mode = btn.dataset.mode;
+        else state.mode = btn.dataset.mode;
+        renderPane(pane, true);
+        return;
+      }
+      const act = btn.dataset.act;
+      if (act === 'pin') { if (pane.pinned) unpinPane(pane); else pinCurrent(); return; }
+      if (act === 'close') { if (pane.pinned) unpinPane(pane); else togglePreview(false); return; }
+      if (!node) return;
+      if (act === 'reload') {
         btn.classList.add('spin');
         setTimeout(() => btn.classList.remove('spin'), 520);
-        renderPreview(true);
-      } else if (btn.dataset.act === 'external') {
-        openWithSystem(state.sel.node);
+        renderPane(pane, true);
+      } else if (act === 'copy') {
+        pv.copyText(node.path).then(() => toast('已复制路径：' + node.path));
+      } else if (act === 'reveal') {
+        pv.reveal(node.path);
+      } else if (act === 'external') {
+        openWithSystem(node);
       }
       return;
     }
+
     const open = e.target.closest('[data-open]');
-    if (open && state.sel && state.sel.node.isDir) {
-      const child = itemsOf(state.sel.col + 1).filter((c) => c.name === open.dataset.open)[0];
-      if (child) selectNode(child, state.sel.col + 1);
+    if (open && node && node.isDir) {
+      const child = itemsOf(col + 1).filter((c) => c.name === open.dataset.open)[0];
+      if (child) selectNode(child, col + 1);
     }
   });
 
@@ -1176,7 +1311,8 @@
     if (!dragging) return;
     const rect = $('#app-body').getBoundingClientRect();
     const w = rect.right - e.clientX;
-    const max = Math.max(320, rect.width - 380);
+    // 多个预览列并行时要留出更宽的拖拽范围，否则三列会被挤到看不清
+    const max = Math.max(320, rect.width - 340);
     $('#preview').style.width = Math.min(Math.max(w, 320), max) + 'px';
   });
   gutter.addEventListener('pointerup', (e) => {
@@ -1232,11 +1368,9 @@
         if (span) span.textContent = metaText(node);
       });
     }
-    if (state.sel && !state.sel.node.isDir && state.sel.node.path.startsWith(dir)) {
-      // 选中项的元信息到齐后刷新预览头
-      renderedPreviewKey = '';
-      renderPreview();
-    }
+    // 元信息到齐后刷新预览头；文件夹摘要里的条目数与修改时间也要跟着更新
+    renderPreview();
+    if (state.sel && state.sel.node.isDir) renderPane(tempPane, true);
   });
 
   pv.onTheme((theme) => applyTheme(theme));
@@ -1253,7 +1387,6 @@
     if (!prefs) return;
     state.previewDocx = prefs.previewDocx !== false;
     state.previewPptx = prefs.previewPptx !== false;
-    renderedPreviewKey = '';
     renderPreview(true);
     toast('Word 内嵌预览：' + (state.previewDocx ? '开' : '关')
       + ' · PPT 内嵌预览：' + (state.previewPptx ? '开' : '关'));
@@ -1268,6 +1401,7 @@
     state.previewOpen = st.previewOpen !== false;
     $('#btn-preview').classList.toggle('is-on', !state.previewOpen);
     state.hideDot = !!st.hideDot;
+    state.favTop = !!st.favTop;
     state.previewDocx = st.previewDocx !== false;
     state.previewPptx = st.previewPptx !== false;
     state.favoritesByRoot = st.favorites && typeof st.favorites === 'object' ? st.favorites : {};

@@ -172,13 +172,13 @@ body.is-maximized .app{box-shadow:none}
 @keyframes colIn{from{opacity:0;transform:translateX(-6px)}to{opacity:1;transform:none}}
 .col-head{
   flex:none;height:30px;display:flex;align-items:center;justify-content:space-between;gap:8px;
-  padding:0 12px;border-bottom:1px solid var(--line-soft);
+  padding:0 8px 0 12px;border-bottom:1px solid var(--line-soft);
   font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);
 }
 .col-head b{flex:1;min-width:0;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .col-head span{flex:none;font-variant-numeric:tabular-nums}
 .col-toggle{
-  flex:none;width:22px;height:22px;margin-right:-4px;border-radius:6px;
+  flex:none;width:22px;height:22px;border-radius:6px;
   display:grid;place-items:center;color:var(--muted);
 }
 .col-toggle:hover{background:var(--hover);color:var(--text)}
@@ -226,23 +226,32 @@ body.is-maximized .app{box-shadow:none}
 .row.is-sel .meta{color:color-mix(in srgb,var(--accent-ink) 60%,var(--muted))}
 .row.is-broken .nm{color:var(--muted);text-decoration:line-through}
 
-/* ============ 快速访问（根目录栏下半部分） ============ */
+/* ============ 最左栏：项目根目录 / 快速访问 两个面板 ============ */
 .fav-panel{
   flex:0 1 auto;max-height:50%;min-height:0;
   display:flex;flex-direction:column;
   border-top:1px solid var(--line);background:var(--panel);
 }
+/* 交换上下顺序：只改视觉顺序，DOM 顺序不变，面板内部的查询逻辑不受影响 */
+.col.is-fav-top .fav-panel{order:0;border-top:0;border-bottom:1px solid var(--line)}
+.col.is-fav-top .col-head{order:1}
+.col.is-fav-top .col-list{order:2}
 .fav-head{
   flex:none;height:26px;display:flex;align-items:center;gap:6px;
-  padding:0 12px;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);
+  padding:0 8px 0 12px;font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);
 }
 .fav-head-ic{flex:none;color:#e3a63c}
+.fav-title{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 置顶按钮始终出现在下方那个面板的标题栏右侧 */
+.fav-head .col-toggle{margin-left:auto}
 .fav-scroll{
   flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;
   padding:0 6px 8px;display:flex;flex-direction:column;
 }
 /* 条目少时吸附在面板最下方 */
 .fav-list{margin-top:auto;width:100%}
+/* 面板常驻，空态提示尽量紧凑，少占栏内空间 */
+.fav-scroll .col-note{padding:2px 8px 4px;font-size:11.5px}
 .fav-row{height:26px;width:100%;cursor:default}
 .fav-row .nm{font-size:12px}
 
@@ -261,11 +270,20 @@ body.resizing{cursor:col-resize}
 body.resizing .gutter::after{background:var(--accent)}
 
 .preview{
-  flex:none;width:46%;min-width:320px;display:flex;flex-direction:column;
-  background:var(--panel);border-left:1px solid var(--line);min-height:0;
+  flex:none;width:46%;min-width:320px;display:flex;min-height:0;
+  background:var(--panel);
 }
+.panes{flex:1;min-width:0;display:flex;min-height:0}
+/* 一个预览窗格：临时预览与每个固定住的预览各占一个 */
+.pane{
+  flex:1 1 0;min-width:0;min-height:0;display:flex;flex-direction:column;
+  background:var(--panel);border-left:1px solid var(--line);
+  container-type:inline-size;
+}
+/* 固定住的窗格：头部顶边加一道强调色细线，和临时预览区分开 */
+.pane.is-pinned .pv-head{box-shadow:inset 0 2px 0 var(--accent)}
 .pv-head{
-  flex:none;display:flex;align-items:flex-start;gap:10px;
+  flex:none;display:flex;align-items:flex-start;flex-wrap:wrap;gap:10px;
   padding:12px 12px 10px 14px;border-bottom:1px solid var(--line-soft);
 }
 .pv-head:empty{display:none}
@@ -273,7 +291,17 @@ body.resizing .gutter::after{background:var(--accent)}
 .pv-name{flex:1;min-width:0}
 .pv-nm{font-size:13.5px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pv-sub{margin-top:3px;font-size:11.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.pv-actions{flex:none;display:flex;align-items:center;gap:4px}
+.pv-actions{flex:none;margin-left:auto;display:flex;align-items:center;gap:4px}
+.pv-actions .pinbtn.is-on{background:var(--sel);color:var(--accent-ink)}
+/* 窗格变窄（多列并行）时：操作按钮换到单独一行，并把低频的三个收起来——
+   复制路径 / 在资源管理器中显示 / 用默认程序打开在右键菜单里都有 */
+@container (max-width: 360px){
+  .pv-head{padding:9px 10px 8px;gap:8px}
+  .pv-actions{flex:1 1 100%;margin-left:0;flex-wrap:wrap}
+  .pv-actions .iconbtn[data-act="copy"],
+  .pv-actions .iconbtn[data-act="reveal"],
+  .pv-actions .iconbtn[data-act="external"]{display:none}
+}
 .seg{display:flex;background:var(--panel-2);border:1px solid var(--line);border-radius:8px;padding:2px}
 .seg button{padding:2px 9px;border-radius:6px;font-size:11.5px;color:var(--text-2)}
 .seg button.is-on{background:var(--panel);color:var(--text);font-weight:500;box-shadow:0 1px 2px rgba(16,24,40,.08)}

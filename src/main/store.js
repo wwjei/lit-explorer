@@ -20,6 +20,8 @@ const DEFAULTS = {
   hideDot: false,
   // 快速访问：{ [小写化的工作区根目录]: [{ path, name, isDir, kind }] }
   favorites: {},
+  // 最左栏两个面板的上下顺序：false = 项目根目录在上、快速访问在下
+  favTop: false,
   // 内嵌文档预览开关（默认开启）
   previewDocx: true,
   previewPptx: true

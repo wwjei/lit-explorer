@@ -16,15 +16,15 @@
     "dist": "electron-builder --win --publish never"
   },
   "license": "MIT",
-  "dependencies": {
-    "docx-preview": "0.4.1",
-    "pptx-preview": "1.0.7",
-    "shiki": "4.5.0"
-  },
+  "//dependencies": "运行时不需要任何 npm 依赖：主进程只用 electron 与 node 内置模块，shiki / docx-preview / pptx-preview 已由 esbuild 打包进 src/renderer/vendor/。它们放在 devDependencies 里，避免 electron-builder 把 node_modules（其中 echarts+zrender 约 55 MB）打进 app.asar。",
+  "dependencies": {},
   "devDependencies": {
+    "docx-preview": "0.4.1",
     "electron": "^44.9.0",
     "electron-builder": "^26.15.3",
-    "esbuild": "^0.28.2"
+    "esbuild": "^0.28.2",
+    "pptx-preview": "1.0.7",
+    "shiki": "4.5.0"
   },
   "build": {
     "appId": "com.litexplorer.app",

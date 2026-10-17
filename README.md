@@ -38,7 +38,8 @@ ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ node node_modules/electr
 | 能力 | 说明 |
 | --- | --- |
 | 多栏导航 | 点击文件夹在右侧展开新的一栏，路径上的各级保持浅色轨迹高亮；根目录栏固定在左侧，横向滚动时不消失 |
-| 快速访问 | 右键或行尾闪电图标把文件/文件夹加入快速访问；列表固定在根目录栏最下方，最多占该栏一半高度，按工作区记忆 |
+| 快速访问 | 右键或行尾闪电图标把文件/文件夹加入快速访问；面板固定在最左栏下半部分，最多占该栏一半高度，按工作区记忆；标题栏右侧的置顶按钮可把「快速访问 / 项目根目录」两个面板上下互换 |
+| 多窗格预览 | 预览头部的图钉按钮可把当前预览固定到右侧（最多 2 个）；之后浏览的文件显示在固定列的左边，最多三列并行，各自独立的文件与「预览 / 源码」模式 |
 | 无边框窗口 | 没有 Windows 原生标题栏与菜单栏；标题栏与工具条合并为一行，窗口控制按钮自绘 |
 | HTML 预览 | 带地址栏的迷你浏览器窗口，`.html/.htm/.xhtml` 均可预览，**相对路径的样式、经典脚本、ES module 与 fetch 正常工作** |
 | Markdown 预览 | 渲染为排版正文，可切「预览 / 源码」 |
@@ -116,6 +117,14 @@ npm run build     # 生成 src/renderer/vendor/（高亮 Worker 按需 chunk + d
 
 `npm start` / `npm run dev` / `npm run shot` 都会通过 `pre*` 钩子自动先构建。
 `vendor/` 已加入 `.gitignore`，克隆后直接 `npm start` 即可。
+
+### 为什么运行时依赖是空的
+
+`dependencies` 是空的，`shiki` / `docx-preview` / `pptx-preview` 都放在 `devDependencies`：
+主进程只用 `electron` 与 Node 内置模块，这三个库已经被 esbuild 打进 `src/renderer/vendor/`，
+运行时不会再 `require` 它们。electron-builder 默认把 production 依赖整棵拷进 `app.asar`，
+而 pptx-preview 会拖进 `echarts` + `zrender`（约 55 MB）——放在 `dependencies` 里会让
+`app.asar` 从 4.5 MB 涨到 81 MB。**新增依赖时注意：只有运行时真的 require 的才放 `dependencies`。**
 
 ## 架构要点
 
@@ -214,5 +223,8 @@ npm run dist      # predist 会先生成高亮 Worker 与图标
 - docx / pptx 是纯前端解析，不是 Office 的排版引擎：docx 版式接近但非像素级，
   pptx 保证文字、形状、图片与图表，动画、切换、SmartArt、嵌入对象会丢失；
   超过 25 MB 或解析不出内容时回落到「用默认程序打开」的卡片
+- 固定住的预览列只在本次运行内有效（重启不恢复）；收起预览面板时固定列一并隐藏，展开后原样回来
+- 多列并行时预览区按列平分宽度，列越窄内容越挤，拖宽分隔条即可；窗格宽度不足 360px 时
+  头部操作按钮换行，并收起「复制路径 / 在资源管理器中显示 / 用默认程序打开」三个（右键菜单里都有）
 - 多选（Ctrl/Shift）尚未实现
 - 未配置代码签名，分发时 Windows 会提示未知发布者
