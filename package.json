@@ -13,7 +13,7 @@
     "preshot": "npm run build",
     "shot": "electron .",
     "predist": "npm run build && npm run icons",
-    "dist": "electron-builder --win"
+    "dist": "electron-builder --win --publish never"
   },
   "license": "MIT",
   "dependencies": {
