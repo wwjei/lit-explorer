@@ -42,6 +42,9 @@ ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ node node_modules/electr
 | 无边框窗口 | 没有 Windows 原生标题栏与菜单栏；标题栏与工具条合并为一行，窗口控制按钮自绘 |
 | HTML 预览 | 带地址栏的迷你浏览器窗口，`.html/.htm/.xhtml` 均可预览，**相对路径的样式、经典脚本、ES module 与 fetch 正常工作** |
 | Markdown 预览 | 渲染为排版正文，可切「预览 / 源码」 |
+| Word 预览 | `.docx` 用 docx-preview 纯前端解压渲染成分页正文，可在「⋯」菜单里单独关闭 |
+| PPT 预览 | `.pptx` 用 pptx-preview 逐页渲染（文字、形状、图片、图表），可在「⋯」菜单里单独关闭 |
+| PDF 预览 | 交给 Chromium 内置 PDF 阅读器，缩放 / 翻页 / 下载 / 打印都在预览面板里 |
 | 代码查看 | Shiki 有状态分词 + 行号，跨行注释/模板字符串整段正确着色；大文件按阶梯降级 |
 | 图片查看 | SVG/PNG/JPG 等等比显示，透明区棋盘格 |
 | 文件夹摘要 | 选中文件夹时显示条目数与子项列表 |
@@ -96,17 +99,19 @@ project_viewer/
 │       ├── highlight.js    # 高亮客户端：Worker 调度、降级、窗口渲染
 │       ├── highlight/
 │       │   └── worker.js   # Shiki 分词（源文件，需打包）
-│       ├── vendor/         # Worker 打包产物（npm start 前自动生成）
+│       ├── docpreview.js   # docx / pptx 预览入口（需打包成 vendor/docpreview.js）
+│       ├── vendor/         # 打包产物（npm start 前自动生成）
 │       └── markdown.js     # Markdown 渲染
 └── sample-project/         # 示例工作区
 ```
 
 ### 构建
 
-Shiki 的产物用裸模块名（`@shikijs/core`），浏览器无法直接解析，所以高亮 Worker 需要打包：
+Shiki 的产物用裸模块名（`@shikijs/core`），docx-preview / pptx-preview 同样如此，
+浏览器无法直接解析，所以这两处都要先打包：
 
 ```bash
-npm run build     # 生成 src/renderer/vendor/（62 个产物，按需 chunk）
+npm run build     # 生成 src/renderer/vendor/（高亮 Worker 按需 chunk + docpreview.js）
 ```
 
 `npm start` / `npm run dev` / `npm run shot` 都会通过 `pre*` 钩子自动先构建。
@@ -206,5 +211,8 @@ npm run dist      # predist 会先生成高亮 Worker 与图标
 - 首次预览某种语言时有一次性的语法规则编译开销（约 140–600 ms，之后稳定在 10 ms 内）；
   代码视图会先显示纯文本再上色，不会白屏等待
 - 高亮已覆盖 40 种常见语言与配置文件；未收录的语言按纯文本展示
+- docx / pptx 是纯前端解析，不是 Office 的排版引擎：docx 版式接近但非像素级，
+  pptx 保证文字、形状、图片与图表，动画、切换、SmartArt、嵌入对象会丢失；
+  超过 25 MB 或解析不出内容时回落到「用默认程序打开」的卡片
 - 多选（Ctrl/Shift）尚未实现
 - 未配置代码签名，分发时 Windows 会提示未知发布者

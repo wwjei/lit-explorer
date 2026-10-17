@@ -19,7 +19,10 @@ const DEFAULTS = {
   // 是否隐藏以 . 开头的文件/文件夹（按工作区无关的全局偏好）
   hideDot: false,
   // 快速访问：{ [小写化的工作区根目录]: [{ path, name, isDir, kind }] }
-  favorites: {}
+  favorites: {},
+  // 内嵌文档预览开关（默认开启）
+  previewDocx: true,
+  previewPptx: true
 };
 
 let cache = null;

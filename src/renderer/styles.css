@@ -247,6 +247,7 @@ body.is-maximized .app{box-shadow:none}
 .fav-row .nm{font-size:12px}
 
 .c-folder{color:#e3a63c}.c-md{color:#3b82f6}.c-html{color:#e2603a}
+.c-doc{color:#2b579a}.c-ppt{color:#d24726}.c-pdf{color:#c0392b}
 .c-js{color:#cfa01a}.c-json{color:#3f9a6d}.c-css{color:#8b5cf6}
 .c-img{color:#e0568a}.c-txt{color:#8b93a1}.c-bin{color:#8b93a1}
 [data-theme="dark"] .c-folder{color:#e8b155}
@@ -320,6 +321,22 @@ kbd{
   overflow:hidden;white-space:nowrap;text-overflow:ellipsis;
 }
 .frame{flex:1;min-height:0;width:100%;border:0;background:#fff;display:block}
+
+/* ============ PDF（Chromium 内置阅读器） ============ */
+.pdfview{flex:1;min-height:0;background:var(--panel-2)}
+.pdf-frame{width:100%;height:100%;border:0;display:block;background:#fff}
+
+/* ============ 文档预览（docx / pptx） ============ */
+.docview{flex:1;min-height:0;overflow:auto;background:var(--panel-2)}
+.docview-docx{display:flex;flex-direction:column;align-items:center;padding:18px 0}
+/* docx-preview 会把自己的样式注入到容器里，用 !important 压掉它的灰底 */
+.docview-docx .docx-wrapper{background:transparent!important;padding:0!important}
+.docview-docx .docx-wrapper>section.docx{margin:0 0 16px}
+.docview-pptx{padding:16px 18px;display:flex;flex-direction:column;align-items:center;gap:16px}
+/* pptx-preview 把 wrapper 背景硬编码成 #000（内联样式），这里压成透明，
+   否则幻灯片之间的间隙会露出黑边 */
+.docview-pptx .pptx-preview-wrapper{background:transparent!important}
+.docview-pptx .pptx-preview-slide-wrapper{border-radius:6px;box-shadow:var(--shadow)}
 
 /* ============ 代码视图 ============ */
 .codeview{

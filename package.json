@@ -17,6 +17,8 @@
   },
   "license": "MIT",
   "dependencies": {
+    "docx-preview": "0.4.1",
+    "pptx-preview": "1.0.7",
     "shiki": "4.5.0"
   },
   "devDependencies": {

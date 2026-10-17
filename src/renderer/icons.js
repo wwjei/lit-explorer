@@ -7,6 +7,7 @@
     file: '<path d="M13.5 3H7.5A2.5 2.5 0 0 0 5 5.5v13A2.5 2.5 0 0 0 7.5 21h9a2.5 2.5 0 0 0 2.5-2.5V8.5z"/><path d="M13.5 3v5.5H19"/>',
     code: '<path d="M9.5 8.5 5.5 12l4 3.5"/><path d="M14.5 8.5 18.5 12l-4 3.5"/>',
     image: '<rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><circle cx="9" cy="10" r="1.6"/><path d="M4.5 17.5 9 13l3.5 3.5L16 14l4 4"/>',
+    slide: '<rect x="3.5" y="4.5" width="17" height="11" rx="2"/><path d="M12 15.5V19"/><path d="M8.5 19h7"/>',
     box: '<path d="M12 3.4 20 8v8l-8 4.6L4 16V8z"/><path d="M4 8l8 4.6L20 8"/><path d="M12 12.6V20.6"/>',
     hash: '<path d="M9.5 4 7.5 20"/><path d="M16.5 4l-2 16"/><path d="M5 9.5h14"/><path d="M4 14.5h14"/>',
     chevron: '<path d="M9.5 6.5 15 12l-5.5 5.5"/>',
@@ -28,6 +29,9 @@
   const KIND_ICON = {
     md: ['file', 'c-md'],
     html: ['code', 'c-html'],
+    docx: ['file', 'c-doc'],
+    pptx: ['slide', 'c-ppt'],
+    pdf: ['file', 'c-pdf'],
     js: ['code', 'c-js'],
     json: ['box', 'c-json'],
     css: ['hash', 'c-css'],

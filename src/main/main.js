@@ -105,6 +105,8 @@ async function createWindow() {
         contextIsolation: true,
         nodeIntegration: false,
         sandbox: true,
+        // PDF 预览用 Chromium 内置阅读器（<iframe> 加载 application/pdf）
+        plugins: true,
         spellcheck: false
       }
     },
@@ -249,6 +251,14 @@ function registerIpc() {
     }
   });
 
+  ipcMain.handle('fs:read-bytes', async (_e, filePath) => {
+    try {
+      return await fsApi.readFileBytes(filePath);
+    } catch (err) {
+      return { error: err.code || 'EREAD', message: err.message };
+    }
+  });
+
   ipcMain.handle('fs:stat', async (_e, target) => {
     try {
       return await fsApi.statPath(target);
@@ -373,7 +383,20 @@ async function toggleThemeFromMain() {
   win.webContents.send('app:theme', theme);
 }
 
-function showAppMenu() {
+/** 切换某个预览开关，并把最新设置推回界面（正在预览的文件会立即重新渲染） */
+async function togglePreviewPref(key) {
+  const state = await store.load();
+  const saved = await store.patch({ [key]: !(state[key] !== false) });
+  if (win && !win.isDestroyed()) {
+    win.webContents.send('app:preview-prefs', {
+      previewDocx: saved.previewDocx !== false,
+      previewPptx: saved.previewPptx !== false
+    });
+  }
+}
+
+async function showAppMenu() {
+  const state = await store.load();
   const items = [
     { label: '打开文件夹…', accelerator: 'Ctrl+O', click: pickAndOpen },
     { label: '打开示例项目', click: () => openWorkspace(assetPath('sample-project')) },
@@ -383,6 +406,19 @@ function showAppMenu() {
     { type: 'separator' },
     { label: '显示 / 隐藏预览面板', accelerator: 'Ctrl+B', click: () => win.webContents.send('app:toggle-preview') },
     { label: '切换明暗主题', accelerator: 'Ctrl+Shift+L', click: toggleThemeFromMain },
+    { type: 'separator' },
+    {
+      label: '启用 Word (.docx) 内嵌预览',
+      type: 'checkbox',
+      checked: state.previewDocx !== false,
+      click: () => togglePreviewPref('previewDocx')
+    },
+    {
+      label: '启用 PPT (.pptx) 内嵌预览',
+      type: 'checkbox',
+      checked: state.previewPptx !== false,
+      click: () => togglePreviewPref('previewPptx')
+    },
     { type: 'separator' },
     { label: '开发者工具', accelerator: 'F12', click: () => win.webContents.toggleDevTools() },
     { label: '实际大小', accelerator: 'Ctrl+0', click: () => win.webContents.setZoomLevel(0) },

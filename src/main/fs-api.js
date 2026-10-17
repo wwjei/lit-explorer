@@ -14,12 +14,18 @@ const allowedRoots = new Set();
 /** 文本预览上限：超过则只读前 5 MB 并标记截断 */
 const MAX_TEXT_BYTES = 5 * 1024 * 1024;
 
+/** docx/pptx 要整份交给渲染进程解析，超过这个大小就不内嵌预览（IPC 也要拷贝一份） */
+const MAX_DOC_BYTES = 25 * 1024 * 1024;
+
 /** 判二进制时检查的头部长度 */
 const SNIFF_BYTES = 8192;
 
 const KIND_BY_EXT = {
   html: ['html', 'htm', 'xhtml'],
   md: ['md', 'markdown', 'mdx'],
+  docx: ['docx'],
+  pptx: ['pptx'],
+  pdf: ['pdf'],
   js: ['js', 'mjs', 'cjs', 'jsx', 'ts', 'tsx', 'mts', 'cts', 'vue', 'svelte'],
   json: ['json', 'jsonc', 'json5', 'yaml', 'yml', 'toml', 'xml', 'plist'],
   css: ['css', 'scss', 'sass', 'less', 'styl'],
@@ -255,6 +261,19 @@ async function readFileForPreview(filePath) {
   };
 }
 
+/**
+ * 读取整个文件的字节，交给渲染进程里的纯前端解析器（docx / pptx）。
+ * 仍然只读，且必须通过 assertAllowed()；超过上限直接拒绝，不做部分读取。
+ */
+async function readFileBytes(filePath, maxBytes = MAX_DOC_BYTES) {
+  const abs = assertAllowed(filePath);
+  const st = await fsp.stat(abs);
+  if (st.isDirectory()) return { error: 'IS_DIR' };
+  if (st.size > maxBytes) return { tooLarge: true, size: st.size, path: abs };
+  const data = await fsp.readFile(abs);
+  return { data, size: st.size, path: abs };
+}
+
 /** 单个路径的元信息（预览头、文件夹摘要用） */
 async function statPath(target) {
   const abs = assertAllowed(target);
@@ -272,5 +291,7 @@ module.exports = {
   statEntries,
   statPath,
   readFileForPreview,
-  MAX_TEXT_BYTES
+  readFileBytes,
+  MAX_TEXT_BYTES,
+  MAX_DOC_BYTES
 };

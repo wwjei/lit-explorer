@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('pv', {
   /* 文件系统（只读） */
   list: (dir) => ipcRenderer.invoke('fs:list', dir),
   read: (filePath) => ipcRenderer.invoke('fs:read', filePath),
+  readBytes: (filePath) => ipcRenderer.invoke('fs:read-bytes', filePath),
   stat: (target) => ipcRenderer.invoke('fs:stat', target),
   previewUrl: (filePath) => ipcRenderer.invoke('fs:preview-url', filePath),
 
@@ -46,5 +47,6 @@ contextBridge.exposeInMainWorld('pv', {
   onTogglePreview: (cb) => ipcRenderer.on('app:toggle-preview', () => cb()),
   onRescan: (cb) => ipcRenderer.on('app:rescan', () => cb()),
   onFocusSearch: (cb) => ipcRenderer.on('app:focus-search', () => cb()),
-  onToggleFavorite: (cb) => ipcRenderer.on('app:toggle-favorite', (_e, node) => cb(node))
+  onToggleFavorite: (cb) => ipcRenderer.on('app:toggle-favorite', (_e, node) => cb(node)),
+  onPreviewPrefs: (cb) => ipcRenderer.on('app:preview-prefs', (_e, prefs) => cb(prefs))
 });

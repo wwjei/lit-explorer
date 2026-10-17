@@ -32,6 +32,8 @@
     previewOpen: true,
     pendingScroll: false,
     hideDot: false,          // 是否隐藏以 . 开头的条目
+    previewDocx: true,       // 是否内嵌预览 .docx（设置里可关）
+    previewPptx: true,       // 是否内嵌预览 .pptx（设置里可关）
     favs: [],                // 当前工作区的快速访问项 [{ path, name, isDir, kind }]
     favoritesByRoot: {}      // 持久化的快速访问项（按工作区根目录分组）
   };
@@ -663,6 +665,46 @@
       + '</div>';
   }
 
+  /** PDF：交给 Chromium 内置阅读器渲染（需要 webPreferences.plugins） */
+  function pdfFrame(node, url) {
+    return '<div class="pdfview"><iframe class="pdf-frame" title="' + esc(node.name) + ' 预览" '
+      + 'src="' + esc(url) + '"></iframe></div>';
+  }
+
+  /** docx / pptx：整份字节读进渲染进程，交给 vendor/docpreview.js 里的纯前端解析器 */
+  async function renderDocPreview(node, kind, stale) {
+    if (!PV.docpreview) {
+      pvBody.innerHTML = fallbackCard(node, '预览组件未构建：请先运行 npm run build');
+      return;
+    }
+    pvBody.innerHTML = loadingState('正在解析 ' + (kind === 'docx' ? 'Word' : 'PowerPoint') + ' 文档…');
+    const res = await pv.readBytes(node.path);
+    if (stale()) return;
+    if (res.error) { pvBody.innerHTML = fallbackCard(node, '读取失败：' + res.error); return; }
+    if (res.tooLarge) {
+      pvBody.innerHTML = fallbackCard(node, '文件较大（' + fmtSize(res.size) + '），暂不内嵌预览');
+      return;
+    }
+
+    const raw = res.data;
+    let buf = raw;
+    if (raw instanceof Uint8Array) buf = raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength);
+    else if (raw && raw.type === 'Buffer' && Array.isArray(raw.data)) buf = new Uint8Array(raw.data).buffer;
+
+    const wrap = document.createElement('div');
+    wrap.className = 'docview';
+    pvBody.innerHTML = '';
+    pvBody.appendChild(wrap);
+    try {
+      if (kind === 'docx') await PV.docpreview.renderDocx(buf, wrap);
+      else await PV.docpreview.renderPptx(buf, wrap);
+      if (stale()) return;
+    } catch (err) {
+      console.error('[docpreview]', err);
+      pvBody.innerHTML = fallbackCard(node, '预览失败：' + ((err && err.message) || err));
+    }
+  }
+
   /** 源码视图用的语言 id：按当前模式取，未知语言返回 null（纯文本） */
   function langForNode(node) {
     if (state.mode === 'source') {
@@ -746,6 +788,23 @@
       pvBody.innerHTML = res.url
         ? '<div class="img-wrap"><img src="' + esc(res.url) + '" alt="' + esc(node.name) + '"></div>'
         : fallbackCard(node, '无法生成预览地址');
+      return;
+    }
+
+    if (node.kind === 'pdf' && state.mode === 'preview') {
+      const res = await pv.previewUrl(node.path);
+      if (stale()) return;
+      pvBody.innerHTML = res.url ? pdfFrame(node, res.url) : fallbackCard(node, '无法生成预览地址');
+      return;
+    }
+
+    // 设置里关掉时不再内嵌解析，走下面的通用分支落到兜底卡片
+    if (node.kind === 'docx' && state.previewDocx) {
+      await renderDocPreview(node, 'docx', stale);
+      return;
+    }
+    if (node.kind === 'pptx' && state.previewPptx) {
+      await renderDocPreview(node, 'pptx', stale);
       return;
     }
 
@@ -1190,6 +1249,15 @@
   pv.onToggleFavorite((node) => {
     if (node && node.path) toggleFavorite(node);
   });
+  pv.onPreviewPrefs((prefs) => {
+    if (!prefs) return;
+    state.previewDocx = prefs.previewDocx !== false;
+    state.previewPptx = prefs.previewPptx !== false;
+    renderedPreviewKey = '';
+    renderPreview(true);
+    toast('Word 内嵌预览：' + (state.previewDocx ? '开' : '关')
+      + ' · PPT 内嵌预览：' + (state.previewPptx ? '开' : '关'));
+  });
 
   /* ============================ 启动 ============================ */
   (async function init() {
@@ -1200,6 +1268,8 @@
     state.previewOpen = st.previewOpen !== false;
     $('#btn-preview').classList.toggle('is-on', !state.previewOpen);
     state.hideDot = !!st.hideDot;
+    state.previewDocx = st.previewDocx !== false;
+    state.previewPptx = st.previewPptx !== false;
     state.favoritesByRoot = st.favorites && typeof st.favorites === 'object' ? st.favorites : {};
     // 主进程有可能在读取设置期间就已经把工作区打开了，这时补上该工作区的快速访问项
     if (state.root) {
