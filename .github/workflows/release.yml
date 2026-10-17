@@ -1,0 +1,51 @@
+name: Release
+
+# 打 v 开头的 tag 时触发：构建 Windows 安装包并发布 Release
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    name: 构建 Windows 安装包
+    runs-on: windows-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 构建安装包
+        # predist 钩子会先生成高亮 Worker 与图标，再交给 electron-builder
+        run: npm run dist
+
+      - name: 列出产物
+        run: Get-ChildItem -Recurse dist | Where-Object { !$_.PSIsContainer } | Select-Object Name, Length
+        shell: pwsh
+
+      - name: 发布 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          # tag 里带连字符视为预发布（如 v0.0.1-alpha）
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true
+          files: |
+            dist/*.exe
+            dist/*.blockmap
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

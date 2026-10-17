@@ -1,0 +1,4 @@
+# 统一换行符：仓库内存 LF，检出按平台
+* text=auto
+*.ico binary
+*.png binary

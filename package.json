@@ -1,0 +1,62 @@
+{
+  "name": "lit-explorer",
+  "version": "0.0.1-alpha",
+  "private": true,
+  "description": "lit explorer —— 面向开发者的本地项目文件浏览器：多栏目录导航 + 内嵌预览，双击用系统默认程序打开",
+  "main": "src/main/main.js",
+  "scripts": {
+    "build": "node scripts/build-renderer.mjs",
+    "icons": "node scripts/build-icons.mjs",
+    "prestart": "npm run build",
+    "start": "electron .",
+    "dev": "npm run build && electron . --dev",
+    "preshot": "npm run build",
+    "shot": "electron .",
+    "predist": "npm run build && npm run icons",
+    "dist": "electron-builder --win"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "shiki": "4.5.0"
+  },
+  "devDependencies": {
+    "electron": "^44.9.0",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.2"
+  },
+  "build": {
+    "appId": "com.litexplorer.app",
+    "productName": "Lit Explorer",
+    "directories": {
+      "buildResources": "build",
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      "FEATURES.md",
+      "docs/**/*",
+      "sample-project/**/*"
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "nsis": {
+      "artifactName": "Lit-Explorer-Setup-${version}.${ext}",
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "shortcutName": "lit explorer"
+    },
+    "portable": {
+      "artifactName": "Lit-Explorer-${version}-portable.${ext}"
+    }
+  }
+}

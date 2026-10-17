@@ -1,0 +1,9 @@
+node_modules/
+.tmp/
+dist/
+out/
+*.log
+
+# 构建产物（npm start 前会自动生成）
+src/renderer/vendor/
+build/icons/

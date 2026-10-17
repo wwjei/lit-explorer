@@ -1,0 +1,92 @@
+:root {
+  --ink: #12161d;
+  --muted: #6b7482;
+  --accent: #2f6fed;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font: 15px/1.7 -apple-system, "Segoe UI", "PingFang SC", sans-serif;
+  color: var(--ink);
+  background: #fff;
+}
+
+.wrap {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 48px 30px;
+}
+
+.badge {
+  display: inline-block;
+  padding: 4px 11px;
+  border-radius: 999px;
+  background: #eef3ff;
+  color: #1c4fd0;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+h1 {
+  font-size: 32px;
+  letter-spacing: -0.02em;
+  margin: 18px 0 10px;
+}
+
+.lead {
+  color: var(--muted);
+  font-size: 15px;
+  margin: 0 0 28px;
+}
+
+code {
+  font-family: Consolas, Menlo, monospace;
+  font-size: 13px;
+  background: #f5f6f8;
+  padding: 2px 5px;
+  border-radius: 4px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 14px;
+}
+
+.card {
+  border: 1px solid #e8eaee;
+  border-radius: 12px;
+  padding: 16px 18px;
+  transition: border-color .15s, box-shadow .15s;
+}
+
+.card:hover {
+  border-color: #c6daff;
+  box-shadow: 0 6px 20px rgba(47, 111, 237, .08);
+}
+
+.card h3 { margin: 0 0 6px; font-size: 14px; }
+.card p { margin: 0; color: var(--muted); font-size: 13px; }
+
+.btn {
+  margin-top: 26px;
+  border: 0;
+  border-radius: 9px;
+  padding: 9px 18px;
+  font: inherit;
+  font-size: 14px;
+  color: #fff;
+  background: var(--accent);
+  cursor: pointer;
+}
+
+.btn:hover { background: #2559c9; }
+
+.bar {
+  height: 6px;
+  border-radius: 3px;
+  background: linear-gradient(90deg, #2f6fed, #7aa7ff);
+  margin-top: 30px;
+}

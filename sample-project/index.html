@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Sample Project</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="wrap">
+    <span class="badge">示例页面</span>
+    <h1>Sample Project</h1>
+    <p class="lead">如果你能看到这段文字带上了蓝色标题和卡片阴影，说明预览正常加载了同目录下的 <code>styles.css</code>。</p>
+
+    <div class="grid">
+      <div class="card">
+        <h3>相对资源</h3>
+        <p>样式表通过 <code>href="styles.css"</code> 引入，没有内联。</p>
+      </div>
+      <div class="card">
+        <h3>脚本可用</h3>
+        <p>下面的按钮由页面内的脚本驱动。</p>
+      </div>
+      <div class="card">
+        <h3>沙箱隔离</h3>
+        <p>页面脚本运行在隔离环境，无法访问浏览器界面。</p>
+      </div>
+    </div>
+
+    <button id="btn" class="btn">点我计数：<span id="n">0</span></button>
+
+    <div class="bar"></div>
+  </div>
+
+  <script>
+    var n = 0;
+    document.getElementById('btn').addEventListener('click', function () {
+      document.getElementById('n').textContent = ++n;
+    });
+  </script>
+</body>
+</html>

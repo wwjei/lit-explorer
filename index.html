@@ -1,0 +1,1689 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>项目文件浏览器 · 原型</title>
+<style>
+/* ============ tokens ============ */
+*{box-sizing:border-box}
+:root{
+  --bg:#f5f6f8;
+  --panel:#ffffff;
+  --panel-2:#fafbfc;
+  --line:#e7e9ee;
+  --line-soft:#f0f2f5;
+  --line-strong:#d6dae2;
+  --text:#1b1f26;
+  --text-2:#5b6472;
+  --muted:#98a0ad;
+  --hover:#f2f4f7;
+  --sel:#e9f0ff;
+  --sel-line:#c6daff;
+  --accent:#2f6fed;
+  --accent-ink:#1b4fd0;
+  --code-bg:#f7f8fa;
+  --shadow:0 1px 2px rgba(16,24,40,.04), 0 10px 30px rgba(16,24,40,.07);
+  --radius:10px;
+  --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",Roboto,Helvetica,Arial,sans-serif;
+}
+[data-theme="dark"]{
+  --bg:#0f1115;
+  --panel:#161920;
+  --panel-2:#1b1f27;
+  --line:#262b35;
+  --line-soft:#1f242d;
+  --line-strong:#333a47;
+  --text:#e7eaf0;
+  --text-2:#a6aebd;
+  --muted:#7d8697;
+  --hover:#1e232c;
+  --sel:#1c2a45;
+  --sel-line:#2d4b7e;
+  --accent:#6d93ff;
+  --accent-ink:#adc4ff;
+  --code-bg:#12151b;
+  --shadow:0 1px 2px rgba(0,0,0,.3), 0 10px 30px rgba(0,0,0,.35);
+}
+html,body{height:100%}
+body{
+  margin:0;background:var(--bg);color:var(--text);
+  font:13px/1.5 var(--sans);
+  -webkit-font-smoothing:antialiased;
+  overflow:hidden;
+}
+[hidden]{display:none!important}
+button{font:inherit;color:inherit;background:none;border:0;padding:0;cursor:default}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-thumb{background:color-mix(in srgb,var(--muted) 35%,transparent);border:3px solid transparent;background-clip:content-box;border-radius:8px}
+::-webkit-scrollbar-thumb:hover{background:color-mix(in srgb,var(--muted) 55%,transparent);background-clip:content-box}
+::-webkit-scrollbar-track{background:transparent}
+
+/* ============ shell ============ */
+.app{height:100%;display:flex;flex-direction:column}
+.topbar{
+  flex:none;height:52px;display:flex;align-items:center;gap:14px;
+  padding:0 14px;background:var(--panel);border-bottom:1px solid var(--line);
+}
+.brand{display:flex;align-items:center;gap:10px;min-width:0}
+.mark{
+  width:26px;height:26px;border-radius:8px;flex:none;
+  background:linear-gradient(135deg,#3b7bf0,#7aa7ff);
+  display:grid;place-items:center;color:#fff;
+  box-shadow:0 1px 3px rgba(47,111,237,.35);
+}
+.brand-name{font-size:13.5px;font-weight:500;letter-spacing:.01em}
+.brand-sub{font-size:12px;color:var(--muted)}
+.spacer{flex:1}
+.search{
+  position:relative;display:flex;align-items:center;width:260px;max-width:34vw;
+}
+.search .ic{position:absolute;left:9px;color:var(--muted);pointer-events:none}
+.search input{
+  width:100%;height:30px;padding:0 10px 0 30px;
+  border:1px solid var(--line);border-radius:8px;background:var(--panel-2);
+  font:inherit;font-size:12.5px;color:var(--text);outline:none;
+}
+.search input::placeholder{color:var(--muted)}
+.search input:focus{border-color:var(--sel-line);background:var(--panel);box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 12%,transparent)}
+.iconbtn{
+  width:30px;height:30px;border-radius:8px;display:grid;place-items:center;
+  color:var(--text-2);flex:none;
+}
+.iconbtn:hover{background:var(--hover);color:var(--text)}
+.iconbtn.is-on{background:var(--sel);color:var(--accent-ink)}
+
+.body{flex:1;display:flex;min-height:0}
+.main{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--panel)}
+
+/* breadcrumb */
+.crumbs{
+  flex:none;height:34px;display:flex;align-items:center;gap:2px;
+  padding:0 10px;border-bottom:1px solid var(--line-soft);
+  overflow-x:auto;overflow-y:hidden;white-space:nowrap;
+  scrollbar-width:none;
+}
+.crumbs::-webkit-scrollbar{display:none}
+.crumb{
+  padding:3px 7px;border-radius:6px;color:var(--muted);font-size:12px;
+  flex:none;
+}
+.crumb:hover{background:var(--hover);color:var(--text)}
+.crumb.is-last{color:var(--text);font-weight:500}
+.crumb-sep{color:var(--line-strong);flex:none;display:grid;place-items:center;font-size:11px}
+
+/* columns */
+.cols{flex:1;display:flex;min-height:0;overflow-x:auto;overflow-y:hidden}
+.col{
+  width:246px;flex:none;min-height:0;display:flex;flex-direction:column;
+  border-right:1px solid var(--line);background:var(--panel);
+  animation:colIn .16s ease both;
+}
+@keyframes colIn{from{opacity:0;transform:translateX(-6px)}to{opacity:1;transform:none}}
+.col-head{
+  flex:none;height:30px;display:flex;align-items:center;justify-content:space-between;gap:8px;
+  padding:0 12px;border-bottom:1px solid var(--line-soft);
+  font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);
+}
+.col-head b{font-weight:500}
+.col-list{flex:1;overflow-y:auto;overflow-x:hidden;padding:5px 6px 12px}
+.col-empty{padding:14px 10px;color:var(--muted);font-size:12px}
+
+.row{
+  display:flex;align-items:center;gap:8px;height:28px;padding:0 7px;
+  border-radius:7px;position:relative;
+}
+.row .nm{
+  flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-size:12.5px;
+}
+.row .meta{flex:none;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+.row .chev{flex:none;color:var(--muted);opacity:0;margin-right:-2px}
+.row:hover{background:var(--hover)}
+.row:hover .chev{opacity:1}
+.row.is-trail{background:var(--panel-2);box-shadow:inset 0 0 0 1px var(--line)}
+.row.is-trail .nm{color:var(--text-2)}
+.row.is-sel{background:var(--sel);box-shadow:inset 0 0 0 1px var(--sel-line)}
+.row.is-sel .nm{font-weight:500;color:var(--accent-ink)}
+.row.is-sel .chev{opacity:1;color:var(--accent-ink)}
+.row.is-sel .meta{color:color-mix(in srgb,var(--accent-ink) 60%,var(--muted))}
+.ic{flex:none;display:block}
+.c-folder{color:#e3a63c}.c-md{color:#3b82f6}.c-html{color:#e2603a}
+.c-js{color:#cfa01a}.c-json{color:#3f9a6d}.c-css{color:#8b5cf6}
+.c-img{color:#e0568a}.c-txt{color:#8b93a1}.c-bin{color:#8b93a1}
+[data-theme="dark"] .c-folder{color:#e8b155}[data-theme="dark"] .c-js{color:#e0b93f}
+
+/* gutter + preview */
+.gutter{flex:none;width:5px;background:transparent;position:relative}
+.gutter::after{
+  content:"";position:absolute;inset:0 1px;border-radius:2px;background:transparent;
+}
+.gutter:hover::after{background:var(--sel-line)}
+body.resizing{cursor:col-resize}
+body.resizing .gutter::after{background:var(--accent)}
+
+.preview{
+  flex:none;width:46%;min-width:320px;display:flex;flex-direction:column;
+  background:var(--panel);border-left:1px solid var(--line);min-height:0;
+}
+.pv-head{
+  flex:none;display:flex;align-items:flex-start;gap:10px;
+  padding:12px 12px 10px 14px;border-bottom:1px solid var(--line-soft);
+}
+.pv-head:empty{display:none}
+.pv-ic{margin-top:2px}
+.pv-name{flex:1;min-width:0}
+.pv-nm{
+  font-size:13.5px;font-weight:500;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.pv-sub{
+  margin-top:3px;font-size:11.5px;color:var(--muted);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+.pv-actions{flex:none;display:flex;align-items:center;gap:4px}
+.seg{display:flex;background:var(--panel-2);border:1px solid var(--line);border-radius:8px;padding:2px}
+.seg button{
+  padding:2px 9px;border-radius:6px;font-size:11.5px;color:var(--text-2);
+}
+.seg button.is-on{background:var(--panel);color:var(--text);font-weight:500;box-shadow:0 1px 2px rgba(16,24,40,.08)}
+.pv-body{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden}
+.pv-body.is-empty{align-items:center;justify-content:center;padding:24px}
+
+/* empty / unsupported states */
+.state{text-align:center;color:var(--muted);max-width:340px}
+.state .big{
+  width:56px;height:56px;margin:0 auto 14px;border-radius:16px;
+  display:grid;place-items:center;background:var(--panel-2);border:1px solid var(--line);
+  color:var(--line-strong);
+}
+.state h4{margin:0 0 6px;font-size:13.5px;font-weight:500;color:var(--text-2)}
+.state p{margin:0;font-size:12.5px;line-height:1.7}
+.keys{display:flex;flex-wrap:wrap;gap:6px 14px;justify-content:center;margin-top:18px}
+.keys span{font-size:11.5px;color:var(--muted);display:flex;align-items:center;gap:5px}
+kbd{
+  font:inherit;font-size:11px;min-width:20px;height:20px;padding:0 5px;
+  display:inline-grid;place-items:center;border-radius:5px;
+  background:var(--panel);border:1px solid var(--line);border-bottom-width:2px;
+  color:var(--text-2);
+}
+
+/* mini browser */
+.browser{flex:1;min-height:0;display:flex;flex-direction:column;background:var(--panel-2)}
+.browser-bar{
+  flex:none;height:38px;display:flex;align-items:center;gap:10px;
+  padding:0 10px;border-bottom:1px solid var(--line);background:var(--panel);
+}
+.dots{display:flex;gap:6px;flex:none}
+.dots i{width:9px;height:9px;border-radius:50%;display:block}
+.dots .r{background:#ff5f57}.dots .y{background:#febc2e}.dots .g{background:#28c840}
+[data-theme="dark"] .dots i{opacity:.75}
+.addr{
+  flex:1;min-width:0;height:24px;display:flex;align-items:center;gap:6px;
+  padding:0 10px;border-radius:7px;background:var(--panel-2);border:1px solid var(--line);
+  color:var(--muted);font-size:11.5px;font-family:var(--mono);
+  overflow:hidden;white-space:nowrap;text-overflow:ellipsis;
+}
+.frame{flex:1;min-height:0;width:100%;border:0;background:#fff;display:block}
+
+/* code view */
+.codeview{
+  flex:1;min-height:0;overflow:auto;background:var(--panel);
+  font-family:var(--mono);font-size:12.5px;line-height:1.65;
+  padding:12px 0 24px;
+}
+.cl{display:flex;padding:0 14px}
+.cl:hover{background:var(--panel-2)}
+.cl .ln{
+  flex:none;width:38px;text-align:right;padding-right:14px;
+  color:var(--line-strong);user-select:none;font-size:11.5px;line-height:1.8;
+}
+.cl .lc{white-space:pre;flex:1;min-width:0}
+.tk-cm{color:#8b93a1;font-style:italic}
+.tk-st{color:#2f9e6e}
+.tk-nu{color:#c2643a}
+.tk-kw{color:#8b5cf6}
+.tk-co{color:#c2643a}
+.tk-ty{color:#2f6fed}
+.tk-ky{color:#2f6fed}
+.tk-pr{color:#2f6fed}
+.tk-va{color:#c2643a}
+[data-theme="dark"] .tk-cm{color:#6b7484}
+[data-theme="dark"] .tk-st{color:#63c99b}
+[data-theme="dark"] .tk-nu{color:#e59a6c}
+[data-theme="dark"] .tk-kw{color:#b79cff}
+[data-theme="dark"] .tk-ty{color:#82a8ff}
+[data-theme="dark"] .tk-ky{color:#82a8ff}
+[data-theme="dark"] .tk-pr{color:#82a8ff}
+[data-theme="dark"] .tk-va{color:#e59a6d}
+
+/* image view */
+.img-wrap{
+  flex:1;min-height:0;overflow:auto;display:grid;place-items:center;padding:28px;
+  background:
+    linear-gradient(45deg,var(--panel-2) 25%,transparent 25%,transparent 75%,var(--panel-2) 75%),
+    linear-gradient(45deg,var(--panel-2) 25%,transparent 25%,transparent 75%,var(--panel-2) 75%);
+  background-size:18px 18px;background-position:0 0,9px 9px;background-color:var(--panel);
+}
+.img-wrap img{max-width:100%;max-height:100%;border-radius:12px;box-shadow:var(--shadow);background:#fff}
+
+/* markdown prose */
+.prose-wrap{flex:1;min-height:0;overflow:auto}
+.prose{
+  max-width:700px;margin:0 auto;padding:26px 30px 64px;
+  font-size:13.5px;line-height:1.78;color:var(--text);
+}
+.prose>*:first-child{margin-top:0}
+.prose h1,.prose h2,.prose h3,.prose h4{line-height:1.4;margin:26px 0 10px;font-weight:500}
+.prose h1{font-size:22px;letter-spacing:-.01em}
+.prose h2{font-size:16.5px;padding-bottom:7px;border-bottom:1px solid var(--line)}
+.prose h3{font-size:14.5px}
+.prose h4{font-size:13.5px;color:var(--text-2)}
+.prose p{margin:11px 0}
+.prose ul,.prose ol{margin:11px 0;padding-left:22px}
+.prose li{margin:4px 0}
+.prose li::marker{color:var(--muted)}
+.prose code{
+  font-family:var(--mono);font-size:12px;background:var(--code-bg);
+  border:1px solid var(--line-soft);padding:1.5px 5px;border-radius:5px;
+}
+.prose pre{
+  margin:14px 0;padding:13px 15px;border-radius:10px;overflow:auto;
+  background:var(--code-bg);border:1px solid var(--line);
+  font-family:var(--mono);font-size:12.5px;line-height:1.72;
+}
+.prose pre code{background:none;border:0;padding:0;font-size:inherit;white-space:pre}
+.prose blockquote{
+  margin:14px 0;padding:2px 0 2px 14px;border-left:3px solid var(--line-strong);
+  color:var(--text-2);
+}
+.prose blockquote p{margin:4px 0}
+.prose a{color:var(--accent);text-decoration:none;border-bottom:1px solid color-mix(in srgb,var(--accent) 35%,transparent)}
+.prose a:hover{border-bottom-color:var(--accent)}
+.prose hr{border:0;border-top:1px solid var(--line);margin:24px 0}
+.prose table{width:100%;border-collapse:collapse;margin:14px 0;font-size:12.5px}
+.prose th,.prose td{border:1px solid var(--line);padding:7px 10px;text-align:left;vertical-align:top}
+.prose th{background:var(--panel-2);font-weight:500;color:var(--text-2)}
+.prose tbody tr:hover{background:var(--panel-2)}
+.prose del{color:var(--muted)}
+.md-table-wrap{overflow-x:auto}
+
+/* folder summary in preview */
+.folder-card{flex:1;min-height:0;overflow:auto;padding:26px 24px}
+.folder-hero{display:flex;align-items:center;gap:14px;padding-bottom:20px;border-bottom:1px solid var(--line-soft)}
+.folder-hero .big{width:46px;height:46px;border-radius:13px;display:grid;place-items:center;background:var(--panel-2);border:1px solid var(--line)}
+.folder-hero h3{margin:0;font-size:15px;font-weight:500}
+.folder-hero p{margin:4px 0 0;font-size:12px;color:var(--muted)}
+.folder-list{margin-top:14px;display:flex;flex-direction:column;gap:1px}
+.frow{display:flex;align-items:center;gap:9px;height:30px;padding:0 8px;border-radius:7px;text-align:left}
+.frow:hover{background:var(--hover)}
+.frow .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px}
+.frow .meta{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+
+/* status bar */
+.status{
+  flex:none;height:28px;display:flex;align-items:center;gap:16px;
+  padding:0 14px;border-top:1px solid var(--line);
+  background:var(--panel);color:var(--muted);font-size:11.5px;
+}
+.status .path{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.status .hints{margin-left:auto;display:flex;align-items:center;gap:12px;flex:none}
+.status .hints span{display:flex;align-items:center;gap:4px}
+.status kbd{height:17px;min-width:17px;font-size:10px;border-bottom-width:1px}
+
+/* toast */
+#toast{
+  position:fixed;left:50%;bottom:44px;transform:translate(-50%,10px);
+  padding:9px 16px;border-radius:10px;background:#1b1f26;color:#fff;
+  font-size:12.5px;box-shadow:0 8px 30px rgba(16,24,40,.28);
+  opacity:0;pointer-events:none;transition:opacity .18s,transform .18s;
+  max-width:70vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
+#toast.on{opacity:1;transform:translate(-50%,0)}
+.spin{animation:spin .5s ease}
+@keyframes spin{from{transform:rotate(0)}to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){
+  .col{animation:none}
+  #toast{transition:none}
+}
+@media (max-width:900px){
+  .search{width:170px}
+  .preview{min-width:280px}
+  .status .hints{display:none}
+}
+</style>
+</head>
+<body>
+
+<div class="app">
+  <header class="topbar">
+    <div class="brand">
+      <span class="mark">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+          <rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M9.5 4.5v15"/><path d="M14.5 4.5v15"/>
+        </svg>
+      </span>
+      <span>
+        <span class="brand-name">项目文件浏览器</span>
+        <span class="brand-sub" style="margin-left:8px">demo-project</span>
+      </span>
+    </div>
+
+    <div class="spacer"></div>
+
+    <label class="search">
+      <svg class="ic" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true">
+        <circle cx="11" cy="11" r="6.5"/><path d="M16 16l4 4"/>
+      </svg>
+      <input id="search" type="text" placeholder="搜索文件…  ( / )" autocomplete="off" spellcheck="false">
+    </label>
+
+    <button class="iconbtn" id="btn-preview" title="显示 / 隐藏预览面板" aria-label="显示或隐藏预览面板">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M14.5 4.5v15"/>
+      </svg>
+    </button>
+    <button class="iconbtn" id="btn-theme" title="切换主题" aria-label="切换主题">
+      <svg id="theme-ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/>
+      </svg>
+    </button>
+  </header>
+
+  <div class="body" id="app-body">
+    <div class="main">
+      <nav class="crumbs" id="crumbs"></nav>
+      <div class="cols" id="cols"></div>
+    </div>
+
+    <div class="gutter" id="gutter" title="拖动调整预览宽度"></div>
+
+    <aside class="preview" id="preview">
+      <div class="pv-head" id="pv-head"></div>
+      <div class="pv-body is-empty" id="pv-body"></div>
+    </aside>
+  </div>
+
+  <footer class="status">
+    <span class="path" id="st-path"></span>
+    <span class="hints">
+      <span><kbd>↑</kbd><kbd>↓</kbd> 选择</span>
+      <span><kbd>→</kbd> 进入</span>
+      <span><kbd>←</kbd> 上级</span>
+      <span><kbd>⏎</kbd> 打开</span>
+      <span>双击 = 默认程序打开</span>
+    </span>
+  </footer>
+</div>
+
+<div id="toast" role="status" aria-live="polite"></div>
+
+<!-- ============================================================
+     示例文件内容（真实实现时由后端读取磁盘）
+     ============================================================ -->
+<script type="text/plain" id="f-readme">
+# Demo Project
+
+一个用于演示 **文件浏览器** 交互的前端原型：多栏目录导航 + 内嵌预览。
+
+## 核心特性
+
+- Miller Columns 多栏导航，点击文件夹自动展开下一栏
+- `HTML` 在右侧迷你浏览器中渲染，可刷新
+- `Markdown` 实时渲染，支持「预览 / 源码」切换
+- 双击文件调用系统默认程序打开
+
+## 快速开始
+
+```bash
+npm install
+npm run dev
+```
+
+## 目录结构
+
+| 路径 | 说明 |
+| --- | --- |
+| `src/` | 应用源码 |
+| `docs/` | 设计与接口文档 |
+| `assets/` | 静态资源 |
+| `tests/` | 单元与端到端测试 |
+
+## 交互约定
+
+> 单击 = 选中并预览，双击 = 等同资源管理器的「打开」。
+
+更多细节见 [架构说明](docs/architecture.md) 与 [接口参考](docs/api-reference.md)。
+</script>
+
+<script type="text/plain" id="f-index-html">
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Demo Project</title>
+<style>
+  :root{--ink:#12161d;--muted:#6b7482;--accent:#2f6fed}
+  *{box-sizing:border-box}
+  body{margin:0;font:15px/1.7 -apple-system,"Segoe UI","PingFang SC",sans-serif;color:var(--ink);background:#fff}
+  .wrap{max-width:720px;margin:0 auto;padding:52px 30px}
+  .badge{display:inline-block;padding:4px 11px;border-radius:999px;background:#eef3ff;color:#1c4fd0;font-size:12px;font-weight:500}
+  h1{font-size:32px;letter-spacing:-.02em;margin:18px 0 10px}
+  .lead{color:var(--muted);font-size:16px;margin:0 0 30px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px}
+  .card{border:1px solid #e8eaee;border-radius:12px;padding:16px 18px;transition:border-color .15s}
+  .card:hover{border-color:#c6daff}
+  .card h3{margin:0 0 6px;font-size:14px}
+  .card p{margin:0;color:var(--muted);font-size:13px}
+  .bar{height:6px;border-radius:3px;background:linear-gradient(90deg,#2f6fed,#7aa7ff);margin-top:30px}
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <span class="badge">v0.4.0</span>
+    <h1>Demo Project</h1>
+    <p class="lead">用于演示文件浏览器预览能力的示例页面。</p>
+    <div class="grid">
+      <div class="card"><h3>多栏导航</h3><p>点击文件夹逐级展开，当前路径一目了然。</p></div>
+      <div class="card"><h3>内嵌预览</h3><p>HTML 与 Markdown 直接在右侧渲染。</p></div>
+      <div class="card"><h3>双击打开</h3><p>行为与系统资源管理器一致。</p></div>
+    </div>
+    <div class="bar"></div>
+  </div>
+</body>
+</html>
+</script>
+
+<script type="text/plain" id="f-package">
+{
+  "name": "demo-project",
+  "version": "0.4.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "vue": "^3.5.0"
+  },
+  "devDependencies": {
+    "vite": "^5.4.0",
+    "vitest": "^2.1.0"
+  }
+}
+</script>
+
+<script type="text/plain" id="f-gitignore">
+node_modules/
+dist/
+.env.local
+*.log
+.DS_Store
+</script>
+
+<script type="text/plain" id="f-arch">
+# 架构说明
+
+## 分层
+
+1. **数据层** —— 目录树通过 `scan` 接口按需懒加载，只读取当前层的子节点。
+2. **视图层** —— 每一栏对应路径中的一级目录，选中项决定下一栏的内容。
+3. **预览层** —— 按文件类型分派到不同渲染器，渲染器之间互不感知。
+
+## 渲染器分派
+
+| 类型 | 渲染器 | 说明 |
+| --- | --- | --- |
+| `.html` `.htm` | 沙箱 iframe | 禁止同源，隔离脚本 |
+| `.md` | Markdown → HTML | 支持源码切换 |
+| `.js` `.css` `.json` | 代码高亮 | 只读展示 |
+| `.svg` `.png` `.jpg` | 图片查看器 | 自适应缩放 |
+
+```js
+const renderer = {
+  html: renderIframe,
+  md: renderMarkdown,
+  code: renderCode,
+};
+
+export function preview(node, container) {
+  const render = renderer[node.kind] ?? renderFallback;
+  return render(node, container);
+}
+```
+
+## 性能约定
+
+> 目录层级超过 5 层时只保留最近 3 栏的 DOM，其余栏位复用缓存。
+
+- 单栏条目超过 200 个时启用虚拟滚动
+- 预览渲染在主线程空闲时预取（`requestIdleCallback`）
+</script>
+
+<script type="text/plain" id="f-api">
+# 接口参考
+
+## `GET /api/tree`
+
+返回指定目录下的条目列表。
+
+**查询参数**
+
+- `path` —— 目录相对路径，默认 `"."`
+- `depth` —— 递归深度，默认 `1`
+
+**响应示例**
+
+```json
+{
+  "path": "src",
+  "entries": [
+    { "name": "main.js", "type": "file", "size": 2048, "mtime": 1758621600 },
+    { "name": "components", "type": "dir", "children": [] }
+  ]
+}
+```
+
+## `GET /api/file`
+
+读取单个文件内容。文本文件返回 `utf-8` 字符串，二进制文件返回 `base64` 与 `mime`。
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `path` | string | 文件相对路径 |
+| `encoding` | string | `utf-8` \| `base64` |
+| `mime` | string | 用于预览分派 |
+
+## 错误码
+
+- `404` 路径不存在
+- `403` 超出允许访问的根目录
+- `413` 文件过大（默认上限 5 MB）
+</script>
+
+<script type="text/plain" id="f-changelog">
+# 更新日志
+
+## 0.4.0
+
+- 新增 HTML 内嵌预览与迷你浏览器工具条
+- 支持 Markdown 预览 / 源码双模式
+- 预览面板宽度可拖拽调整
+
+## 0.3.1
+
+- 修复深层目录下栏位滚动位置丢失的问题
+- 统一文件图标配色
+
+## 0.3.0
+
+- 多栏导航改为横向滚动，移除固定三栏限制
+</script>
+
+<script type="text/plain" id="f-main-js">
+import { createApp } from 'vue';
+import App from './components/App.vue';
+import './styles/base.css';
+
+const app = createApp(App);
+
+app.config.errorHandler = (err, instance, info) => {
+  console.error('[app]', err, info);
+};
+
+app.mount('#root');
+</script>
+
+<script type="text/plain" id="f-button-jsx">
+export function Button({ variant = 'default', size = 'md', onClick, children }) {
+  const cls = ['btn', `btn-${variant}`, `btn-${size}`].join(' ');
+
+  return (
+    <button type="button" className={cls} onClick={onClick}>
+      {children}
+    </button>
+  );
+}
+
+export const PrimaryButton = (props) => <Button {...props} variant="primary" />;
+</script>
+
+<script type="text/plain" id="f-modal-jsx">
+import { useEffect, useRef } from 'react';
+
+export function Modal({ open, title, onClose, children }) {
+  const ref = useRef(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+
+    const onKey = (e) => {
+      if (e.key === 'Escape') onClose();
+    };
+
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  return (
+    <div className="modal-mask" onClick={onClose}>
+      <div className="modal" ref={ref} onClick={(e) => e.stopPropagation()}>
+        <header>{title}</header>
+        <section>{children}</section>
+      </div>
+    </div>
+  );
+}
+</script>
+
+<script type="text/plain" id="f-sidebar-jsx">
+import { useState } from 'react';
+import { Button } from './Button.jsx';
+
+const TREE = [
+  { name: 'src', children: [{ name: 'main.js' }, { name: 'utils' }] },
+  { name: 'docs', children: [{ name: 'README.md' }] },
+];
+
+function Node({ node, depth = 0 }) {
+  const [open, setOpen] = useState(depth === 0);
+
+  return (
+    <div className="node">
+      <Button onClick={() => setOpen(!open)}>
+        {node.children ? (open ? '▾' : '▸') : '·'} {node.name}
+      </Button>
+      {open &&
+        node.children?.map((child) => (
+          <Node key={child.name} node={child} depth={depth + 1} />
+        ))}
+    </div>
+  );
+}
+
+export function Sidebar() {
+  return (
+    <nav className="sidebar">
+      {TREE.map((node) => (
+        <Node key={node.name} node={node} />
+      ))}
+    </nav>
+  );
+}
+</script>
+
+<script type="text/plain" id="f-base-css">
+:root {
+  --bg: #f6f7f9;
+  --text: #1b1f26;
+  --accent: #2f6fed;
+  --radius: 10px;
+}
+
+body {
+  margin: 0;
+  font-family: -apple-system, "Segoe UI", "PingFang SC", sans-serif;
+  color: var(--text);
+  background: var(--bg);
+}
+
+.btn {
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  padding: 6px 14px;
+  font-size: 13px;
+  background: #eef0f4;
+}
+
+.btn:hover {
+  background: #e6e9ee;
+}
+</script>
+
+<script type="text/plain" id="f-theme-css">
+[data-theme='dark'] {
+  --bg: #0f1115;
+  --text: #e7eaf0;
+  --accent: #6d93ff;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+  }
+}
+</script>
+
+<script type="text/plain" id="f-format-js">
+const UNITS = ['B', 'KB', 'MB', 'GB'];
+
+export function formatSize(bytes) {
+  let n = Number(bytes) || 0;
+  let i = 0;
+
+  while (n >= 1024 && i < UNITS.length - 1) {
+    n /= 1024;
+    i += 1;
+  }
+
+  return `${n.toFixed(i === 0 ? 0 : 1)} ${UNITS[i]}`;
+}
+
+export function formatTime(input) {
+  const d = new Date(input);
+  const pad = (v) => String(v).padStart(2, '0');
+
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ` +
+    `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+</script>
+
+<script type="text/plain" id="f-request-js">
+const BASE = '/api';
+
+export async function request(path, options = {}) {
+  const res = await fetch(`${BASE}${path}`, {
+    headers: { 'Content-Type': 'application/json' },
+    ...options,
+  });
+
+  if (!res.ok) {
+    throw new Error(`${res.status} ${res.statusText}`);
+  }
+
+  return res.json();
+}
+
+export const getTree = (path = '.') => request(`/tree?path=${encodeURIComponent(path)}`);
+export const getFile = (path) => request(`/file?path=${encodeURIComponent(path)}`);
+</script>
+
+<script type="text/plain" id="f-format-test">
+import { describe, expect, it } from 'vitest';
+import { formatSize } from '../../src/utils/format.js';
+
+describe('formatSize', () => {
+  it('formats bytes', () => {
+    expect(formatSize(0)).toBe('0 B');
+    expect(formatSize(1024)).toBe('1.0 KB');
+  });
+
+  it('formats megabytes', () => {
+    expect(formatSize(5 * 1024 * 1024)).toBe('5.0 MB');
+  });
+});
+</script>
+
+<script type="text/plain" id="f-login-spec">
+import { expect, test } from '@playwright/test';
+
+test('用户登录后进入工作台', async ({ page }) => {
+  await page.goto('/login');
+  await page.fill('[name=email]', 'demo@example.com');
+  await page.fill('[name=password]', 'secret');
+  await page.click('button[type=submit]');
+
+  await expect(page).toHaveURL(/\/dashboard/);
+  await expect(page.getByRole('heading', { name: '工作台' })).toBeVisible();
+});
+</script>
+
+<script type="text/plain" id="f-logo-svg">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2f6fed"/>
+      <stop offset="1" stop-color="#7aa7ff"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="104" height="104" rx="26" fill="url(#g)"/>
+  <rect x="30" y="38" width="16" height="44" rx="5" fill="#fff" opacity=".95"/>
+  <rect x="52" y="38" width="16" height="28" rx="5" fill="#fff" opacity=".7"/>
+  <rect x="74" y="38" width="16" height="16" rx="5" fill="#fff" opacity=".45"/>
+</svg>
+</script>
+
+<script type="text/plain" id="f-hero-svg">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 420 180" width="420" height="180">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#eef3ff"/>
+      <stop offset="1" stop-color="#dfe9ff"/>
+    </linearGradient>
+  </defs>
+  <rect width="420" height="180" rx="18" fill="url(#bg)"/>
+  <circle cx="330" cy="44" r="56" fill="#2f6fed" opacity=".10"/>
+  <circle cx="86" cy="150" r="72" fill="#2f6fed" opacity=".07"/>
+  <text x="36" y="82" font-family="-apple-system,Segoe UI,sans-serif" font-size="26" font-weight="600" fill="#1b3f9e">Demo Project</text>
+  <text x="36" y="112" font-family="-apple-system,Segoe UI,sans-serif" font-size="14" fill="#5b6472">文件浏览器原型 · v0.4.0</text>
+  <rect x="36" y="132" width="120" height="6" rx="3" fill="#2f6fed" opacity=".85"/>
+</svg>
+</script>
+
+<script type="text/plain" id="f-check-svg">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none"
+     stroke="#2f6fed" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+  <path d="M4 12.5l5 5L20 6.5"/>
+</svg>
+</script>
+
+<script type="text/plain" id="f-search-svg">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="none"
+     stroke="#5b6472" stroke-width="2" stroke-linecap="round">
+  <circle cx="11" cy="11" r="6.5"/>
+  <path d="M16 16l4.5 4.5"/>
+</svg>
+</script>
+
+<script>
+(function () {
+  'use strict';
+
+  /* ================= 工具 ================= */
+  const $ = (sel, root) => (root || document).querySelector(sel);
+  const esc = (s) => String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  const escAttr = (s) => esc(s).replace(/"/g, '&quot;');
+  const raw = (id) => {
+    const el = document.getElementById(id);
+    if (!el) return '';
+    return el.textContent.replace(/^\n/, '').replace(/\s+$/, '');
+  };
+
+  /* ================= 图标 ================= */
+  const ICONS = {
+    folder: '<path d="M3 7.4A2.4 2.4 0 0 1 5.4 5h3.3c.5 0 1 .2 1.4.6l1 1.2h7.5A2.4 2.4 0 0 1 21 9.2v8.4A2.4 2.4 0 0 1 18.6 20H5.4A2.4 2.4 0 0 1 3 17.6z"/>',
+    file: '<path d="M13.5 3H7.5A2.5 2.5 0 0 0 5 5.5v13A2.5 2.5 0 0 0 7.5 21h9a2.5 2.5 0 0 0 2.5-2.5V8.5z"/><path d="M13.5 3v5.5H19"/>',
+    code: '<path d="M9.5 8.5 5.5 12l4 3.5"/><path d="M14.5 8.5 18.5 12l-4 3.5"/>',
+    image: '<rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><circle cx="9" cy="10" r="1.6"/><path d="M4.5 17.5 9 13l3.5 3.5L16 14l4 4"/>',
+    box: '<path d="M12 3.4 20 8v8l-8 4.6L4 16V8z"/><path d="M4 8l8 4.6L20 8"/><path d="M12 12.6V20.6"/>',
+    hash: '<path d="M9.5 4 7.5 20"/><path d="M16.5 4l-2 16"/><path d="M5 9.5h14"/><path d="M4 14.5h14"/>',
+    chevron: '<path d="M9.5 6.5 15 12l-5.5 5.5"/>',
+    refresh: '<path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20.5 4v4.5H16"/>',
+    copy: '<rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M15 5.5A2.5 2.5 0 0 0 12.5 3h-6A3.5 3.5 0 0 0 3 6.5v6A2.5 2.5 0 0 0 5.5 15"/>',
+    external: '<path d="M14 4h6v6"/><path d="M20 4l-8.5 8.5"/><path d="M19 14.5V18a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h3.5"/>',
+    close: '<path d="M6.5 6.5 17.5 17.5"/><path d="M17.5 6.5 6.5 17.5"/>',
+    lock: '<rect x="5" y="10.5" width="14" height="9.5" rx="2.5"/><path d="M8.5 10.5V8a3.5 3.5 0 0 1 7 0v2.5"/>',
+    home: '<path d="M4 10.5 12 4l8 6.5"/><path d="M6 9.5V19a1 1 0 0 0 1 1h10a1 1 0 0 0 1-1V9.5"/>',
+    sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2.6v2M12 19.4v2M2.6 12h2M19.4 12h2M5.2 5.2l1.4 1.4M17.4 17.4l1.4 1.4M18.8 5.2l-1.4 1.4M6.6 17.4l-1.4 1.4"/>',
+    moon: '<path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/>'
+  };
+  function icon(name, cls, size) {
+    const s = size || 16;
+    return '<svg class="ic ' + (cls || '') + '" width="' + s + '" height="' + s + '" viewBox="0 0 24 24" '
+      + 'fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" '
+      + 'aria-hidden="true">' + ICONS[name] + '</svg>';
+  }
+
+  const KIND_ICON = {
+    md: ['file', 'c-md'], html: ['code', 'c-html'], js: ['code', 'c-js'], jsx: ['code', 'c-js'],
+    json: ['box', 'c-json'], css: ['hash', 'c-css'], svg: ['image', 'c-img'], image: ['image', 'c-img'],
+    txt: ['file', 'c-txt'], binary: ['box', 'c-bin']
+  };
+  function nodeIcon(node, size) {
+    if (node.type === 'folder') return icon('folder', 'c-folder', size);
+    const k = KIND_ICON[node.kind] || KIND_ICON.txt;
+    return icon(k[0], k[1], size);
+  }
+
+  /* ================= 数据 ================= */
+  const F = (name, kind, contentId, meta) =>
+    Object.assign({ name: name, type: 'file', kind: kind, contentId: contentId }, meta || {});
+  const D = (name, children, meta) =>
+    Object.assign({ name: name, type: 'folder', children: children }, meta || {});
+
+  const TREE = D('demo-project', [
+    F('README.md', 'md', 'f-readme', { size: '3.1 KB', mtime: '2026-10-12 09:24' }),
+    F('index.html', 'html', 'f-index-html', { size: '2.4 KB', mtime: '2026-10-11 18:02' }),
+    F('package.json', 'json', 'f-package', { size: '412 B', mtime: '2026-10-09 11:37' }),
+    F('.gitignore', 'txt', 'f-gitignore', { size: '78 B', mtime: '2026-09-28 15:10' }),
+    D('docs', [
+      F('architecture.md', 'md', 'f-arch', { size: '1.9 KB', mtime: '2026-10-12 09:31' }),
+      F('api-reference.md', 'md', 'f-api', { size: '1.4 KB', mtime: '2026-10-10 20:15' }),
+      F('changelog.md', 'md', 'f-changelog', { size: '620 B', mtime: '2026-10-08 14:44' })
+    ], { mtime: '2026-10-12 09:31' }),
+    D('src', [
+      F('main.js', 'js', 'f-main-js', { size: '286 B', mtime: '2026-10-11 10:05' }),
+      D('components', [
+        F('Button.jsx', 'jsx', 'f-button-jsx', { size: '342 B', mtime: '2026-10-11 10:22' }),
+        F('Modal.jsx', 'jsx', 'f-modal-jsx', { size: '780 B', mtime: '2026-10-11 16:48' }),
+        F('Sidebar.jsx', 'jsx', 'f-sidebar-jsx', { size: '912 B', mtime: '2026-10-12 08:12' })
+      ], { mtime: '2026-10-12 08:12' }),
+      D('styles', [
+        F('base.css', 'css', 'f-base-css', { size: '348 B', mtime: '2026-10-07 19:26' }),
+        F('theme.css', 'css', 'f-theme-css', { size: '214 B', mtime: '2026-10-07 19:30' })
+      ], { mtime: '2026-10-07 19:30' }),
+      D('utils', [
+        F('format.js', 'js', 'f-format-js', { size: '508 B', mtime: '2026-10-06 21:03' }),
+        F('request.js', 'js', 'f-request-js', { size: '440 B', mtime: '2026-10-06 21:40' })
+      ], { mtime: '2026-10-06 21:40' })
+    ], { mtime: '2026-10-12 08:12' }),
+    D('assets', [
+      F('logo.svg', 'svg', 'f-logo-svg', { size: '612 B', mtime: '2026-09-30 12:18' }),
+      F('hero.svg', 'svg', 'f-hero-svg', { size: '868 B', mtime: '2026-10-02 09:52' }),
+      F('photo.jpg', 'binary', null, { size: '1.8 MB', mtime: '2026-09-29 17:04' }),
+      D('icons', [
+        F('check.svg', 'svg', 'f-check-svg', { size: '248 B', mtime: '2026-09-30 12:22' }),
+        F('search.svg', 'svg', 'f-search-svg', { size: '266 B', mtime: '2026-09-30 12:24' })
+      ], { mtime: '2026-09-30 12:24' })
+    ], { mtime: '2026-10-02 09:52' }),
+    D('tests', [
+      D('unit', [
+        F('format.test.js', 'js', 'f-format-test', { size: '396 B', mtime: '2026-10-06 21:55' })
+      ], { mtime: '2026-10-06 21:55' }),
+      D('e2e', [
+        F('login.spec.js', 'js', 'f-login-spec', { size: '418 B', mtime: '2026-10-05 16:20' })
+      ], { mtime: '2026-10-05 16:20' })
+    ], { mtime: '2026-10-06 21:55' })
+  ]);
+
+  /* ================= 状态 ================= */
+  const state = {
+    path: [TREE, TREE.children[4]],   // demo-project / docs
+    sel: { col: 1, node: TREE.children[4].children[0] },  // architecture.md
+    mode: 'preview',
+    query: '',
+    theme: 'light',
+    previewOpen: true,
+    pendingScroll: false
+  };
+  let colItems = [];
+  let renderedColKeys = [];
+  let renderedPreviewKey = '';
+
+  function updateRowStates() {
+    state.path.forEach((folder, ci) => {
+      const col = colsEl.children[ci];
+      if (!col || !colItems[ci]) return;
+      const rows = col.querySelectorAll('.row');
+      for (let i = 0; i < rows.length; i++) {
+        const node = colItems[ci][i];
+        const selected = !!(state.sel && state.sel.node === node);
+        rows[i].classList.toggle('is-sel', selected);
+        rows[i].classList.toggle('is-trail', !selected && state.path.indexOf(node) > 0);
+      }
+    });
+  }
+
+  const content = (node) => (node && node.contentId ? raw(node.contentId) : '');
+
+  function kindOf(node) {
+    if (!node) return 'none';
+    if (node.type === 'folder') return 'folder';
+    if (node.kind === 'html') return 'html';
+    if (node.kind === 'md') return 'md';
+    if (node.kind === 'svg' || node.kind === 'image') return 'image';
+    if (['js', 'jsx', 'json', 'css', 'txt'].indexOf(node.kind) >= 0) return 'code';
+    return 'none';
+  }
+  const hasSource = (node) => ['html', 'md', 'image'].indexOf(kindOf(node)) >= 0;
+
+  /* ================= 语法高亮 ================= */
+  const TOKENS = {
+    js: [
+      [/\/\/.*|\/\*.*?\*\//, 'cm'],
+      [/"(?:\\.|[^"\\])*"/, 'st'], [/'(?:\\.|[^'\\])*'/, 'st'], [/`(?:\\.|[^`\\])*`/, 'st'],
+      [/\b\d[\w.]*\b/, 'nu'],
+      [/\b(?:const|let|var|function|return|if|else|for|while|of|in|new|class|extends|import|export|default|async|await|try|catch|finally|throw|typeof|instanceof|delete|void|yield|static|this|super)\b/, 'kw'],
+      [/\b(?:true|false|null|undefined)\b/, 'co'],
+      [/\b[A-Z][\w$]*/, 'ty']
+    ],
+    json: [
+      [/"(?:\\.|[^"\\])*"(?=\s*:)/, 'ky'],
+      [/"(?:\\.|[^"\\])*"/, 'st'],
+      [/-?\b\d[\w.]*\b/, 'nu'],
+      [/\b(?:true|false|null)\b/, 'kw']
+    ],
+    css: [
+      [/\/\*.*?\*\//, 'cm'],
+      [/"(?:\\.|[^"\\])*"/, 'st'], [/'(?:\\.|[^'\\])*'/, 'st'],
+      [/[a-zA-Z-]+(?=\s*:)/, 'pr'],
+      [/#[0-9a-fA-F]{3,8}\b/, 'nu'],
+      [/-?\d[\w.%]*/, 'va'],
+      [/--?[a-zA-Z][\w-]*/, 'va']
+    ],
+    html: [
+      [/<!--.*?-->/, 'cm'],
+      [/"(?:[^"\\])*"/, 'st'], [/'(?:[^'\\])*'/, 'st'],
+      [/<\/?[a-zA-Z][\w-]*/, 'ty'],
+      [/[\w-]+(?=\s*=)/, 'pr'],
+      [/<!doctype[^>]*>/i, 'kw']
+    ]
+  };
+  const LANG_ALIAS = { jsx: 'js', ts: 'js', tsx: 'js', htm: 'html', svg: 'html', sh: null, bash: null };
+  const RE_CACHE = {};
+  function hl(line, lang) {
+    if (lang && Object.prototype.hasOwnProperty.call(LANG_ALIAS, lang)) lang = LANG_ALIAS[lang];
+    const pairs = TOKENS[lang];
+    if (!pairs) return esc(line);
+    if (!RE_CACHE[lang]) {
+      RE_CACHE[lang] = new RegExp(pairs.map((p) => '(' + p[0].source + ')').join('|'), 'g');
+    }
+    const re = RE_CACHE[lang];
+    re.lastIndex = 0;
+    let out = '', last = 0, m;
+    while ((m = re.exec(line)) !== null) {
+      if (m[0] === '') { re.lastIndex++; continue; }
+      out += esc(line.slice(last, m.index));
+      let gi = 0;
+      for (let i = 1; i < m.length; i++) { if (m[i] !== undefined) { gi = i - 1; break; } }
+      out += '<span class="tk-' + pairs[gi][1] + '">' + esc(m[0]) + '</span>';
+      last = m.index + m[0].length;
+    }
+    out += esc(line.slice(last));
+    return out;
+  }
+  const hlBlock = (src, lang) => src.split('\n').map((l) => hl(l, lang)).join('\n');
+
+  function codeView(src, lang) {
+    const lines = String(src).replace(/\t/g, '  ').split('\n');
+    return '<div class="codeview">' + lines.map((l, i) =>
+      '<div class="cl"><span class="ln">' + (i + 1) + '</span><span class="lc">'
+      + (hl(l, lang) || '&nbsp;') + '</span></div>'
+    ).join('') + '</div>';
+  }
+
+  /* ================= Markdown ================= */
+  function inlineMd(s) {
+    const codes = [];
+    s = s.replace(/`([^`]+)`/g, (m, c) => { codes.push(c); return '\u0000' + (codes.length - 1) + '\u0000'; });
+    s = esc(s);
+    s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    s = s.replace(/(^|[^*\w])\*([^*\n]+)\*/g, '$1<em>$2</em>');
+    s = s.replace(/~~([^~]+)~~/g, '<del>$1</del>');
+    s = s.replace(/\u0000(\d+)\u0000/g, (m, i) => '<code>' + esc(codes[+i]) + '</code>');
+    return s;
+  }
+
+  function renderList(items, start, base) {
+    const level = base === undefined ? items[start].indent : base;
+    const tag = items[start].ordered ? 'ol' : 'ul';
+    let html = '<' + tag + '>';
+    let i = start;
+    while (i < items.length) {
+      const it = items[i];
+      if (it.indent < level) break;
+      if (it.indent > level) {
+        const nested = renderList(items, i, it.indent);
+        html += nested.html;
+        i = nested.next;
+        continue;
+      }
+      html += '<li>' + inlineMd(it.text);
+      if (i + 1 < items.length && items[i + 1].indent > level) {
+        const nested = renderList(items, i + 1, items[i + 1].indent);
+        html += nested.html;
+        i = nested.next;
+      }
+      html += '</li>';
+      i++;
+    }
+    return { html: html + '</' + tag + '>', next: i };
+  }
+
+  function mdToHtml(src) {
+    const lines = String(src).replace(/\r\n?/g, '\n').split('\n');
+    const out = [];
+    let para = [];
+    let i = 0;
+    const flush = () => { if (para.length) { out.push('<p>' + inlineMd(para.join(' ')) + '</p>'); para = []; } };
+
+    while (i < lines.length) {
+      const line = lines[i];
+
+      if (!line.trim()) { flush(); i++; continue; }
+
+      let m = line.match(/^\s*```(\w*)\s*$/);
+      if (m) {
+        flush();
+        const lang = m[1] || null;
+        const buf = [];
+        i++;
+        while (i < lines.length && !/^\s*```\s*$/.test(lines[i])) { buf.push(lines[i]); i++; }
+        i++;
+        out.push('<pre><code>' + hlBlock(buf.join('\n'), lang) + '</code></pre>');
+        continue;
+      }
+
+      m = line.match(/^(#{1,6})\s+(.*)$/);
+      if (m) {
+        flush();
+        const n = m[1].length;
+        out.push('<h' + n + '>' + inlineMd(m[2].replace(/\s+#+\s*$/, '')) + '</h' + n + '>');
+        i++;
+        continue;
+      }
+
+      if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) { flush(); out.push('<hr>'); i++; continue; }
+
+      if (/^\s*>/.test(line)) {
+        flush();
+        const buf = [];
+        while (i < lines.length && /^\s*>/.test(lines[i])) {
+          buf.push(lines[i].replace(/^\s*>\s?/, ''));
+          i++;
+        }
+        out.push('<blockquote>' + mdToHtml(buf.join('\n')) + '</blockquote>');
+        continue;
+      }
+
+      const next = lines[i + 1];
+      if (line.indexOf('|') >= 0 && next && /-/.test(next) && /^\s*\|?[\s:|-]+\|[\s:|-]*$/.test(next)) {
+        flush();
+        const cells = (s) => s.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
+        const head = cells(line);
+        const align = cells(next).map((a) => (/^:-+:$/.test(a) ? 'center' : /-+:$/.test(a) ? 'right' : 'left'));
+        const attr = (k) => align[k] && align[k] !== 'left' ? ' style="text-align:' + align[k] + '"' : '';
+        i += 2;
+        const rows = [];
+        while (i < lines.length && lines[i].trim() && lines[i].indexOf('|') >= 0) { rows.push(cells(lines[i])); i++; }
+        out.push('<div class="md-table-wrap"><table><thead><tr>'
+          + head.map((c, k) => '<th' + attr(k) + '>' + inlineMd(c) + '</th>').join('')
+          + '</tr></thead><tbody>'
+          + rows.map((r) => '<tr>' + head.map((_, k) => '<td' + attr(k) + '>' + inlineMd(r[k] || '') + '</td>').join('') + '</tr>').join('')
+          + '</tbody></table></div>');
+        continue;
+      }
+
+      if (/^\s*([-*+]|\d+\.)\s+/.test(line)) {
+        flush();
+        const items = [];
+        while (i < lines.length) {
+          const lm = lines[i].match(/^(\s*)([-*+]|\d+\.)\s+(.*)$/);
+          if (!lm) {
+            if (!lines[i].trim() && i + 1 < lines.length && /^\s*([-*+]|\d+\.)\s+/.test(lines[i + 1])) { i++; continue; }
+            break;
+          }
+          items.push({ indent: lm[1].replace(/\t/g, '  ').length, ordered: /\d/.test(lm[2]), text: lm[3] });
+          i++;
+        }
+        out.push(renderList(items, 0).html);
+        continue;
+      }
+
+      para.push(line.trim());
+      i++;
+    }
+    flush();
+    return out.join('\n');
+  }
+
+  /* ================= 渲染：列 ================= */
+  const colsEl = $('#cols');
+  const crumbsEl = $('#crumbs');
+  const pvHead = $('#pv-head');
+  const pvBody = $('#pv-body');
+
+  const byName = (a, b) => a.name.localeCompare(b.name, 'zh-Hans-CN', { numeric: true });
+  function sorted(items) {
+    return items.slice().sort((a, b) => {
+      if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
+      return byName(a, b);
+    });
+  }
+  function matchQuery(node) {
+    if (!state.query) return true;
+    return node.name.toLowerCase().indexOf(state.query.toLowerCase()) >= 0;
+  }
+  const metaText = (node) => node.type === 'folder'
+    ? node.children.length + ' 项'
+    : (node.size || '');
+
+  function buildColumn(ci) {
+    const folder = state.path[ci];
+    const col = document.createElement('div');
+    col.className = 'col';
+
+    const items = sorted(folder.children || []).filter(matchQuery);
+    colItems[ci] = items;
+
+    const head = document.createElement('div');
+    head.className = 'col-head';
+    head.innerHTML = '<b>' + esc(folder.name) + '</b><span>'
+      + (state.query && items.length !== folder.children.length
+        ? items.length + ' / ' + folder.children.length
+        : items.length) + '</span>';
+    col.appendChild(head);
+
+    const list = document.createElement('div');
+    list.className = 'col-list';
+
+    if (!items.length) {
+      list.innerHTML = '<div class="col-empty">' + (state.query ? '无匹配项' : '空目录') + '</div>';
+    } else {
+      items.forEach((node, idx) => {
+        const row = document.createElement('div');
+        row.className = 'row';
+        row.dataset.col = ci;
+        row.dataset.idx = idx;
+        row.setAttribute('role', 'button');
+        row.title = node.name;
+        row.innerHTML = nodeIcon(node)
+          + '<span class="nm">' + esc(node.name) + '</span>'
+          + '<span class="meta">' + esc(metaText(node)) + '</span>'
+          + (node.type === 'folder' ? '<span class="chev">' + icon('chevron', '', 14) + '</span>' : '');
+        list.appendChild(row);
+      });
+    }
+
+    col.appendChild(list);
+    colsEl.appendChild(col);
+  }
+
+  function renderColumns() {
+    // 逐栏比对内容签名，只重建真正变化的那一栏及其右侧各栏。
+    // 整片重建会让所有列入场动画重放（看起来就是整个列表在闪），
+    // 也会让双击的第二次点击落到新节点上，浏览器便不再合成 dblclick。
+    const keys = state.path.map((folder) => folder.name + '\u0001' + state.query);
+
+    let firstStale = 0;
+    while (firstStale < keys.length
+      && firstStale < renderedColKeys.length
+      && keys[firstStale] === renderedColKeys[firstStale]) {
+      firstStale++;
+    }
+
+    while (colsEl.children.length > firstStale) colsEl.lastElementChild.remove();
+    for (let ci = firstStale; ci < state.path.length; ci++) buildColumn(ci);
+
+    colItems.length = state.path.length;
+    renderedColKeys = keys;
+    updateRowStates();
+
+    if (state.pendingScroll) {
+      state.pendingScroll = false;
+      requestAnimationFrame(() => {
+        colsEl.scrollTo({ left: colsEl.scrollWidth, behavior: 'smooth' });
+      });
+    }
+  }
+
+  function renderCrumbs() {
+    const parts = state.path.map((n) => n.name);
+    const sel = state.sel;
+    if (sel && sel.node.type === 'file') parts.push(sel.node.name);
+
+    let html = '<button class="crumb" data-crumb="-1" title="项目根目录">' + icon('home', '', 14) + '</button>';
+    parts.forEach((p, i) => {
+      html += '<span class="crumb-sep">' + icon('chevron', '', 13) + '</span>';
+      const last = i === parts.length - 1;
+      html += '<button class="crumb' + (last ? ' is-last' : '') + '" data-crumb="' + i + '">' + esc(p) + '</button>';
+    });
+    crumbsEl.innerHTML = html;
+  }
+
+  /* ================= 渲染：预览 ================= */
+  function emptyState() {
+    return '<div class="state">'
+      + '<div class="big">' + icon('folder', '', 26) + '</div>'
+      + '<h4>未选择文件</h4>'
+      + '<p>在左侧栏中选择一个文件即可在此预览，双击则调用系统默认程序打开。</p>'
+      + '<div class="keys">'
+      + '<span><kbd>↑</kbd><kbd>↓</kbd> 选择</span>'
+      + '<span><kbd>→</kbd> 进入目录</span>'
+      + '<span><kbd>←</kbd> 返回上级</span>'
+      + '<span><kbd>⏎</kbd> 打开</span>'
+      + '</div></div>';
+  }
+
+  function folderCard(node) {
+    const items = sorted(node.children || []);
+    const rows = items.map((c) => '<button class="frow" data-open="' + escAttr(c.name) + '">'
+      + nodeIcon(c, 15)
+      + '<span class="nm">' + esc(c.name) + '</span>'
+      + '<span class="meta">' + esc(metaText(c)) + '</span></button>').join('');
+    return '<div class="folder-card">'
+      + '<div class="folder-hero">'
+      + '<span class="big">' + icon('folder', 'c-folder', 24) + '</span>'
+      + '<div><h3>' + esc(node.name) + '</h3><p>' + items.length + ' 个项目'
+      + (node.mtime ? ' · 修改于 ' + esc(node.mtime) : '') + '</p></div>'
+      + '</div>'
+      + '<div class="folder-list">' + rows + '</div>'
+      + '</div>';
+  }
+
+  function unsupported(node) {
+    return '<div class="state">'
+      + '<div class="big">' + icon('box', '', 24) + '</div>'
+      + '<h4>' + esc(node.name) + '</h4>'
+      + '<p>该类型暂不支持内嵌预览（' + esc(node.size || '') + '）。</p>'
+      + '<p style="margin-top:14px"><button class="iconbtn" data-act="external" style="width:auto;padding:0 14px;height:32px;gap:7px;display:inline-flex;align-items:center;border:1px solid var(--line);background:var(--panel)">'
+      + icon('external', '', 15) + '<span style="font-size:12.5px">用默认程序打开</span></button></p>'
+      + '</div>';
+  }
+
+  function renderPreview(force) {
+    const pv = $('#preview');
+    $('#gutter').hidden = !state.previewOpen;
+    if (!state.previewOpen) { pv.hidden = true; renderedPreviewKey = ''; return; }
+    pv.hidden = false;
+
+    // 预览签名不变就不重绘：重复点击同一个文件时不该重载 iframe / 重排正文。
+    const sel = state.sel;
+    const sig = sel
+      ? [state.path.map((n) => n.name).join('/'), sel.node.name, state.mode].join('\u0001')
+      : '';
+    if (!force && sig === renderedPreviewKey && pvBody.children.length) return;
+    renderedPreviewKey = sig;
+
+    if (!sel) {
+      pvHead.innerHTML = '';
+      pvBody.className = 'pv-body is-empty';
+      pvBody.innerHTML = emptyState();
+      return;
+    }
+
+    const node = sel.node;
+    const dirs = state.path.map((n) => n.name);
+    const full = node.type === 'folder' ? dirs.join(' / ') : dirs.concat([node.name]).join(' / ');
+    const kind = kindOf(node);
+    const sub = [full];
+    if (node.size) sub.push(node.size);
+    if (node.mtime) sub.push(node.mtime);
+
+    const seg = hasSource(node)
+      ? '<div class="seg" role="tablist">'
+        + '<button data-mode="preview" class="' + (state.mode === 'preview' ? 'is-on' : '') + '">预览</button>'
+        + '<button data-mode="source" class="' + (state.mode === 'source' ? 'is-on' : '') + '">源码</button>'
+        + '</div>'
+      : '';
+
+    pvHead.innerHTML = '<span class="pv-ic">' + nodeIcon(node, 17) + '</span>'
+      + '<div class="pv-name"><div class="pv-nm" title="' + escAttr(node.name) + '">' + esc(node.name) + '</div>'
+      + '<div class="pv-sub" title="' + escAttr(sub.join(' · ')) + '">' + esc(sub.join(' · ')) + '</div></div>'
+      + '<div class="pv-actions">' + seg
+      + '<button class="iconbtn" data-act="reload" title="重新渲染">' + icon('refresh', '', 15) + '</button>'
+      + '<button class="iconbtn" data-act="copy" title="复制路径">' + icon('copy', '', 15) + '</button>'
+      + '<button class="iconbtn" data-act="external" title="用默认程序打开">' + icon('external', '', 15) + '</button>'
+      + '<button class="iconbtn" data-act="close" title="收起预览">' + icon('close', '', 15) + '</button>'
+      + '</div>';
+
+    pvBody.className = 'pv-body';
+    const src = content(node);
+    const showSource = state.mode === 'source' && hasSource(node);
+
+    if (kind === 'folder') {
+      pvBody.innerHTML = folderCard(node);
+      return;
+    }
+    if (kind === 'none') {
+      pvBody.innerHTML = unsupported(node);
+      return;
+    }
+    if (showSource) {
+      pvBody.innerHTML = codeView(src, node.kind === 'md' ? null : node.kind);
+      return;
+    }
+    if (kind === 'html') {
+      pvBody.innerHTML = '<div class="browser">'
+        + '<div class="browser-bar">'
+        + '<span class="dots"><i class="r"></i><i class="y"></i><i class="g"></i></span>'
+        + '<div class="addr">' + icon('lock', '', 12) + '<span>file:///demo-project/' + esc(full.split(' / ').slice(1).join('/')) + '</span></div>'
+        + '<button class="iconbtn" data-act="reload" title="刷新">' + icon('refresh', '', 15) + '</button>'
+        + '</div>'
+        + '<iframe class="frame" title="' + escAttr(node.name) + ' 预览" sandbox="allow-scripts allow-forms allow-popups" srcdoc="' + escAttr(src) + '"></iframe>'
+        + '</div>';
+      return;
+    }
+    if (kind === 'md') {
+      pvBody.innerHTML = '<div class="prose-wrap"><article class="prose">' + mdToHtml(src) + '</article></div>';
+      return;
+    }
+    if (kind === 'image') {
+      const url = node.kind === 'svg' || /^\s*<svg/.test(src)
+        ? 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(src)
+        : src;
+      pvBody.innerHTML = '<div class="img-wrap"><img src="' + escAttr(url) + '" alt="' + escAttr(node.name) + '"></div>';
+      return;
+    }
+    pvBody.innerHTML = codeView(src, node.kind);
+  }
+
+  function renderStatus() {
+    const sel = state.sel;
+    const dirs = state.path.map((n) => n.name);
+    const p = sel && sel.node.type === 'file' ? dirs.concat([sel.node.name]) : dirs;
+    $('#st-path').textContent = p.join(' / ') + (sel && sel.node.type === 'folder' ? '  ·  ' + sel.node.children.length + ' 个项目' : '');
+  }
+
+  function render() {
+    renderColumns();
+    renderCrumbs();
+    renderPreview();
+    renderStatus();
+  }
+
+  /* ================= 交互 ================= */
+  function selectNode(node, col, scroll) {
+    state.sel = { col: col, node: node };
+    state.mode = 'preview';
+    if (node.type === 'folder') {
+      state.path = state.path.slice(0, col + 1).concat([node]);
+      state.pendingScroll = scroll !== false;
+    } else {
+      state.path = state.path.slice(0, col + 1);
+      state.pendingScroll = false;
+    }
+    render();
+  }
+
+  function openWithSystem(node) {
+    const kind = kindOf(node);
+    const src = content(node);
+    const name = node.name;
+    toast('已用系统默认程序打开：' + name);
+    if (!src || kind === 'folder' || kind === 'none') return;
+    const type = kind === 'html' ? 'text/html'
+      : kind === 'md' ? 'text/markdown'
+        : kind === 'image' ? 'image/svg+xml' : 'text/plain';
+    const url = URL.createObjectURL(new Blob([src], { type: type + ';charset=utf-8' }));
+    // 真实实现里这一步是 shell.open(path)：交给系统默认程序
+    const win = window.open(url, '_blank');
+    if (!win) toast('已用系统默认程序打开：' + name + ' · 新标签页被当前环境拦截');
+  }
+
+  let toastTimer = null;
+  function toast(msg) {
+    const t = $('#toast');
+    t.textContent = msg;
+    t.classList.add('on');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => t.classList.remove('on'), 2200);
+  }
+
+  function copyPath(node) {
+    const dirs = state.path.map((n) => n.name);
+    const full = node.type === 'folder' ? dirs.join('/') : dirs.concat([node.name]).join('/');
+    const done = () => toast('已复制路径：' + full);
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(full).then(done, done);
+    } else {
+      done();
+    }
+  }
+
+  colsEl.addEventListener('click', (e) => {
+    const row = e.target.closest('.row');
+    if (!row) return;
+    const node = colItems[+row.dataset.col][+row.dataset.idx];
+    selectNode(node, +row.dataset.col);
+  });
+
+  colsEl.addEventListener('dblclick', (e) => {
+    const row = e.target.closest('.row');
+    if (!row) return;
+    const node = colItems[+row.dataset.col][+row.dataset.idx];
+    if (node.type === 'file') openWithSystem(node);
+  });
+
+  crumbsEl.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-crumb]');
+    if (!b) return;
+    const i = +b.dataset.crumb;
+    if (i < 0) {
+      state.path = [TREE];
+      state.sel = null;
+    } else {
+      state.path = state.path.slice(0, i + 1);
+      state.sel = i === 0 ? null : { col: i - 1, node: state.path[i] };
+    }
+    render();
+  });
+
+  pvHead.addEventListener('click', (e) => {
+    const btn = e.target.closest('button');
+    if (!btn || !state.sel) return;
+    const node = state.sel.node;
+    if (btn.dataset.mode) {
+      state.mode = btn.dataset.mode;
+      renderPreview();
+      return;
+    }
+    const act = btn.dataset.act;
+    if (act === 'reload') {
+      btn.classList.add('spin');
+      setTimeout(() => btn.classList.remove('spin'), 520);
+      renderPreview(true);
+    } else if (act === 'copy') {
+      copyPath(node);
+    } else if (act === 'external') {
+      openWithSystem(node);
+    } else if (act === 'close') {
+      state.previewOpen = false;
+      $('#btn-preview').classList.remove('is-on');
+      renderPreview();
+    }
+  });
+
+  pvBody.addEventListener('click', (e) => {
+    const btn = e.target.closest('[data-act]');
+    if (btn && state.sel) {
+      if (btn.dataset.act === 'reload') {
+        btn.classList.add('spin');
+        setTimeout(() => btn.classList.remove('spin'), 520);
+        renderPreview(true);
+      } else if (btn.dataset.act === 'external') {
+        openWithSystem(state.sel.node);
+      }
+      return;
+    }
+    const open = e.target.closest('[data-open]');
+    if (open && state.sel && state.sel.node.type === 'folder') {
+      const child = state.sel.node.children.filter((c) => c.name === open.dataset.open)[0];
+      if (child) selectNode(child, state.sel.col + 1);
+    }
+  });
+
+  $('#btn-preview').addEventListener('click', (e) => {
+    state.previewOpen = !state.previewOpen;
+    e.currentTarget.classList.toggle('is-on', !state.previewOpen);
+    renderPreview();
+  });
+
+  $('#btn-theme').addEventListener('click', () => {
+    state.theme = state.theme === 'light' ? 'dark' : 'light';
+    document.documentElement.dataset.theme = state.theme;
+    $('#theme-ic').innerHTML = state.theme === 'light' ? ICONS.moon : ICONS.sun;
+  });
+
+  $('#search').addEventListener('input', (e) => {
+    state.query = e.target.value.trim();
+    render();
+  });
+
+  /* 键盘 */
+  document.addEventListener('keydown', (e) => {
+    const tag = (e.target.tagName || '').toLowerCase();
+    if (tag === 'input' || tag === 'textarea') {
+      if (e.key === 'Escape') {
+        e.target.value = '';
+        state.query = '';
+        e.target.blur();
+        render();
+      }
+      return;
+    }
+    if (e.key === '/') { e.preventDefault(); $('#search').focus(); return; }
+
+    const sel = state.sel;
+    const col = sel ? sel.col : 0;
+    const items = colItems[col] || [];
+
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      if (!items.length) return;
+      e.preventDefault();
+      let idx = sel ? items.indexOf(sel.node) : -1;
+      idx = e.key === 'ArrowDown'
+        ? Math.min(items.length - 1, idx + 1)
+        : Math.max(0, idx - 1);
+      if (idx < 0) idx = 0;
+      selectNode(items[idx], col, false);
+      const row = colsEl.querySelector('.row.is-sel');
+      if (row) row.scrollIntoView({ block: 'nearest' });
+      return;
+    }
+
+    if (e.key === 'ArrowRight') {
+      if (sel && sel.node.type === 'folder' && sel.node.children.length) {
+        e.preventDefault();
+        selectNode(sel.node.children[0], col + 1);
+      }
+      return;
+    }
+
+    if (e.key === 'ArrowLeft') {
+      if (sel && col > 0) {
+        e.preventDefault();
+        const parent = state.path[col];
+        state.sel = { col: col - 1, node: parent };
+        state.path = state.path.slice(0, col + 1);
+        render();
+      }
+      return;
+    }
+
+    if (e.key === 'Enter') {
+      if (sel && sel.node.type === 'file') openWithSystem(sel.node);
+      return;
+    }
+
+    if (e.key === 'Escape') {
+      if (sel) { state.sel = null; state.path = [TREE]; render(); }
+      return;
+    }
+  });
+
+  /* 拖拽调整预览宽度 */
+  const gutter = $('#gutter');
+  let dragging = false;
+  gutter.addEventListener('pointerdown', (e) => {
+    dragging = true;
+    gutter.setPointerCapture(e.pointerId);
+    document.body.classList.add('resizing');
+  });
+  gutter.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    const rect = $('#app-body').getBoundingClientRect();
+    const w = rect.right - e.clientX;
+    const max = Math.max(320, rect.width - 380);
+    $('#preview').style.width = Math.min(Math.max(w, 320), max) + 'px';
+  });
+  gutter.addEventListener('pointerup', (e) => {
+    dragging = false;
+    gutter.releasePointerCapture(e.pointerId);
+    document.body.classList.remove('resizing');
+  });
+
+  /* 启动 */
+  document.documentElement.dataset.theme = state.theme;
+  render();
+})();
+</script>
+</body>
+</html>
