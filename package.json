@@ -42,6 +42,7 @@
     "extraResources": [
       "FEATURES.md",
       "docs/**/*",
+      "!docs/agents/**",
       "sample-project/**/*"
     ],
     "win": {
