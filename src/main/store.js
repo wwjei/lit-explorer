@@ -22,6 +22,8 @@ const DEFAULTS = {
   favorites: {},
   // 最左栏两个面板的上下顺序：false = 项目根目录在上、快速访问在下
   favTop: false,
+  // 快速访问面板高度（px）；0 = 按内容收缩，最多占该栏 1/3
+  favPanelHeight: 0,
   // 内嵌文档预览开关（默认开启）
   previewDocx: true,
   previewPptx: true

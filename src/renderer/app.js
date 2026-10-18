@@ -20,8 +20,10 @@
   const previewEl = $('#preview');
   const panesEl = $('#panes');
 
-  /** 最多固定几个预览窗格（加上临时预览列，最多三列并行） */
-  const MAX_PINS = 2;
+  /** 最多固定几个预览窗格（加上临时预览列，最多四列并行） */
+  const MAX_PINS = 3;
+  /** 快速访问面板的最小高度（只放得下标题栏） */
+  const FAV_MIN_H = 34;
 
   const state = {
     root: null,
@@ -39,8 +41,9 @@
     previewPptx: true,       // 是否内嵌预览 .pptx（设置里可关）
     favs: [],                // 当前工作区的快速访问项 [{ path, name, isDir, kind }]
     favoritesByRoot: {},     // 持久化的快速访问项（按工作区根目录分组）
-    pins: [],                // 固定住的预览列（最多 MAX_PINS 个），顺序即从左到右
-    favTop: false            // 最左栏：快速访问面板是否在上（false = 项目根目录在上）
+    pins: [],                // 固定住的预览列（最多 MAX_PINS 个），[0] 是最新固定的，排在最左
+    favTop: false,           // 最左栏：快速访问面板是否在上（false = 项目根目录在上）
+    favH: 0                  // 快速访问面板高度（px）；0 = 按内容收缩，最多占该栏 1/3
   };
 
   /** 路径 -> { size, mtime }，由主进程异步补发 */
@@ -236,6 +239,7 @@
   /**
    * 最左栏下部的快速访问面板。
    * 面板常驻（没有收藏时给出加入方式），否则交换上下的按钮会无处安放。
+   * 高度默认按内容收缩、最多该栏 1/3；用户拖过分隔条后按拖动结果固定。
    * 置顶按钮只出现在当前处于下方的那一个面板的标题栏上。
    */
   function renderFavorites() {
@@ -244,6 +248,7 @@
     const panel = colEl.querySelector('.fav-panel');
     if (!panel) return;
     panel.hidden = false;
+    applyFavHeight(colEl);
     const selPath = state.sel ? state.sel.node.path : '';
     const rows = state.favs.length
       ? state.favs.map((f) => favRowHtml(f, selPath)).join('')
@@ -255,6 +260,32 @@
     panel.innerHTML = '<div class="fav-head">' + icon('zapFilled', 'fav-head-ic', 12)
       + '<span class="fav-title">快速访问</span>' + swap + '</div>'
       + '<div class="fav-scroll"><div class="fav-list">' + rows + '</div></div>';
+  }
+
+  /** 快速访问面板的高度：未手动拖动过就交给 CSS 按内容收缩（上限 1/3） */
+  function applyFavHeight(colEl) {
+    const panel = colEl && colEl.querySelector('.fav-panel');
+    if (!panel) return;
+    if (state.favH > 0) {
+      panel.style.flex = '0 0 ' + state.favH + 'px';
+      panel.style.maxHeight = 'none';
+    } else {
+      panel.style.flex = '';
+      panel.style.maxHeight = '';
+    }
+  }
+
+  /** 拖动分隔条改变上下比例：只改快速访问面板的高度 */
+  function favHeightLimits(colEl) {
+    const colH = colEl.getBoundingClientRect().height;
+    // 下限只留得下标题栏；上限给另一个面板留下约 145px（扣掉栏头与分隔条）
+    return { min: FAV_MIN_H, max: Math.max(FAV_MIN_H, Math.round(colH - 180)) };
+  }
+
+  function setFavHeight(colEl, px) {
+    const lim = favHeightLimits(colEl);
+    state.favH = Math.round(Math.min(Math.max(px, lim.min), lim.max));
+    applyFavHeight(colEl);
   }
 
   /** 交换最左栏「项目根目录 / 快速访问」两个面板的上下位置 */
@@ -318,8 +349,6 @@
     } else {
       state.cols[ci] = { dir: folder.path, state: 'ready', version, entries: res.entries, error: null };
     }
-    // 选中的文件夹摘要依赖下一栏的内容，加载完成后要强制刷新预览头/卡片
-    if (state.sel && state.sel.node.isDir && state.sel.col + 1 === ci) renderPane(tempPane, true);
     render();
   }
 
@@ -343,6 +372,10 @@
     state.sel = null;
     state.mode = 'preview';
     state.favs = normalizeFavorites(state.favoritesByRoot[favKey(dir)]);
+    // 固定列装的是上一个工作区的文件，换工作区后一律清掉
+    while (state.pins.length) destroyPane(state.pins.pop());
+    tempPane.node = null;
+    tempPane.bodyKey = '';
     setWelcome(false);
     render();
     await loadColumn(0);
@@ -542,11 +575,15 @@
     el.appendChild(list);
 
     if (ci === 0) {
-      // 快速访问面板固定在根目录栏底部，最多占该栏一半高度
+      // 快速访问面板固定在根目录栏，中间留一条可拖动的分隔条调整上下比例
       const favPanel = document.createElement('div');
       favPanel.className = 'fav-panel';
       favPanel.hidden = true;
       el.appendChild(favPanel);
+      const split = document.createElement('div');
+      split.className = 'panel-resize';
+      split.title = '拖动调整上下面板的高度比例';
+      el.appendChild(split);
     }
 
     colsEl.appendChild(el);
@@ -656,31 +693,6 @@
       + '</div>';
   }
 
-  function folderCard(node, ci) {
-    const col = state.cols[ci];
-    // 该栏必须正好装的是这个目录才拿来用：固定住的窗格可能早已指向别处
-    const own = col && col.entries && col.dir === node.path ? col : null;
-    const items = own ? itemsOf(ci) : [];
-    const m = meta.get(node.path);
-    const count = own
-      ? own.entries.length + ' 个项目'
-      : (col && col.dir === node.path && col.state === 'loading' ? '读取中…' : '目录内容未展开');
-    const rows = items.slice(0, 300).map((child) =>
-      '<button class="frow" data-open="' + esc(child.name) + '">'
-      + nodeIcon(child, 15)
-      + '<span class="nm">' + esc(child.name) + '</span>'
-      + '<span class="meta">' + esc(metaText(child)) + '</span></button>'
-    ).join('');
-    return '<div class="folder-card">'
-      + '<div class="folder-hero">'
-      + '<span class="big">' + icon('folder', 'c-folder', 24) + '</span>'
-      + '<div><h3>' + esc(node.name) + '</h3><p>' + count
-      + (m ? ' · 修改于 ' + fmtTime(m.mtime) : '') + '</p></div>'
-      + '</div>'
-      + '<div class="folder-list">' + rows + '</div>'
-      + '</div>';
-  }
-
   function browserChrome(node, url) {
     // 地址栏显示真实文件地址（可读），iframe 用 pv:// 协议加载（相对资源可解析）
     const shown = 'file:///' + node.path.replace(/\\/g, '/');
@@ -747,10 +759,14 @@
   }
 
   /* ============================ 预览窗格 ============================ *
-   * 预览区由若干「窗格」组成：最左边一个临时预览（跟随栏内选中项），
-   * 右边最多 MAX_PINS 个被固定住的窗格。固定住的窗格各自记住自己的文件与
-   * 「预览 / 源码」模式，浏览下一个文件时不会把它们顶掉。
+   * 预览区由若干「窗格」组成，每个窗格各自记住文件、模式与宽度：
+   *   - 临时预览：只跟随「选中文件」更新。选中文件夹不动它（文件夹没有预览）
+   *   - 固定列：由图钉固定下来，最多 MAX_PINS 个，新固定的排在旧固定的右边
+   * 选中项已经出现在某个固定列里时，临时预览不再重复展示同一份内容。
+   * 每个窗格左侧的边界都可以拖动，且只改这一列的宽度。
    * ------------------------------------------------------------------ */
+  const PANE_MIN = 240;        // 单个窗格的最小宽度
+  const MAIN_HARD_MIN = 260;   // 栏区的绝对下限（约一栏宽），手动拖动也不越过
   let paneSeq = 0;
   const panes = new Map();
 
@@ -758,21 +774,26 @@
     const o = opts || {};
     const el = document.createElement('div');
     el.className = 'pane' + (o.pinned ? ' is-pinned' : '');
+    const grip = document.createElement('div');
+    grip.className = 'pane-resize';
+    grip.title = '拖动调整此预览列宽度';
     const head = document.createElement('div');
     head.className = 'pv-head';
     const body = document.createElement('div');
     body.className = 'pv-body is-empty';
+    el.appendChild(grip);
     el.appendChild(head);
     el.appendChild(body);
     const pane = {
       id: ++paneSeq,
       pinned: !!o.pinned,
       el: el,
+      grip: grip,
       head: head,
       body: body,
       node: o.node || null,
-      col: typeof o.col === 'number' ? o.col : -1,
       mode: o.mode || 'preview',
+      w: o.w || 0,
       bodyKey: '',
       view: null
     };
@@ -781,7 +802,7 @@
     return pane;
   }
 
-  /** 临时预览列：始终在最左，内容跟随 state.sel */
+  /** 临时预览列：始终在最左，内容跟随选中的文件 */
   const tempPane = createPane({});
 
   function destroyPane(pane) {
@@ -802,17 +823,6 @@
     return panes.get(Number(host.dataset.pane)) || null;
   }
 
-  /** 窗格展示的节点：固定住的是自己记的那份，临时预览跟随当前选中项 */
-  function paneNode(pane) {
-    if (pane.pinned) return pane.node;
-    return state.sel ? state.sel.node : null;
-  }
-
-  function paneCol(pane) {
-    if (pane.pinned) return pane.col;
-    return state.sel ? state.sel.col : -1;
-  }
-
   function paneMode(pane) {
     return pane.pinned ? pane.mode : state.mode;
   }
@@ -821,22 +831,101 @@
     return [tempPane].concat(state.pins);
   }
 
-  /** 顺序固定为「临时预览 | 固定 1 | 固定 2」：新预览永远出现在固定列的左边 */
-  function syncPaneOrder() {
-    panesEl.appendChild(tempPane.el);
-    for (let i = 0; i < state.pins.length; i++) panesEl.appendChild(state.pins[i].el);
+  /** 临时预览列是否多余：已经有固定列，且当前没有「没被固定住的文件」可看 */
+  function tempPaneHidden() {
+    if (!state.pins.length) return false;
+    if (!tempPane.node) return true;
+    return isPinnedPath(tempPane.node.path);
+  }
+
+  function isPinnedPath(path) {
+    return state.pins.some((p) => p.node && p.node.path === path);
+  }
+
+  /** 实际显示出来的窗格：临时预览（若不多余）在最左，固定列按固定先后从右往左排 */
+  function visiblePanes() {
+    const list = [];
+    if (!tempPaneHidden()) list.push(tempPane);
+    for (let i = 0; i < state.pins.length; i++) list.push(state.pins[i]);
+    return list;
+  }
+
+  /**
+   * 临时预览列只在这两种情况下更新：
+   * 1. 选中了一个文件，且这个文件没有出现在任何固定列里
+   * 2. 都不满足时保持原样——选中文件夹、或选中「已经固定住的文件」都不动它
+   *    （比如固定了 A、临时列在看 B，再点回 A 时 B 要留着）
+   */
+  function syncTempPane() {
+    const sel = state.sel;
+    if (!sel || sel.node.isDir) return;
+    if (isPinnedPath(sel.node.path)) return;
+    tempPane.node = sel.node;
+  }
+
+  /* ---- 窗格宽度：每列独立，拖动左边界只改这一列 ---- */
+  function bodyWidth() {
+    return $('#app-body').clientWidth || window.innerWidth;
+  }
+
+  /** 栏区的舒适宽度：新增预览列、窗口变窄时按这个值给它留位 */
+  function mainComfortWidth() {
+    return Math.max(320, Math.round(bodyWidth() * 0.32));
+  }
+
+  /** 预览列可用的总宽度（自动分配时用） */
+  function paneBudget() {
+    return Math.max(PANE_MIN, bodyWidth() - mainComfortWidth());
+  }
+
+  /** 手动拖动时的上限：可以把栏区压到一栏宽，但不允许更窄 */
+  function paneDragMax() {
+    return Math.max(PANE_MIN, bodyWidth() - MAIN_HARD_MIN);
+  }
+
+  function ensurePaneWidths() {
+    if (!tempPane.w) tempPane.w = Math.max(PANE_MIN, Math.round(bodyWidth() * 0.46));
+  }
+
+  /** 总宽超出可用宽度时按比例压缩（各自压到下限为止） */
+  function fitPaneWidths() {
+    const list = visiblePanes();
+    const budget = paneBudget();
+    let total = list.reduce((s, p) => s + p.w, 0);
+    let over = total - budget;
+    for (let guard = 0; guard < 8 && over > 0; guard++) {
+      const flex = list.filter((p) => p.w > PANE_MIN);
+      if (!flex.length) break;
+      const cap = flex.reduce((s, p) => s + (p.w - PANE_MIN), 0);
+      const cut = Math.min(over, cap);
+      flex.forEach((p) => { p.w -= Math.round(cut * (p.w - PANE_MIN) / cap); });
+      total = list.reduce((s, p) => s + p.w, 0);
+      over = total - budget;
+    }
+  }
+
+  function applyPaneWidths() {
+    for (const pane of allPanes()) {
+      if (pane.el.hidden) continue;
+      pane.el.style.width = pane.w + 'px';
+    }
   }
 
   function pinCurrent() {
-    const sel = state.sel;
-    if (!sel) return;
+    if (!tempPane.node) return;
     if (state.pins.length >= MAX_PINS) {
       toast('最多固定 ' + MAX_PINS + ' 个预览，先取消一个再固定');
       return;
     }
-    state.pins.push(createPane({ pinned: true, node: sel.node, col: sel.col, mode: state.mode }));
+    // 新固定的排在已有固定列的左边：它本来就在临时预览列的位置上，固定后原地不动
+    state.pins.unshift(createPane({
+      pinned: true,
+      node: tempPane.node,
+      mode: state.mode,
+      w: Math.max(PANE_MIN, tempPane.w || Math.round(bodyWidth() * 0.46))
+    }));
     renderPreview();
-    toast('已固定到右侧：' + sel.node.name);
+    toast('已固定：' + tempPane.node.name);
   }
 
   function unpinPane(pane) {
@@ -851,42 +940,40 @@
   function paneHeadHtml(pane, node) {
     const m = meta.get(node.path);
     const sub = [subPath(node) || node.name];
-    if (!node.isDir) sub.push(String(node.kind || '').toUpperCase());
+    sub.push(String(node.kind || '').toUpperCase());
     if (m) { sub.push(fmtSize(m.size)); sub.push(fmtTime(m.mtime)); }
 
     const mode = paneMode(pane);
-    const canSource = !node.isDir && ['html', 'md', 'svg'].indexOf(node.kind) >= 0;
+    const canSource = ['html', 'md', 'svg'].indexOf(node.kind) >= 0;
     const seg = canSource
-      ? '<div class="seg">'
+      ? '<div class="pv-seg"><div class="seg">'
         + '<button data-mode="preview" class="' + (mode === 'preview' ? 'is-on' : '') + '">预览</button>'
         + '<button data-mode="source" class="' + (mode === 'source' ? 'is-on' : '') + '">源码</button>'
-        + '</div>'
+        + '</div></div>'
       : '';
 
+    // 图钉 / 刷新 / 关闭放在最右，低频的三个排在左边
     return '<span class="pv-ic">' + nodeIcon(node, 17) + '</span>'
       + '<div class="pv-name"><div class="pv-nm" title="' + esc(node.name) + '">' + esc(node.name) + '</div>'
       + '<div class="pv-sub" title="' + esc(sub.join(' · ')) + '">' + esc(sub.join(' · ')) + '</div></div>'
       + '<div class="pv-actions">' + seg
-      + '<button class="iconbtn pinbtn' + (pane.pinned ? ' is-on' : '') + '" data-act="pin" title="'
-      + (pane.pinned ? '取消固定' : '固定到右侧') + '" aria-label="固定预览">'
-      + icon(pane.pinned ? 'pinFilled' : 'pin', '', 15) + '</button>'
-      + '<button class="iconbtn" data-act="reload" title="重新读取">' + icon('refresh', '', 15) + '</button>'
+      + '<div class="pv-btns">'
       + '<button class="iconbtn" data-act="copy" title="复制路径">' + icon('copy', '', 15) + '</button>'
       + '<button class="iconbtn" data-act="reveal" title="在资源管理器中显示">' + icon('reveal', '', 15) + '</button>'
       + '<button class="iconbtn" data-act="external" title="用默认程序打开">' + icon('external', '', 15) + '</button>'
+      + '<button class="iconbtn pinbtn' + (pane.pinned ? ' is-on' : '') + '" data-act="pin" title="'
+      + (pane.pinned ? '取消固定' : '固定此预览') + '" aria-label="固定预览">'
+      + icon(pane.pinned ? 'pinFilled' : 'pin', '', 15) + '</button>'
+      + '<button class="iconbtn" data-act="reload" title="重新读取">' + icon('refresh', '', 15) + '</button>'
       + '<button class="iconbtn" data-act="close" title="' + (pane.pinned ? '关闭此预览列' : '收起预览') + '">'
       + icon('close', '', 15) + '</button>'
-      + '</div>';
+      + '</div></div>';
   }
 
   /** 渲染一个窗格：头部每次重建（元信息会异步补发），内容按 key 增量渲染 */
   function renderPane(pane, force) {
-    const node = paneNode(pane);
-    const col = paneCol(pane);
-    const mode = paneMode(pane);
-
+    const node = pane.node;
     pane.head.innerHTML = node ? paneHeadHtml(pane, node) : '';
-    pane.el.classList.toggle('is-pinned', pane.pinned);
 
     if (!node) {
       if (force || pane.bodyKey !== 'none') {
@@ -898,24 +985,20 @@
       return;
     }
 
-    const key = [node.path, mode, node.isDir ? 'd' : 'f', col,
+    const mode = paneMode(pane);
+    const key = [node.path, mode,
       node.kind === 'docx' && !state.previewDocx ? 'docx-off' : '',
       node.kind === 'pptx' && !state.previewPptx ? 'pptx-off' : ''].join('\u0001');
     if (!force && key === pane.bodyKey) return;
     pane.bodyKey = key;
     pane.body.className = 'pv-body';
     dropPaneView(pane);
-    renderPaneBody(pane, node, col, mode, key);
+    renderPaneBody(pane, node, mode, key);
   }
 
-  async function renderPaneBody(pane, node, col, mode, key) {
+  async function renderPaneBody(pane, node, mode, key) {
     const box = pane.body;
     const stale = () => pane.bodyKey !== key;
-
-    if (node.isDir) {
-      box.innerHTML = folderCard(node, col + 1);
-      return;
-    }
 
     // 交给协议地址直接渲染的类型：HTML 迷你浏览器 / 图片 / PDF 内置阅读器
     if (mode === 'preview' && ['html', 'image', 'svg', 'pdf'].indexOf(node.kind) >= 0) {
@@ -970,10 +1053,18 @@
 
   function renderPreview(force) {
     previewEl.hidden = !state.previewOpen;
-    $('#gutter').hidden = !state.previewOpen;
     if (!state.previewOpen) return;
-    syncPaneOrder();
-    const list = allPanes();
+
+    syncTempPane();
+    const list = visiblePanes();
+    for (const pane of allPanes()) pane.el.hidden = list.indexOf(pane) < 0;
+    // appendChild 会把节点移到末尾，按顺序走一遍即可得到目标排列
+    for (let i = 0; i < list.length; i++) panesEl.appendChild(list[i].el);
+
+    ensurePaneWidths();
+    fitPaneWidths();
+    applyPaneWidths();
+
     for (let i = 0; i < list.length; i++) renderPane(list[i], force);
   }
 
@@ -1127,42 +1218,99 @@
   previewEl.addEventListener('click', (e) => {
     const pane = paneOf(e.target);
     if (!pane) return;
-    const node = paneNode(pane);
-    const col = paneCol(pane);
+    const node = pane.node;
 
     const btn = e.target.closest('button[data-act], button[data-mode]');
-    if (btn) {
-      if (btn.dataset.mode) {
-        if (!node) return;
-        // 临时预览列沿用全局模式，固定住的窗格各记一份
-        if (pane.pinned) pane.mode = btn.dataset.mode;
-        else state.mode = btn.dataset.mode;
-        renderPane(pane, true);
-        return;
-      }
-      const act = btn.dataset.act;
-      if (act === 'pin') { if (pane.pinned) unpinPane(pane); else pinCurrent(); return; }
-      if (act === 'close') { if (pane.pinned) unpinPane(pane); else togglePreview(false); return; }
+    if (!btn) return;
+    if (btn.dataset.mode) {
       if (!node) return;
-      if (act === 'reload') {
-        btn.classList.add('spin');
-        setTimeout(() => btn.classList.remove('spin'), 520);
-        renderPane(pane, true);
-      } else if (act === 'copy') {
-        pv.copyText(node.path).then(() => toast('已复制路径：' + node.path));
-      } else if (act === 'reveal') {
-        pv.reveal(node.path);
-      } else if (act === 'external') {
-        openWithSystem(node);
-      }
+      // 临时预览列沿用全局模式，固定住的窗格各记一份
+      if (pane.pinned) pane.mode = btn.dataset.mode;
+      else state.mode = btn.dataset.mode;
+      renderPane(pane, true);
       return;
     }
-
-    const open = e.target.closest('[data-open]');
-    if (open && node && node.isDir) {
-      const child = itemsOf(col + 1).filter((c) => c.name === open.dataset.open)[0];
-      if (child) selectNode(child, col + 1);
+    const act = btn.dataset.act;
+    if (act === 'pin') { if (pane.pinned) unpinPane(pane); else pinCurrent(); return; }
+    if (act === 'close') { if (pane.pinned) unpinPane(pane); else togglePreview(false); return; }
+    if (!node) return;
+    if (act === 'reload') {
+      btn.classList.add('spin');
+      setTimeout(() => btn.classList.remove('spin'), 520);
+      renderPane(pane, true);
+    } else if (act === 'copy') {
+      pv.copyText(node.path).then(() => toast('已复制路径：' + node.path));
+    } else if (act === 'reveal') {
+      pv.reveal(node.path);
+    } else if (act === 'external') {
+      openWithSystem(node);
     }
+  });
+
+  /* 拖动最左栏的分隔条：只改快速访问面板的高度，另一个面板吃掉剩余空间 */
+  let panelDrag = null;
+  colsEl.addEventListener('pointerdown', (e) => {
+    const grip = e.target.closest ? e.target.closest('.panel-resize') : null;
+    if (!grip) return;
+    const colEl = grip.closest('.col');
+    const panel = colEl && colEl.querySelector('.fav-panel');
+    if (!panel) return;
+    e.preventDefault();
+    panelDrag = {
+      colEl: colEl,
+      favTop: state.favTop,
+      y: e.clientY,
+      h: panel.getBoundingClientRect().height
+    };
+    grip.classList.add('is-drag');
+    try { grip.setPointerCapture(e.pointerId); } catch { /* 合成事件没有真实指针 */ }
+    document.body.classList.add('resizing-v');
+  });
+  colsEl.addEventListener('pointermove', (e) => {
+    if (!panelDrag) return;
+    const dy = e.clientY - panelDrag.y;
+    // 面板在下面时往上拖变高，在上面时往下拖变高
+    setFavHeight(panelDrag.colEl, panelDrag.favTop ? panelDrag.h + dy : panelDrag.h - dy);
+  });
+  colsEl.addEventListener('pointerup', () => {
+    if (!panelDrag) return;
+    const grip = panelDrag.colEl.querySelector('.panel-resize');
+    if (grip) grip.classList.remove('is-drag');
+    panelDrag = null;
+    document.body.classList.remove('resizing-v');
+    pv.setState({ favPanelHeight: state.favH });
+  });
+
+  /* 拖动窗格左侧边界：只改这一列的宽度，左右两侧各列都不动 */
+  let paneDrag = null;
+  panesEl.addEventListener('pointerdown', (e) => {
+    const grip = e.target.closest ? e.target.closest('.pane-resize') : null;
+    if (!grip) return;
+    const pane = paneOf(grip);
+    if (!pane) return;
+    e.preventDefault();
+    paneDrag = { pane: pane, x: e.clientX, w: pane.w };
+    grip.classList.add('is-drag');
+    // 合成事件没有真实指针，捕获失败不影响拖动
+    try { grip.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+    document.body.classList.add('resizing');
+  });
+  panesEl.addEventListener('pointermove', (e) => {
+    if (!paneDrag) return;
+    const pane = paneDrag.pane;
+    const others = visiblePanes().reduce((sum, p) => sum + (p === pane ? 0 : p.w), 0);
+    const max = Math.max(PANE_MIN, paneDragMax() - others);
+    pane.w = Math.min(max, Math.max(PANE_MIN, paneDrag.w - (e.clientX - paneDrag.x)));
+    applyPaneWidths();
+  });
+  panesEl.addEventListener('pointerup', () => {
+    if (!paneDrag) return;
+    const pane = paneDrag.pane;
+    pane.grip.classList.remove('is-drag');
+    paneDrag = null;
+    document.body.classList.remove('resizing');
+    // 临时预览列的宽度沿用原来的设置项，重启后恢复
+    if (!pane.pinned) pv.setState({ previewWidth: pane.w });
   });
 
   /* 顶部按钮 */
@@ -1299,32 +1447,16 @@
     }
   });
 
-  /* 分隔条拖拽 */
-  const gutter = $('#gutter');
-  let dragging = false;
-  gutter.addEventListener('pointerdown', (e) => {
-    dragging = true;
-    gutter.setPointerCapture(e.pointerId);
-    document.body.classList.add('resizing');
-  });
-  gutter.addEventListener('pointermove', (e) => {
-    if (!dragging) return;
-    const rect = $('#app-body').getBoundingClientRect();
-    const w = rect.right - e.clientX;
-    // 多个预览列并行时要留出更宽的拖拽范围，否则三列会被挤到看不清
-    const max = Math.max(320, rect.width - 340);
-    $('#preview').style.width = Math.min(Math.max(w, 320), max) + 'px';
-  });
-  gutter.addEventListener('pointerup', (e) => {
-    dragging = false;
-    gutter.releasePointerCapture(e.pointerId);
-    document.body.classList.remove('resizing');
-    pv.setState({ previewWidth: Math.round($('#preview').getBoundingClientRect().width) });
-  });
-
-  /* 窗口尺寸变化：重排虚拟列表窗口 */
+  /* 窗口尺寸变化：重排虚拟列表窗口，必要时压缩预览列宽度、重夹快速访问面板高度 */
   window.addEventListener('resize', () => {
     for (let ci = 0; ci < state.path.length; ci++) renderColumnWindow(ci);
+    fitPaneWidths();
+    applyPaneWidths();
+    const colEl = colsEl.children[0];
+    if (colEl && state.favH > 0) {
+      const lim = favHeightLimits(colEl);
+      if (state.favH > lim.max) { state.favH = lim.max; applyFavHeight(colEl); }
+    }
   });
 
   /* 根目录栏是 sticky 的：横向滚动后加一层投影，和后面的栏区分开 */
@@ -1368,9 +1500,8 @@
         if (span) span.textContent = metaText(node);
       });
     }
-    // 元信息到齐后刷新预览头；文件夹摘要里的条目数与修改时间也要跟着更新
+    // 元信息到齐后刷新预览头（大小 / 修改时间）
     renderPreview();
-    if (state.sel && state.sel.node.isDir) renderPane(tempPane, true);
   });
 
   pv.onTheme((theme) => applyTheme(theme));
@@ -1402,6 +1533,7 @@
     $('#btn-preview').classList.toggle('is-on', !state.previewOpen);
     state.hideDot = !!st.hideDot;
     state.favTop = !!st.favTop;
+    state.favH = st.favPanelHeight > 0 ? st.favPanelHeight : 0;
     state.previewDocx = st.previewDocx !== false;
     state.previewPptx = st.previewPptx !== false;
     state.favoritesByRoot = st.favorites && typeof st.favorites === 'object' ? st.favorites : {};
@@ -1410,7 +1542,7 @@
       state.favs = normalizeFavorites(state.favoritesByRoot[favKey(state.root)]);
       render();
     }
-    if (st.previewWidth > 0) $('#preview').style.width = st.previewWidth + 'px';
+    if (st.previewWidth > 0) tempPane.w = Math.max(PANE_MIN, st.previewWidth);
     applyMaximized(await pv.isMaximized());
     // 主进程可能在读设置的同时已经把工作区打开了，这里不能反过来盖住它
     if (!st.lastRoot && !state.root) {
