@@ -29,6 +29,23 @@ function argValue(prefix) {
   return hit ? hit.slice(prefix.length) : null;
 }
 
+if (process.argv.includes('--help') || process.argv.includes('-h')) {
+  console.log([
+    'lit explorer',
+    '',
+    '  --open=<dir>       启动时打开指定工作区',
+    '  --dev              启动时打开开发者工具',
+    '',
+    '截图钩子（调试用：加载完成后截图并退出）',
+    '  --shot=<file>      截图写到该文件',
+    '  --shot-js=<file>   截图前先执行该 JS 文件，其返回值会打印到 stdout',
+    '  --shot-delay=<ms>  截图前等待时长，默认 1400',
+    '',
+    '例：npm run shot -- --open="./sample-project" --shot=".tmp/shot.png"'
+  ].join('\n'));
+  process.exit(0);
+}
+
 /* ------------------------------------------------------------------ *
  * 预览专用协议：pv://local/<绝对路径>
  * 用自定义协议而不是 file://，这样 HTML 预览里的相对资源（css/js/图片）
