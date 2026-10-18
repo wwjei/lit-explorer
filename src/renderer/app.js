@@ -22,8 +22,8 @@
 
   /** 最多固定几个预览窗格（加上临时预览列，最多四列并行） */
   const MAX_PINS = 3;
-  /** 快速访问面板的最小高度（只放得下标题栏） */
-  const FAV_MIN_H = 34;
+  /** 最左栏上下两个面板各自的最小高度 */
+  const SPLIT_MIN = 48;
 
   const state = {
     root: null,
@@ -34,7 +34,7 @@
     mode: 'preview', // 临时预览列的「预览 / 源码」模式
     query: '',
     theme: 'light',
-    previewOpen: true,
+    previewOpen: true,       // 临时预览列是否显示（固定列不受它影响）
     pendingScroll: false,
     hideDot: false,          // 是否隐藏以 . 开头的条目
     previewDocx: true,       // 是否内嵌预览 .docx（设置里可关）
@@ -43,7 +43,7 @@
     favoritesByRoot: {},     // 持久化的快速访问项（按工作区根目录分组）
     pins: [],                // 固定住的预览列（最多 MAX_PINS 个），[0] 是最新固定的，排在最左
     favTop: false,           // 最左栏：快速访问面板是否在上（false = 项目根目录在上）
-    favH: 0                  // 快速访问面板高度（px）；0 = 按内容收缩，最多占该栏 1/3
+    splitRatio: 2 / 3        // 最左栏「上 : 下」的高度比例，跟着位置走，与哪个面板在上面无关
   };
 
   /** 路径 -> { size, mtime }，由主进程异步补发 */
@@ -239,7 +239,7 @@
   /**
    * 最左栏下部的快速访问面板。
    * 面板常驻（没有收藏时给出加入方式），否则交换上下的按钮会无处安放。
-   * 高度默认按内容收缩、最多该栏 1/3；用户拖过分隔条后按拖动结果固定。
+   * 高度由 applyLeftSplit 按「上 : 下」比例分配，与哪个面板在上面无关。
    * 置顶按钮只出现在当前处于下方的那一个面板的标题栏上。
    */
   function renderFavorites() {
@@ -248,7 +248,7 @@
     const panel = colEl.querySelector('.fav-panel');
     if (!panel) return;
     panel.hidden = false;
-    applyFavHeight(colEl);
+    applyLeftSplit(colEl);
     const selPath = state.sel ? state.sel.node.path : '';
     const rows = state.favs.length
       ? state.favs.map((f) => favRowHtml(f, selPath)).join('')
@@ -262,30 +262,33 @@
       + '<div class="fav-scroll"><div class="fav-list">' + rows + '</div></div>';
   }
 
-  /** 快速访问面板的高度：未手动拖动过就交给 CSS 按内容收缩（上限 1/3） */
-  function applyFavHeight(colEl) {
-    const panel = colEl && colEl.querySelector('.fav-panel');
-    if (!panel) return;
-    if (state.favH > 0) {
-      panel.style.flex = '0 0 ' + state.favH + 'px';
-      panel.style.maxHeight = 'none';
-    } else {
-      panel.style.flex = '';
-      panel.style.maxHeight = '';
-    }
+  /* ---- 最左栏上下两个面板的高度：按比例分，比例只跟位置有关 ---- */
+  /** 两个面板可分的高度：整栏扣掉栏头（30）与分隔条（7） */
+  function splitAvail(colEl) {
+    return Math.max(96, colEl.clientHeight - 37);
   }
 
-  /** 拖动分隔条改变上下比例：只改快速访问面板的高度 */
-  function favHeightLimits(colEl) {
-    const colH = colEl.getBoundingClientRect().height;
-    // 下限只留得下标题栏；上限给另一个面板留下约 145px（扣掉栏头与分隔条）
-    return { min: FAV_MIN_H, max: Math.max(FAV_MIN_H, Math.round(colH - 180)) };
+  /** 把「上 : 下」比例落到两个面板上（上面的固定高度，下面的吃掉剩余空间） */
+  function applyLeftSplit(colEl) {
+    const listEl = colEl.querySelector('.col-list');
+    const favEl = colEl.querySelector('.fav-panel');
+    if (!listEl || !favEl) return;
+    const avail = splitAvail(colEl);
+    const topH = Math.round(avail * state.splitRatio);
+    const topEl = state.favTop ? favEl : listEl;
+    const bottomEl = state.favTop ? listEl : favEl;
+    topEl.style.flex = '0 0 ' + topH + 'px';
+    topEl.style.maxHeight = 'none';
+    bottomEl.style.flex = '1 1 auto';
+    bottomEl.style.maxHeight = 'none';
   }
 
-  function setFavHeight(colEl, px) {
-    const lim = favHeightLimits(colEl);
-    state.favH = Math.round(Math.min(Math.max(px, lim.min), lim.max));
-    applyFavHeight(colEl);
+  /** 拖动分隔条：改变「上 : 下」比例，两个面板各自至少留 48px */
+  function setSplitByTopHeight(colEl, topH) {
+    const avail = splitAvail(colEl);
+    const next = Math.min(Math.max(topH, SPLIT_MIN), Math.max(SPLIT_MIN, avail - SPLIT_MIN));
+    state.splitRatio = next / avail;
+    applyLeftSplit(colEl);
   }
 
   /** 交换最左栏「项目根目录 / 快速访问」两个面板的上下位置 */
@@ -374,6 +377,7 @@
     state.favs = normalizeFavorites(state.favoritesByRoot[favKey(dir)]);
     // 固定列装的是上一个工作区的文件，换工作区后一律清掉
     while (state.pins.length) destroyPane(state.pins.pop());
+    closeFind();
     tempPane.node = null;
     tempPane.bodyKey = '';
     setWelcome(false);
@@ -675,6 +679,7 @@
       + '<span><kbd>→</kbd> 进入目录</span>'
       + '<span><kbd>←</kbd> 返回上级</span>'
       + '<span><kbd>⏎</kbd> 打开</span>'
+      + '<span><kbd>Ctrl</kbd><kbd>F</kbd> 查找</span>'
       + '</div></div>';
   }
 
@@ -795,7 +800,11 @@
       mode: o.mode || 'preview',
       w: o.w || 0,
       bodyKey: '',
-      view: null
+      view: null,
+      findEl: null,
+      zoom: o.zoom || 0,  // 图片缩放：0 = 适应窗口，其余是倍数
+      continuous: !!o.continuous, // 连续预览：同目录图片竖着排下来
+      images: []          // 当前窗格里的 <img>，改缩放时直接落到它们身上
     };
     el.dataset.pane = String(pane.id);
     panes.set(pane.id, pane);
@@ -806,6 +815,8 @@
   const tempPane = createPane({});
 
   function destroyPane(pane) {
+    // 查找条长在这个窗格里，窗格没了查找状态也就没意义了
+    if (findState && findState.pane === pane) findState = null;
     dropPaneView(pane);
     panes.delete(pane.id);
     pane.el.remove();
@@ -831,8 +842,9 @@
     return [tempPane].concat(state.pins);
   }
 
-  /** 临时预览列是否多余：已经有固定列，且当前没有「没被固定住的文件」可看 */
+  /** 临时预览列是否多余：用户关掉了它，或者内容已经在固定列里 */
   function tempPaneHidden() {
+    if (!state.previewOpen) return true;
     if (!state.pins.length) return false;
     if (!tempPane.node) return true;
     return isPinnedPath(tempPane.node.path);
@@ -863,7 +875,24 @@
     tempPane.node = sel.node;
   }
 
+  /**
+   * 排列顺序固定为「临时预览 | 固定 1 | 固定 2 | …」。
+   * 用 flex order 排，而不是把节点重新 append 一遍：把一个已经挂在文档里的节点
+   * 重新 append（等于先摘下来再插回去）会把它内部的滚动位置清零——固定列里
+   * 正读到一半的文档会突然跳回顶部。
+   */
+  function syncPaneOrder(list) {
+    for (let i = 0; i < list.length; i++) {
+      const pane = list[i];
+      if (pane.el.parentNode !== panesEl) panesEl.appendChild(pane.el);
+      pane.el.style.order = String(i);
+    }
+  }
+
   /* ---- 窗格宽度：每列独立，拖动左边界只改这一列 ---- */
+  /** 本次渲染各列实际用的宽度（pane.w 是用户设定，这里是被压缩后的结果） */
+  let paneWidths = new Map();
+
   function bodyWidth() {
     return $('#app-body').clientWidth || window.innerWidth;
   }
@@ -873,9 +902,11 @@
     return Math.max(320, Math.round(bodyWidth() * 0.32));
   }
 
-  /** 预览列可用的总宽度（自动分配时用） */
+  /** 预览列可用的总宽度：固定列多了以后栏区让步到一栏宽，好让临时预览列保住自己的宽度 */
   function paneBudget() {
-    return Math.max(PANE_MIN, bodyWidth() - mainComfortWidth());
+    const n = visiblePanes().length;
+    const reserve = n >= 3 ? MAIN_HARD_MIN : mainComfortWidth();
+    return Math.max(PANE_MIN * n, bodyWidth() - reserve);
   }
 
   /** 手动拖动时的上限：可以把栏区压到一栏宽，但不允许更窄 */
@@ -887,27 +918,52 @@
     if (!tempPane.w) tempPane.w = Math.max(PANE_MIN, Math.round(bodyWidth() * 0.46));
   }
 
-  /** 总宽超出可用宽度时按比例压缩（各自压到下限为止） */
+  /**
+   * 空间不够时按比例压缩，但**只压渲染宽度、不改用户设定的宽度**——
+   * pane.w 是「我希望它多宽」，关掉几个预览列后要能原样回来。
+   * 压缩顺序也有讲究：先让固定列让位（它们是参考用的，240px 也看得清），
+   * 临时预览列是正在读的那一列，尽量保住用户拖出来的宽度。
+   */
+  function squeezeInto(list, eff, amount) {
+    const flex = list.filter((p) => eff.get(p) > PANE_MIN);
+    if (!flex.length) return;
+    const cap = flex.reduce((s, p) => s + (eff.get(p) - PANE_MIN), 0);
+    const cut = Math.min(amount, cap);
+    flex.forEach((p) => { eff.set(p, eff.get(p) - Math.round(cut * (eff.get(p) - PANE_MIN) / cap)); });
+  }
+
   function fitPaneWidths() {
     const list = visiblePanes();
     const budget = paneBudget();
-    let total = list.reduce((s, p) => s + p.w, 0);
-    let over = total - budget;
-    for (let guard = 0; guard < 8 && over > 0; guard++) {
-      const flex = list.filter((p) => p.w > PANE_MIN);
-      if (!flex.length) break;
-      const cap = flex.reduce((s, p) => s + (p.w - PANE_MIN), 0);
-      const cut = Math.min(over, cap);
-      flex.forEach((p) => { p.w -= Math.round(cut * (p.w - PANE_MIN) / cap); });
-      total = list.reduce((s, p) => s + p.w, 0);
-      over = total - budget;
+    const eff = new Map();
+    for (const p of list) eff.set(p, p.w);
+    const total = () => list.reduce((s, p) => s + eff.get(p), 0);
+    let over = total() - budget;
+    if (over > 0) {
+      const pins = list.filter((p) => p !== tempPane);
+      for (let guard = 0; guard < 8 && over > 0; guard++) {
+        squeezeInto(pins, eff, over);
+        over = total() - budget;
+      }
+      for (let guard = 0; guard < 8 && over > 0; guard++) {
+        squeezeInto(list, eff, over);
+        over = total() - budget;
+      }
     }
+    paneWidths = eff;
+  }
+
+  /** 某一列当前实际渲染的宽度 */
+  function effWidth(pane) {
+    const w = paneWidths.get(pane);
+    return w === undefined ? pane.w : w;
   }
 
   function applyPaneWidths() {
+    fitPaneWidths();
     for (const pane of allPanes()) {
       if (pane.el.hidden) continue;
-      pane.el.style.width = pane.w + 'px';
+      pane.el.style.width = Math.round(effWidth(pane)) + 'px';
     }
   }
 
@@ -918,14 +974,29 @@
       return;
     }
     // 新固定的排在已有固定列的左边：它本来就在临时预览列的位置上，固定后原地不动
-    state.pins.unshift(createPane({
+    const pane = createPane({
       pinned: true,
       node: tempPane.node,
       mode: state.mode,
-      w: Math.max(PANE_MIN, tempPane.w || Math.round(bodyWidth() * 0.46))
-    }));
+      w: Math.max(PANE_MIN, tempPane.w || Math.round(bodyWidth() * 0.46)),
+      zoom: tempPane.zoom,
+      continuous: tempPane.continuous
+    });
+    state.pins.unshift(pane);
+    // 查找条长在窗格上：内容被固定到新列时，查询词与高亮一并跟过去
+    if (findState && findState.pane === tempPane) carryFind(pane, findState.query);
     renderPreview();
-    toast('已固定：' + tempPane.node.name);
+    toast('已固定：' + pane.node.name);
+  }
+
+  /** 把临时列上的查找条交给新的固定列（正文由 renderPane 重渲染后自动重新落高亮） */
+  function carryFind(pane, query) {
+    closeFind();
+    if (!query) return;
+    const bar = ensureFindBar(pane);
+    bar.hidden = false;
+    bar.querySelector('.find-input').value = query;
+    findState = { pane: pane, query: query, hits: [], index: -1, capped: false };
   }
 
   function unpinPane(pane) {
@@ -942,6 +1013,7 @@
     const sub = [subPath(node) || node.name];
     sub.push(String(node.kind || '').toUpperCase());
     if (m) { sub.push(fmtSize(m.size)); sub.push(fmtTime(m.mtime)); }
+    if (pane.continuous) sub.push('连续预览');
 
     const mode = paneMode(pane);
     const canSource = ['html', 'md', 'svg'].indexOf(node.kind) >= 0;
@@ -952,11 +1024,27 @@
         + '</div></div>'
       : '';
 
+    // 图片：− [适应/150%] + 的缩放档位，以及进入连续预览的向下箭头
+    const imageBar = (mode === 'preview' && isImageNode(node))
+      ? '<div class="pv-zoom">'
+        + '<button data-act="zoom-out" title="缩小（也可 Ctrl+滚轮）" aria-label="缩小">'
+        + icon('zoomOut', '', 13) + '</button>'
+        + '<button class="zoom-val" data-act="zoom-reset" title="点一下回到适应窗口">'
+        + zoomText(pane.zoom) + '</button>'
+        + '<button data-act="zoom-in" title="放大（也可 Ctrl+滚轮）" aria-label="放大">'
+        + icon('zoomIn', '', 13) + '</button>'
+        + '</div>'
+        + '<button class="iconbtn seqbtn' + (pane.continuous ? ' is-on' : '')
+        + '" data-act="seq" aria-label="连续预览" title="'
+        + (pane.continuous ? '退出连续预览' : '连续预览：向下滚动看同目录后面的图片') + '">'
+        + icon('arrowDown', '', 15) + '</button>'
+      : '';
+
     // 图钉 / 刷新 / 关闭放在最右，低频的三个排在左边
     return '<span class="pv-ic">' + nodeIcon(node, 17) + '</span>'
       + '<div class="pv-name"><div class="pv-nm" title="' + esc(node.name) + '">' + esc(node.name) + '</div>'
       + '<div class="pv-sub" title="' + esc(sub.join(' · ')) + '">' + esc(sub.join(' · ')) + '</div></div>'
-      + '<div class="pv-actions">' + seg
+      + '<div class="pv-actions">' + seg + imageBar
       + '<div class="pv-btns">'
       + '<button class="iconbtn" data-act="copy" title="复制路径">' + icon('copy', '', 15) + '</button>'
       + '<button class="iconbtn" data-act="reveal" title="在资源管理器中显示">' + icon('reveal', '', 15) + '</button>'
@@ -973,12 +1061,18 @@
   /** 渲染一个窗格：头部每次重建（元信息会异步补发），内容按 key 增量渲染 */
   function renderPane(pane, force) {
     const node = pane.node;
+    // 连续预览只对「图片 + 预览模式」有意义，切到别的文件/源码视图时自动退出
+    if (pane.continuous && !(node && paneMode(pane) === 'preview' && isImageNode(node))) {
+      pane.continuous = false;
+    }
     pane.head.innerHTML = node ? paneHeadHtml(pane, node) : '';
 
     if (!node) {
+      if (findState && findState.pane === pane) closeFind();
       if (force || pane.bodyKey !== 'none') {
         pane.bodyKey = 'none';
         dropPaneView(pane);
+        pane.images = [];
         pane.body.className = 'pv-body is-empty';
         pane.body.innerHTML = emptyState();
       }
@@ -986,14 +1080,20 @@
     }
 
     const mode = paneMode(pane);
-    const key = [node.path, mode,
+    const key = [node.path, mode, pane.continuous ? 'seq' : '',
       node.kind === 'docx' && !state.previewDocx ? 'docx-off' : '',
       node.kind === 'pptx' && !state.previewPptx ? 'pptx-off' : ''].join('\u0001');
     if (!force && key === pane.bodyKey) return;
     pane.bodyKey = key;
     pane.body.className = 'pv-body';
     dropPaneView(pane);
-    renderPaneBody(pane, node, mode, key);
+    const body = renderPaneBody(pane, node, mode, key);
+    // 正文是异步填的（读文件、解析文档、取图片地址），填完再把查找高亮落回去
+    if (findState && findState.pane === pane) {
+      Promise.resolve(body).then(() => {
+        if (findState && findState.pane === pane && pane.bodyKey === key) refreshFind();
+      });
+    }
   }
 
   async function renderPaneBody(pane, node, mode, key) {
@@ -1008,7 +1108,8 @@
       if (!res.url) { box.innerHTML = fallbackCard(node, '无法生成预览地址'); return; }
       if (node.kind === 'html') box.innerHTML = browserChrome(node, res.url);
       else if (node.kind === 'pdf') box.innerHTML = pdfFrame(node, res.url);
-      else box.innerHTML = '<div class="img-wrap"><img src="' + esc(res.url) + '" alt="' + esc(node.name) + '"></div>';
+      else if (pane.continuous) await renderImageSeq(pane, node, key);
+      else renderImageView(pane, node, res.url);
       return;
     }
 
@@ -1051,21 +1152,408 @@
     });
   }
 
-  function renderPreview(force) {
-    previewEl.hidden = !state.previewOpen;
-    if (!state.previewOpen) return;
+  /* ============================ 图片：缩放与连续预览 ============================ *
+   * 单张：− / + 按档位缩放，点中间那格回到「适应窗口」，Ctrl+滚轮同样能缩放。
+   * 连续：向下箭头进入，把「当前图片所在目录里排在它后面的图片」竖着排下来，
+   *       滚动即看下一张；图片走原生懒加载，只有快滚到的才会真的去取。
+   * ------------------------------------------------------------------------- */
+  /** 缩放档位（pane.zoom = 0 表示适应窗口） */
+  const ZOOM_STEPS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4, 6, 8];
+  /** 连续预览一次最多列多少张，避免超大目录把 DOM 撑爆 */
+  const SEQ_MAX = 300;
 
+  function isImageNode(node) {
+    return !!node && !node.isDir && (node.kind === 'image' || node.kind === 'svg');
+  }
+
+  function zoomText(zoom) {
+    return zoom ? Math.round(zoom * 100) + '%' : '适应';
+  }
+
+  /** 把 pane.zoom 落到这个窗格里的每张图上（各自按自己的原始尺寸算） */
+  function applyZoom(pane) {
+    for (const img of pane.images) {
+      if (!pane.zoom) {
+        img.style.width = '';
+        img.style.height = '';
+        continue;
+      }
+      // 还没解码出尺寸的图先不动，等 load 回来再套
+      if (!img.naturalWidth) continue;
+      img.style.width = Math.max(24, Math.round(img.naturalWidth * pane.zoom)) + 'px';
+      img.style.height = 'auto';
+    }
+    const wrap = pane.body.querySelector('.img-wrap');
+    if (wrap) wrap.classList.toggle('is-zoom', !!pane.zoom);
+    const seq = pane.body.querySelector('.imgseq');
+    if (seq) seq.classList.toggle('is-zoom', !!pane.zoom);
+  }
+
+  function setZoom(pane, zoom) {
+    pane.zoom = zoom;
+    applyZoom(pane);
+    const label = pane.head.querySelector('[data-act="zoom-reset"]');
+    if (label) label.textContent = zoomText(zoom);
+  }
+
+  /** 在档位之间走一步；从「适应窗口」出发时，放大到 100%、缩小到 75% */
+  function stepZoom(pane, dir) {
+    const cur = pane.zoom || 0;
+    let next;
+    if (!cur) {
+      next = dir > 0 ? 1 : 0.75;
+    } else {
+      const at = ZOOM_STEPS.indexOf(cur);
+      const from = at < 0 ? ZOOM_STEPS.findIndex((z) => z > cur) : at + dir;
+      next = ZOOM_STEPS[Math.min(ZOOM_STEPS.length - 1, Math.max(0, from))];
+    }
+    setZoom(pane, next);
+  }
+
+  /** Ctrl+滚轮缩放（不按 Ctrl 的滚轮留给滚动，不抢） */
+  function bindZoomWheel(pane, host) {
+    host.addEventListener('wheel', (e) => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      stepZoom(pane, e.deltaY < 0 ? 1 : -1);
+    }, { passive: false });
+  }
+
+  function newImage(pane, node, url, lazy) {
+    const img = document.createElement('img');
+    img.src = url;
+    img.alt = node.name;
+    img.draggable = false;
+    if (lazy) img.loading = 'lazy';
+    img.addEventListener('load', () => applyZoom(pane));
+    pane.images.push(img);
+    return img;
+  }
+
+  function renderImageView(pane, node, url) {
+    pane.body.innerHTML = '';
+    pane.images = [];
+    const wrap = document.createElement('div');
+    wrap.className = 'img-wrap';
+    wrap.appendChild(newImage(pane, node, url, false));
+    pane.body.appendChild(wrap);
+    applyZoom(pane);
+    bindZoomWheel(pane, wrap);
+  }
+
+  /** 同目录里的图片，顺序与栏内一致（搜索过滤也算） */
+  async function imageSequence(node) {
+    const dir = node.path.replace(/[\\/][^\\/]*$/, '');
+    let entries = null;
+    for (let ci = 0; ci < state.cols.length; ci++) {
+      const col = state.cols[ci];
+      if (col && col.dir === dir && col.entries) { entries = itemsOf(ci); break; }
+    }
+    if (!entries) {
+      // 这个目录没开在栏里（固定列可能指向别处）：直接问一次文件系统
+      const res = await pv.list(dir);
+      entries = res && res.entries ? res.entries.slice() : [];
+      entries.sort((a, b) => (a.isDir !== b.isDir)
+        ? (a.isDir ? -1 : 1)
+        : a.name.localeCompare(b.name, 'zh-Hans-CN', { numeric: true }));
+    }
+    return entries.filter(isImageNode);
+  }
+
+  async function renderImageSeq(pane, node, key) {
+    const seq = await imageSequence(node);
+    if (pane.bodyKey !== key) return;
+
+    let at = seq.findIndex((e) => e.path === node.path);
+    if (at < 0) at = 0;
+    const rest = seq.slice(at);
+    const shown = rest.slice(0, SEQ_MAX);
+
+    const urls = await Promise.all(shown.map((e) => pv.previewUrl(e.path)));
+    if (pane.bodyKey !== key) return;
+
+    pane.body.innerHTML = '';
+    pane.images = [];
+    const box = document.createElement('div');
+    box.className = 'imgseq';
+    for (let i = 0; i < shown.length; i++) {
+      const fig = document.createElement('figure');
+      fig.className = 'imgseq-item' + (shown[i].path === node.path ? ' is-current' : '');
+      fig.dataset.path = shown[i].path;
+      if (urls[i] && urls[i].url) {
+        fig.appendChild(newImage(pane, shown[i], urls[i].url, i > 0));
+      } else {
+        const bad = document.createElement('div');
+        bad.className = 'imgseq-cap';
+        bad.textContent = '无法生成预览地址';
+        fig.appendChild(bad);
+      }
+      const cap = document.createElement('figcaption');
+      cap.className = 'imgseq-cap';
+      cap.innerHTML = '<span class="n">' + (at + i + 1) + ' / ' + seq.length + '</span>'
+        + '<span class="nm" title="' + esc(shown[i].name) + '">' + esc(shown[i].name) + '</span>';
+      fig.appendChild(cap);
+      box.appendChild(fig);
+    }
+    if (rest.length > shown.length) {
+      const note = document.createElement('div');
+      note.className = 'imgseq-note';
+      note.textContent = '这个目录后面还有 ' + (rest.length - shown.length)
+        + ' 张图片，只列到前 ' + SEQ_MAX + ' 张';
+      box.appendChild(note);
+    }
+    pane.body.appendChild(box);
+    applyZoom(pane);
+    bindZoomWheel(pane, box);
+    box.scrollTop = 0;
+  }
+
+  function toggleSeq(pane) {
+    pane.continuous = !pane.continuous;
+    toast(pane.continuous ? '连续预览：向下滚动看同目录后面的图片' : '已退出连续预览');
+    renderPane(pane, true);
+  }
+
+  function renderPreview(force) {
     syncTempPane();
+    // 关掉临时预览列不影响固定列：整块预览区只在「一列都没有」时才收起
     const list = visiblePanes();
+    previewEl.hidden = list.length === 0;
+    if (!list.length) return;
+
     for (const pane of allPanes()) pane.el.hidden = list.indexOf(pane) < 0;
-    // appendChild 会把节点移到末尾，按顺序走一遍即可得到目标排列
-    for (let i = 0; i < list.length; i++) panesEl.appendChild(list[i].el);
+    syncPaneOrder(list);
 
     ensurePaneWidths();
-    fitPaneWidths();
-    applyPaneWidths();
+    applyPaneWidths();   // 里面会按可用宽度重算每列的实际宽度
 
     for (let i = 0; i < list.length; i++) renderPane(list[i], force);
+    // 临时预览列被收起来（内容已经在固定列里）时，挂在它上面的查找条一并收掉
+    if (findState && findState.pane.el.hidden) closeFind();
+  }
+
+  /* ============================ 预览内查找 ============================ *
+   * Ctrl+F 在「渲染成真实 DOM 的预览」里查关键字：
+   *   - 参与查找：Markdown 预览、Word / PPT 内嵌预览
+   *   - 不参与：代码视图（按窗口渲染，DOM 里只有可见的几十行）、图片、PDF、HTML（在 iframe 里）
+   * 命中处原地包一层 <mark>，当前命中再加 .is-current 并滚到视口中间。
+   * ------------------------------------------------------------------ */
+  /** 单次查找最多标记多少个命中，避免超大文档把主线程卡住 */
+  const FIND_MAX = 2000;
+  /** 最近一次指针位置：Ctrl+F 优先作用在指针下的那个窗格 */
+  const pointer = { x: -1, y: -1 };
+  let activePaneId = 0;
+  let findState = null;   // { pane, query, hits, index, capped }
+
+  function paneFindable(pane) {
+    if (!pane || !pane.node || pane.node.isDir) return false;
+    if (pane.el.hidden) return false;
+    const box = pane.body;
+    if (!box || box.classList.contains('is-empty')) return false;
+    if (box.querySelector('.codeview, .img-wrap, .imgseq, iframe')) return false;
+    return !!box.querySelector('.prose, .docview');
+  }
+
+  /** Ctrl+F 会落在哪个窗格：指针下的 → 最近点过的 → 最左的可见窗格 */
+  function targetPane() {
+    const list = visiblePanes().filter((p) => !p.el.hidden);
+    if (!list.length) return null;
+    const hovered = paneOf(document.elementFromPoint(pointer.x, pointer.y));
+    if (hovered && list.indexOf(hovered) >= 0) return hovered;
+    const active = panes.get(activePaneId);
+    if (active && list.indexOf(active) >= 0) return active;
+    return list[0];
+  }
+
+  function ensureFindBar(pane) {
+    if (pane.findEl) return pane.findEl;
+    const el = document.createElement('div');
+    el.className = 'find-bar';
+    el.hidden = true;
+    el.innerHTML = icon('search', 'find-ic', 14)
+      + '<input class="find-input" type="text" placeholder="在预览中查找…" spellcheck="false" '
+      + 'autocomplete="off" aria-label="在预览中查找">'
+      + '<span class="find-count"></span>'
+      + '<button class="iconbtn" data-find="prev" title="上一个匹配 (Shift+Enter)" aria-label="上一个匹配">'
+      + icon('arrowUp', '', 14) + '</button>'
+      + '<button class="iconbtn" data-find="next" title="下一个匹配 (Enter)" aria-label="下一个匹配">'
+      + icon('arrowDown', '', 14) + '</button>'
+      + '<button class="iconbtn" data-find="close" title="关闭查找 (Esc)" aria-label="关闭查找">'
+      + icon('close', '', 14) + '</button>';
+    // 夹在窗格头部与正文之间
+    pane.el.insertBefore(el, pane.body);
+    pane.findEl = el;
+
+    const input = el.querySelector('.find-input');
+    input.addEventListener('input', () => {
+      if (!findState || findState.pane !== pane) return;
+      findState.query = input.value.trim();
+      applyFind();
+    });
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); stepFind(e.shiftKey ? -1 : 1); return; }
+      // 这里必须拦下 Esc，否则会冒泡到全局处理器去清空文件名搜索框
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeFind(); }
+    });
+    el.addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-find]');
+      if (!btn) return;
+      if (btn.dataset.find === 'prev') stepFind(-1);
+      else if (btn.dataset.find === 'next') stepFind(1);
+      else closeFind();
+    });
+    return el;
+  }
+
+  function openFind(pane) {
+    if (!pane) return false;
+    if (findState && findState.pane !== pane) closeFind();
+    const bar = ensureFindBar(pane);
+    bar.hidden = false;
+    if (!findState) findState = { pane: pane, query: '', hits: [], index: -1, capped: false };
+    const input = bar.querySelector('.find-input');
+    input.focus();
+    input.select();
+    updateFindBar();
+    return true;
+  }
+
+  /** 关掉查找：撤掉高亮、清空输入，焦点不停在查找框里 */
+  function closeFind() {
+    const f = findState;
+    findState = null;
+    if (!f) return;
+    clearMarks(f.pane.body);
+    const bar = f.pane.findEl;
+    if (!bar) return;
+    const input = bar.querySelector('.find-input');
+    if (input) { input.value = ''; input.blur(); }
+    bar.hidden = true;
+  }
+
+  function updateFindBar() {
+    const f = findState;
+    if (!f || !f.pane.findEl) return;
+    const count = f.pane.findEl.querySelector('.find-count');
+    if (!f.query) {
+      count.textContent = '';
+      count.classList.remove('is-none');
+    } else if (!f.hits.length) {
+      count.textContent = '无匹配';
+      count.classList.add('is-none');
+    } else {
+      count.textContent = (f.index + 1) + '/' + f.hits.length + (f.capped ? '+' : '');
+      count.classList.remove('is-none');
+    }
+  }
+
+  /** 正文里所有可参与查找的文本节点（跳过查找条自身、脚本样式与已经包好的命中） */
+  function collectTextNodes(root) {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        if (!node.nodeValue || !node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
+        const parent = node.parentNode;
+        if (!parent) return NodeFilter.FILTER_REJECT;
+        if (parent.closest('script, style, textarea, .find-bar, mark.find-hit')) {
+          return NodeFilter.FILTER_REJECT;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      }
+    });
+    const out = [];
+    let n = walker.nextNode();
+    while (n) { out.push(n); n = walker.nextNode(); }
+    return out;
+  }
+
+  /** 把命中处原地包成 <mark>，返回全部命中元素（文档顺序） */
+  function markMatches(root, query) {
+    const needle = query.toLowerCase();
+    const hits = [];
+    let capped = false;
+    for (const node of collectTextNodes(root)) {
+      const text = node.nodeValue;
+      const lower = text.toLowerCase();
+      let at = lower.indexOf(needle);
+      if (at < 0) continue;
+      const frag = document.createDocumentFragment();
+      let cut = 0;
+      while (at >= 0) {
+        if (hits.length >= FIND_MAX) { capped = true; break; }
+        if (at > cut) frag.appendChild(document.createTextNode(text.slice(cut, at)));
+        const mark = document.createElement('mark');
+        mark.className = 'find-hit';
+        mark.textContent = text.slice(at, at + needle.length);
+        frag.appendChild(mark);
+        hits.push(mark);
+        cut = at + needle.length;
+        at = lower.indexOf(needle, cut);
+      }
+      // 触发上限时，这一节剩下的原文照原样补回去
+      if (cut < text.length) frag.appendChild(document.createTextNode(text.slice(cut)));
+      node.parentNode.replaceChild(frag, node);
+      if (capped) break;
+    }
+    return { hits: hits, capped: capped };
+  }
+
+  /** 撤掉查找高亮，把正文还原成纯文本节点 */
+  function clearMarks(root) {
+    if (!root) return;
+    const marks = root.querySelectorAll('mark.find-hit');
+    if (!marks.length) return;
+    const parents = [];
+    for (const mark of marks) {
+      const parent = mark.parentNode;
+      if (!parent) continue;
+      parent.replaceChild(document.createTextNode(mark.textContent), mark);
+      if (parents.indexOf(parent) < 0) parents.push(parent);
+    }
+    // 合并被切开后相邻的文本节点，避免反复查找让 DOM 越来越碎
+    for (const parent of parents) parent.normalize();
+  }
+
+  function applyFind() {
+    const f = findState;
+    if (!f) return;
+    clearMarks(f.pane.body);
+    f.hits = [];
+    f.index = -1;
+    f.capped = false;
+    if (f.query) {
+      const res = markMatches(f.pane.body, f.query);
+      f.hits = res.hits;
+      f.capped = res.capped;
+      if (f.hits.length) { f.index = 0; focusFindHit(); }
+    }
+    updateFindBar();
+  }
+
+  /** 当前命中换成强调色并滚到视口中间 */
+  function focusFindHit() {
+    const f = findState;
+    if (!f) return;
+    for (let i = 0; i < f.hits.length; i++) {
+      f.hits[i].classList.toggle('is-current', i === f.index);
+    }
+    const hit = f.hits[f.index];
+    if (hit && hit.scrollIntoView) hit.scrollIntoView({ block: 'center', inline: 'nearest' });
+  }
+
+  function stepFind(delta) {
+    const f = findState;
+    if (!f || !f.hits.length) return;
+    f.index = (f.index + delta + f.hits.length) % f.hits.length;
+    focusFindHit();
+    updateFindBar();
+  }
+
+  /** 正文重渲染之后重新落高亮；已经不满足查找条件就直接关掉查找条 */
+  function refreshFind() {
+    const f = findState;
+    if (!f) return;
+    if (f.pane.el.hidden || !paneFindable(f.pane)) { closeFind(); return; }
+    applyFind();
   }
 
   /* ============================ 总渲染 ============================ */
@@ -1103,6 +1591,8 @@
   function togglePreview(force) {
     state.previewOpen = typeof force === 'boolean' ? force : !state.previewOpen;
     $('#btn-preview').classList.toggle('is-on', !state.previewOpen);
+    // 预览整个收起来时，挂在上面的查找条也一起收掉
+    if (!state.previewOpen) closeFind();
     renderPreview();
     pv.setState({ previewOpen: state.previewOpen });
   }
@@ -1214,6 +1704,44 @@
     goToPathIndex(+btn.dataset.crumb);
   });
 
+  /* 记录指针位置与最近操作的窗格：Ctrl+F 默认落在指针下的那个窗格 */
+  document.addEventListener('pointermove', (e) => {
+    pointer.x = e.clientX;
+    pointer.y = e.clientY;
+  }, { passive: true });
+  previewEl.addEventListener('pointerdown', (e) => {
+    const pane = paneOf(e.target);
+    if (pane) activePaneId = pane.id;
+  });
+  // 点回栏区就把「当前操作区」交还给文件列表（↑↓ 随之回到换选中项）
+  colsEl.addEventListener('pointerdown', () => { activePaneId = 0; });
+  // 滚轮滚过哪一边，也把操作区算到哪一边
+  previewEl.addEventListener('wheel', (e) => {
+    const pane = paneOf(e.target);
+    if (pane) activePaneId = pane.id;
+  }, { passive: true });
+  colsEl.addEventListener('wheel', () => { activePaneId = 0; }, { passive: true });
+
+  /* 焦点在预览里时 ↑↓ 滚的是预览内容，不动文件列表的选中项 */
+  const PANE_SCROLLERS = ['.prose-wrap', '.cv-scroll', '.imgseq', '.img-wrap', '.docview', '.pdfview'];
+
+  function paneScroller(pane) {
+    for (const sel of PANE_SCROLLERS) {
+      const el = pane.body.querySelector(sel);
+      if (el && el.scrollHeight > el.clientHeight + 2) return el;
+    }
+    return null;
+  }
+
+  /** 返回是否真的滚了：焦点在预览里但这一列没得滚时，按键就到此为止 */
+  function scrollPaneBy(pane, dir) {
+    const el = paneScroller(pane);
+    if (!el) return false;
+    const step = Math.max(72, Math.round(el.clientHeight * 0.15));
+    el.scrollTop += dir * step;
+    return true;
+  }
+
   /* 预览区操作：所有窗格的头部按钮与卡片内按钮走同一套分派 */
   previewEl.addEventListener('click', (e) => {
     const pane = paneOf(e.target);
@@ -1233,6 +1761,10 @@
     const act = btn.dataset.act;
     if (act === 'pin') { if (pane.pinned) unpinPane(pane); else pinCurrent(); return; }
     if (act === 'close') { if (pane.pinned) unpinPane(pane); else togglePreview(false); return; }
+    if (act === 'zoom-in') { if (node) stepZoom(pane, 1); return; }
+    if (act === 'zoom-out') { if (node) stepZoom(pane, -1); return; }
+    if (act === 'zoom-reset') { if (node) setZoom(pane, 0); return; }
+    if (act === 'seq') { if (node) toggleSeq(pane); return; }
     if (!node) return;
     if (act === 'reload') {
       btn.classList.add('spin');
@@ -1247,20 +1779,18 @@
     }
   });
 
-  /* 拖动最左栏的分隔条：只改快速访问面板的高度，另一个面板吃掉剩余空间 */
+  /* 拖动最左栏的分隔条：改变「上 : 下」的高度比例，与哪个面板在上面无关 */
   let panelDrag = null;
   colsEl.addEventListener('pointerdown', (e) => {
     const grip = e.target.closest ? e.target.closest('.panel-resize') : null;
     if (!grip) return;
     const colEl = grip.closest('.col');
-    const panel = colEl && colEl.querySelector('.fav-panel');
-    if (!panel) return;
+    if (!colEl || !colEl.querySelector('.fav-panel')) return;
     e.preventDefault();
     panelDrag = {
       colEl: colEl,
-      favTop: state.favTop,
       y: e.clientY,
-      h: panel.getBoundingClientRect().height
+      topH: Math.round(splitAvail(colEl) * state.splitRatio)
     };
     grip.classList.add('is-drag');
     try { grip.setPointerCapture(e.pointerId); } catch { /* 合成事件没有真实指针 */ }
@@ -1268,9 +1798,8 @@
   });
   colsEl.addEventListener('pointermove', (e) => {
     if (!panelDrag) return;
-    const dy = e.clientY - panelDrag.y;
-    // 面板在下面时往上拖变高，在上面时往下拖变高
-    setFavHeight(panelDrag.colEl, panelDrag.favTop ? panelDrag.h + dy : panelDrag.h - dy);
+    // 分隔条跟着指针走：往下拖上面的面板变高，往上拖变矮
+    setSplitByTopHeight(panelDrag.colEl, panelDrag.topH + (e.clientY - panelDrag.y));
   });
   colsEl.addEventListener('pointerup', () => {
     if (!panelDrag) return;
@@ -1278,7 +1807,7 @@
     if (grip) grip.classList.remove('is-drag');
     panelDrag = null;
     document.body.classList.remove('resizing-v');
-    pv.setState({ favPanelHeight: state.favH });
+    pv.setState({ leftSplitRatio: state.splitRatio });
   });
 
   /* 拖动窗格左侧边界：只改这一列的宽度，左右两侧各列都不动 */
@@ -1289,7 +1818,7 @@
     const pane = paneOf(grip);
     if (!pane) return;
     e.preventDefault();
-    paneDrag = { pane: pane, x: e.clientX, w: pane.w };
+    paneDrag = { pane: pane, x: e.clientX, w: effWidth(pane) };
     grip.classList.add('is-drag');
     // 合成事件没有真实指针，捕获失败不影响拖动
     try { grip.setPointerCapture(e.pointerId); } catch { /* ignore */ }
@@ -1298,7 +1827,7 @@
   panesEl.addEventListener('pointermove', (e) => {
     if (!paneDrag) return;
     const pane = paneDrag.pane;
-    const others = visiblePanes().reduce((sum, p) => sum + (p === pane ? 0 : p.w), 0);
+    const others = visiblePanes().reduce((sum, p) => sum + (p === pane ? 0 : effWidth(p)), 0);
     const max = Math.max(PANE_MIN, paneDragMax() - others);
     pane.w = Math.min(max, Math.max(PANE_MIN, paneDrag.w - (e.clientX - paneDrag.x)));
     applyPaneWidths();
@@ -1369,6 +1898,11 @@
       if (k === 'b') { e.preventDefault(); togglePreview(); return; }
       if (k === 'f') {
         e.preventDefault();
+        const pane = targetPane();
+        if (pane && paneFindable(pane)) { openFind(pane); return; }
+        // 有预览但类型不支持查找（源码视图 / 图片 / PDF / HTML）时给一句提示，
+        // 别默默跳到文件名搜索框上去
+        if (pane) { toast('这一列不支持查找：Markdown 与 Word / PPT 预览里可以用 Ctrl+F'); return; }
         $('#search').focus();
         $('#search').select();
         return;
@@ -1393,6 +1927,8 @@
       return;
     }
     if (e.key === '/') { e.preventDefault(); $('#search').focus(); return; }
+    // 焦点不在查找框里时，Esc 先关掉查找条
+    if (e.key === 'Escape' && findState) { closeFind(); return; }
     if (!state.root) return;
 
     const sel = state.sel;
@@ -1400,6 +1936,13 @@
     const items = itemsOf(ci);
 
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      // 最近一次点在预览里：↑↓ 归预览内容（读长文档、翻连续预览都用它），不动文件选中项
+      const focused = panes.get(activePaneId);
+      if (focused && !focused.el.hidden) {
+        e.preventDefault();
+        scrollPaneBy(focused, e.key === 'ArrowDown' ? 1 : -1);
+        return;
+      }
       if (!items.length) return;
       e.preventDefault();
       let idx = sel ? items.findIndex((n) => n.path === sel.node.path) : -1;
@@ -1447,16 +1990,13 @@
     }
   });
 
-  /* 窗口尺寸变化：重排虚拟列表窗口，必要时压缩预览列宽度、重夹快速访问面板高度 */
+  /* 窗口尺寸变化：重排虚拟列表窗口，必要时压缩预览列宽度、重算左栏上下比例 */
   window.addEventListener('resize', () => {
     for (let ci = 0; ci < state.path.length; ci++) renderColumnWindow(ci);
     fitPaneWidths();
     applyPaneWidths();
     const colEl = colsEl.children[0];
-    if (colEl && state.favH > 0) {
-      const lim = favHeightLimits(colEl);
-      if (state.favH > lim.max) { state.favH = lim.max; applyFavHeight(colEl); }
-    }
+    if (colEl && colEl.querySelector('.fav-panel')) applyLeftSplit(colEl);
   });
 
   /* 根目录栏是 sticky 的：横向滚动后加一层投影，和后面的栏区分开 */
@@ -1533,7 +2073,10 @@
     $('#btn-preview').classList.toggle('is-on', !state.previewOpen);
     state.hideDot = !!st.hideDot;
     state.favTop = !!st.favTop;
-    state.favH = st.favPanelHeight > 0 ? st.favPanelHeight : 0;
+    // 上下比例跟着位置走：默认上 2/3、下 1/3，拖动过之后一直用拖动结果
+    if (typeof st.leftSplitRatio === 'number' && st.leftSplitRatio > 0) {
+      state.splitRatio = Math.min(0.92, Math.max(0.08, st.leftSplitRatio));
+    }
     state.previewDocx = st.previewDocx !== false;
     state.previewPptx = st.previewPptx !== false;
     state.favoritesByRoot = st.favorites && typeof st.favorites === 'object' ? st.favorites : {};

@@ -232,9 +232,9 @@ body.is-maximized .app{box-shadow:none}
 .col-list{order:1}
 .panel-resize{order:2}
 .fav-panel{order:3}
-/* 快速访问面板：默认按内容收缩，最多占该栏 1/3（拖过分隔条后由行内样式接管） */
+/* 两个面板的高度由 applyLeftSplit 按「上 : 下」比例写成行内样式（默认 2/3 : 1/3） */
 .fav-panel{
-  flex:0 1 auto;max-height:33.333%;min-height:0;
+  flex:1 1 auto;min-height:0;
   display:flex;flex-direction:column;
   border-top:1px solid var(--line);background:var(--panel);
 }
@@ -243,11 +243,9 @@ body.is-maximized .app{box-shadow:none}
 .col.is-fav-top .panel-resize{order:1}
 .col.is-fav-top .col-head{order:2}
 .col.is-fav-top .col-list{order:3}
-/* 面板在上时，条目贴着头部的下沿排列（在下时贴底） */
-.col.is-fav-top .fav-list{margin-top:0;margin-bottom:auto}
-/* 两个面板之间的分隔条 */
-.panel-resize{flex:none;height:5px;position:relative;cursor:row-resize;background:var(--panel)}
-.panel-resize::after{content:"";position:absolute;inset:1px 0;background:transparent}
+/* 两个面板之间的分隔条（7px 是为了好抓，视觉上是一条线） */
+.panel-resize{flex:none;height:7px;position:relative;cursor:row-resize;background:var(--panel)}
+.panel-resize::after{content:"";position:absolute;inset:2px 0;background:transparent}
 .panel-resize:hover::after{background:var(--sel-line)}
 .panel-resize.is-drag::after{background:var(--accent)}
 body.resizing-v{cursor:row-resize}
@@ -263,8 +261,8 @@ body.resizing-v{cursor:row-resize}
   flex:1;min-height:0;overflow-y:auto;overflow-x:hidden;
   padding:0 6px 8px;display:flex;flex-direction:column;
 }
-/* 条目少时吸附在面板最下方 */
-.fav-list{margin-top:auto;width:100%}
+/* 条目从面板顶部往下排（面板底部留白，而不是在标题栏下面空一大截） */
+.fav-list{width:100%}
 /* 面板常驻，空态提示尽量紧凑，少占栏内空间 */
 .fav-scroll .col-note{padding:2px 8px 4px;font-size:11.5px}
 .fav-row{height:26px;width:100%;cursor:default}
@@ -310,11 +308,19 @@ body.resizing{cursor:col-resize}
 /* 图钉 / 刷新 / 关闭 始终吸附在窗格头部的右侧 */
 .pv-btns{display:flex;align-items:center;gap:4px;margin-left:auto}
 .pv-actions .pinbtn.is-on{background:var(--sel);color:var(--accent-ink)}
+/* 图片预览的缩放档位：− [适应/150%] + ，点中间那格回到「适应窗口」 */
+.pv-zoom{display:flex;align-items:center;gap:2px;padding:2px;border-radius:8px;
+  background:var(--panel-2);border:1px solid var(--line)}
+.pv-zoom button{width:22px;height:22px;border-radius:6px;display:grid;place-items:center;color:var(--text-2)}
+.pv-zoom button:hover{background:var(--hover);color:var(--text)}
+.pv-zoom .zoom-val{width:auto;min-width:36px;padding:0 4px;font-size:11px;
+  font-variant-numeric:tabular-nums;color:var(--text-2)}
+.pv-actions .iconbtn[data-act="seq"].is-on{background:var(--sel);color:var(--accent-ink)}
 /* 窗格变窄（多列并行）时：操作按钮换到单独一行并整体靠右，同时收起三个低频按钮——
    复制路径 / 在资源管理器中显示 / 用默认程序打开在右键菜单里都有 */
 @container (max-width: 400px){
   .pv-head{padding:9px 10px 8px;gap:8px}
-  .pv-actions{flex:1 1 100%;margin-left:0}
+  .pv-actions{flex:1 1 100%;margin-left:0;flex-wrap:wrap;justify-content:flex-end}
   .pv-actions .iconbtn[data-act="copy"],
   .pv-actions .iconbtn[data-act="reveal"],
   .pv-actions .iconbtn[data-act="external"]{display:none}
@@ -324,6 +330,29 @@ body.resizing{cursor:col-resize}
 .seg button.is-on{background:var(--panel);color:var(--text);font-weight:500;box-shadow:0 1px 2px rgba(16,24,40,.08)}
 .pv-body{flex:1;min-height:0;display:flex;flex-direction:column;overflow:hidden}
 .pv-body.is-empty{align-items:center;justify-content:center;padding:24px}
+
+/* 预览内查找条（Ctrl+F）：夹在窗格头部与正文之间 */
+.find-bar{
+  flex:none;display:flex;align-items:center;gap:5px;
+  padding:5px 10px;background:var(--panel-2);border-bottom:1px solid var(--line-soft);
+}
+.find-bar .find-ic{color:var(--muted);flex:none}
+.find-input{
+  flex:1;min-width:0;height:22px;border:0;background:none;outline:none;
+  color:var(--text);font:inherit;font-size:12.5px;
+}
+.find-input::placeholder{color:var(--muted)}
+.find-count{
+  flex:none;font-size:11.5px;color:var(--muted);
+  font-variant-numeric:tabular-nums;white-space:nowrap;
+}
+.find-count.is-none{color:var(--danger)}
+.find-bar .iconbtn{width:24px;height:24px;border-radius:6px}
+/* 命中高亮：全部命中是浅黄，当前命中换成强调色 */
+mark.find-hit{padding:1px 0;border-radius:3px;background:#ffe08a;color:inherit}
+[data-theme="dark"] mark.find-hit{background:#6d5a1c;color:var(--text)}
+mark.find-hit.is-current{background:var(--accent);color:#fff}
+[data-theme="dark"] mark.find-hit.is-current{background:var(--accent);color:#0f1115}
 
 /* ============ 空态 / 兜底 ============ */
 .state{text-align:center;color:var(--muted);max-width:360px}
@@ -453,6 +482,31 @@ kbd{
   background-size:18px 18px;background-position:0 0,9px 9px;background-color:var(--panel);
 }
 .img-wrap img{max-width:100%;max-height:100%;border-radius:12px;box-shadow:var(--shadow);background:#fff}
+/* 放大到超过窗口时按像素尺寸摆放，横竖都能滚 */
+.img-wrap.is-zoom{display:block}
+.img-wrap.is-zoom img{display:block;margin:0 auto;max-width:none;max-height:none}
+
+/* ============ 连续预览（同目录图片竖着排下来） ============ */
+.imgseq{
+  flex:1;min-height:0;overflow:auto;padding:22px 0 48px;
+  background:
+    linear-gradient(45deg,var(--panel-2) 25%,transparent 25%,transparent 75%,var(--panel-2) 75%),
+    linear-gradient(45deg,var(--panel-2) 25%,transparent 25%,transparent 75%,var(--panel-2) 75%);
+  background-size:18px 18px;background-position:0 0,9px 9px;background-color:var(--panel);
+}
+.imgseq-item{margin:0 auto 26px;padding:0 24px;text-align:center}
+.imgseq-item img{
+  max-width:100%;height:auto;border-radius:12px;box-shadow:var(--shadow);background:#fff;
+}
+.imgseq.is-zoom .imgseq-item img{display:block;margin:0 auto;max-width:none}
+.imgseq-cap{
+  margin-top:8px;display:flex;align-items:center;justify-content:center;gap:10px;
+  font-size:11.5px;color:var(--muted);
+}
+.imgseq-cap .n{font-variant-numeric:tabular-nums}
+.imgseq-cap .nm{max-width:70%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.imgseq-item.is-current .imgseq-cap .nm{color:var(--text-2)}
+.imgseq-note{padding:4px 16px 12px;text-align:center;font-size:11.5px;color:var(--muted)}
 
 /* ============ Markdown 正文 ============ */
 .prose-wrap{flex:1;min-height:0;overflow:auto}
