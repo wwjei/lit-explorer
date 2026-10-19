@@ -1,0 +1,271 @@
+'use strict';
+
+/**
+ * 需要 Electron 的用例。每段都要付一次 Electron 启动的固定成本，迭代时用 --only
+ * 挑相关的那一段跑，别整跑。
+ *
+ *   proto  pv:// 协议边界（工作区内 200、区外与经链接指向区外 403）
+ *   S1     不可信 docx 不执行脚本（altChunk / 超链接）
+ *   C1     加载完成前固定，固定列不能停在加载态
+ *   C2     旧文档解析失败不覆盖新文件的预览
+ *   C3     高亮 Worker 并发初始化不丢语言
+ *   C4     重新读取时晚到的旧响应不能覆盖新内容
+ *
+ * 跑法：npm run test:integration                        全跑
+ *       npm run test:integration -- --only=C4           只跑一段
+ *       npm run test:integration -- --list              列出段落 id
+ *
+ * 窗口是隐藏的，userData 指向 .tmp/test/user-data，不会碰用户正在用的实例。
+ * 复现手法：IPC 用可控的桩替换（延迟、乱序、失败），断言用户最终看到的东西，
+ * 而不是内部状态。
+ */
+
+const electron = require('electron');
+const { app, BrowserWindow, protocol, ipcMain, net } = electron;
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const JSZip = require('jszip');
+const { ROOT, TMP, run, ok, eq, eqJson, done, freshDir, linkDir } = require('./helpers.cjs');
+
+const fsApi = require(path.join(ROOT, 'src/main/fs-api.js'));
+app.setPath('userData', path.join(TMP, 'user-data'));
+
+/** 各用例里人为注入的延迟，集中在这里便于调整（也是整个套件耗时的大头） */
+const DELAY = { read: 500, parse: 500, fast: 20 };
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * 把 main.js 载入沙箱，只为了拿 registerPreviewProtocol / toPreviewUrl。
+ * 除 app 之外都用真的 electron 模块：main.js 里多引用一个模块（Menu、shell…）
+ * 也不会让这里炸。app 是假的，避免真的开窗、抢单实例锁。
+ */
+function loadMainModule() {
+  const fakeApp = {
+    requestSingleInstanceLock: () => false,
+    whenReady: () => ({ then: () => {} }),
+    on: () => {},
+    quit: () => {},
+    setPath: () => {},
+    getPath: () => TMP,
+    getVersion: () => '0.0.0'
+  };
+  const ctx = {
+    require: (n) => (n === 'electron' ? Object.assign({}, electron, { app: fakeApp })
+      : n === './fs-api' ? fsApi
+        : n === './store' ? { load: async () => ({}), patch: async () => ({}) }
+          : require(n)),
+    process: process,
+    __dirname: path.join(ROOT, 'src/main'),
+    URL, Response, console, setTimeout, clearTimeout
+  };
+  vm.runInNewContext(fs.readFileSync(path.join(ROOT, 'src/main/main.js'), 'utf8'), ctx, { filename: 'main.js' });
+  return ctx;
+}
+
+// main.js 顶层会调用 protocol.registerSchemesAsPrivileged，必须在 app ready 之前执行
+const mainCtx = loadMainModule();
+
+/* ---------------- 按需准备：只跑一段时不为别的段落白付开销 ---------------- */
+
+/** 工作区夹具 + 协议注册，被选中的段落第一次用到时才做 */
+let prepPromise = null;
+function prepare() {
+  if (!prepPromise) {
+    prepPromise = (async () => {
+      const ws = freshDir('ws');
+      const outside = freshDir('outside');
+      fs.writeFileSync(path.join(outside, 'marker.txt'), 'OUTSIDE');
+      fs.writeFileSync(path.join(ws, 'inside.txt'), 'INSIDE');
+      const linked = linkDir(outside, path.join(ws, 'linked'));
+      await fsApi.allowRoot(ws);
+      mainCtx.registerPreviewProtocol();
+      return { ws: ws, outside: outside, linked: linked };
+    })();
+  }
+  return prepPromise;
+}
+
+/** 隐藏窗口 + 渲染进程，同样是按需创建 */
+let winPromise = null;
+let createdWin = null;
+function renderer() {
+  if (!winPromise) {
+    winPromise = (async () => {
+      ipcMain.handle('app:get-state', () => ({}));
+      ipcMain.handle('window:is-maximized', () => false);
+      createdWin = new BrowserWindow({
+        show: false,
+        webPreferences: {
+          preload: path.join(ROOT, 'src/main/preload.js'),
+          sandbox: true, contextIsolation: true, nodeIntegration: false
+        }
+      });
+      await createdWin.loadFile(path.join(ROOT, 'src/renderer/index.html'));
+      return (js) => createdWin.webContents.executeJavaScript(js);
+    })();
+  }
+  return winPromise;
+}
+
+/** 让文件列表里出现给定条目（渲染进程只认主进程推过来的列表） */
+function stubList(ws, entries) {
+  ipcMain.removeHandler('fs:list');
+  ipcMain.handle('fs:list', () => ({ entries: entries.map((e) => ({
+    name: e, path: path.join(ws, e), isDir: false, kind: e.slice(e.lastIndexOf('.') + 1)
+  })) }));
+}
+
+function stubRead(fn) {
+  ipcMain.removeHandler('fs:read');
+  ipcMain.handle('fs:read', fn);
+}
+
+/** 一份带 HTML altChunk 与 javascript: 超链接的 docx */
+async function maliciousDocx() {
+  const zip = new JSZip();
+  zip.file('[Content_Types].xml', '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="html" ContentType="text/html"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>');
+  zip.file('_rels/.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>');
+  zip.file('word/document.xml', '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p><w:r><w:t>BODY_TEXT</w:t></w:r></w:p><w:hyperlink r:id="rIdLink"><w:r><w:t>LINK</w:t></w:r></w:hyperlink><w:altChunk r:id="rIdChunk"/><w:sectPr/></w:body></w:document>');
+  zip.file('word/_rels/document.xml.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdChunk" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/aFChunk" Target="chunk.html"/><Relationship Id="rIdLink" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="javascript:window.__auditHref=1" TargetMode="External"/></Relationships>');
+  zip.file('word/chunk.html', '<script>parent.__auditDocx=typeof(parent.pv.openRoot)</script>');
+  return zip.generateAsync({ type: 'nodebuffer' });
+}
+
+async function main() {
+  await run('proto', 'pv:// 协议 · 工作区边界', async () => {
+    const f = await prepare();
+    const status = (p) => net.fetch(mainCtx.toPreviewUrl(p)).then((r) => r.status);
+    eq('工作区内的文件 200', await status(path.join(f.ws, 'inside.txt')), 200);
+    eq('工作区外的文件 403', await status(path.join(f.outside, 'marker.txt')), 403);
+    if (f.linked) eq('经链接指向工作区外的文件 403', await status(path.join(f.ws, 'linked', 'marker.txt')), 403);
+  });
+
+  await run('S1', '不可信 docx 不执行脚本', async () => {
+    await prepare();
+    const runPage = await renderer();
+    const bytes = await maliciousDocx();
+    const s1 = await runPage(`(async()=>{
+      const host=document.createElement('div'); document.body.append(host);
+      let err=null;
+      try { await PV.docpreview.renderDocx(new Uint8Array(${JSON.stringify([...bytes])}), host); }
+      catch(e){ err=String(e&&e.message||e); }
+      await new Promise(r=>setTimeout(r,${DELAY.parse}));
+      const link=host.querySelector('a');
+      if(link) link.click();
+      return {
+        err: err,
+        executed: typeof window.__auditDocx,
+        hrefExecuted: typeof window.__auditHref,
+        iframes: host.querySelectorAll('iframe').length,
+        srcdoc: host.querySelector('iframe') ? host.querySelector('iframe').getAttribute('srcdoc') : null,
+        bodyText: /BODY_TEXT/.test(host.textContent),
+        linkHref: link ? String(link.getAttribute('href') || '') : ''
+      };
+    })()`);
+    eq('渲染不报错', s1.err, null);
+    eq('altChunk 的脚本没有执行', s1.executed, 'undefined');
+    eq('页面里没有 iframe', s1.iframes, 0);
+    eq('没有 srcdoc 承载的文档', s1.srcdoc, null);
+    ok('正常正文照常渲染', s1.bodyText);
+    ok('超链接没有危险协议', !/^javascript:/i.test(s1.linkHref), s1.linkHref);
+    eq('超链接的脚本没有执行', s1.hrefExecuted, 'undefined');
+  });
+
+  await run('C1', '加载完成前固定，固定列不能停在加载态', async () => {
+    const f = await prepare();
+    const runPage = await renderer();
+    stubList(f.ws, ['slow.md']);
+    stubRead(async () => { await sleep(DELAY.read); return { text: 'LOADED_MARKER', size: 13 }; });
+    createdWin.webContents.send('workspace:opened', f.ws);
+    await sleep(200);
+    const c1 = await runPage(`(async()=>{
+      document.querySelector('.row').click();
+      await new Promise(r=>setTimeout(r,50));
+      document.querySelector('button[data-act="pin"]').click();
+      await new Promise(r=>setTimeout(r,${DELAY.read * 2 + 400}));
+      return [...document.querySelectorAll('.pane.is-pinned .pv-body')].map(e=>e.textContent);
+    })()`);
+    ok('固定列显示正文而不是「读取中…」',
+      c1.length === 1 && c1[0].indexOf('LOADED_MARKER') >= 0, c1);
+  });
+
+  await run('C2', '旧文档解析失败不覆盖新文件的预览', async () => {
+    const f = await prepare();
+    const runPage = await renderer();
+    stubList(f.ws, ['bad.docx', 'good.md']);
+    stubRead(() => ({ text: 'NEW_PREVIEW', size: 11 }));
+    ipcMain.removeHandler('fs:read-bytes');
+    ipcMain.handle('fs:read-bytes', () => ({ data: new Uint8Array([1, 2, 3]) }));
+    await runPage(`void(PV.docpreview.renderDocx=async()=>{await new Promise(r=>setTimeout(r,${DELAY.parse}));throw new Error('OLD_DOC_FAILURE')})`);
+    createdWin.webContents.send('workspace:opened', f.ws);
+    await sleep(200);
+    const c2 = await runPage(`(async()=>{
+      const rows=[...document.querySelectorAll('.row')];
+      rows.find(e=>e.textContent.includes('bad.docx')).click();
+      await new Promise(r=>setTimeout(r,50));
+      rows.find(e=>e.textContent.includes('good.md')).click();
+      await new Promise(r=>setTimeout(r,100));
+      const before=document.querySelector('.pane:not(.is-pinned) .pv-body').textContent;
+      await new Promise(r=>setTimeout(r,${DELAY.parse + 300}));
+      return {before, after:document.querySelector('.pane:not(.is-pinned) .pv-body').textContent};
+    })()`);
+    ok('切换后显示新文件内容', c2.before.indexOf('NEW_PREVIEW') >= 0, c2.before);
+    ok('旧文档失败后仍是新文件内容', c2.after.indexOf('NEW_PREVIEW') >= 0, c2.after);
+    ok('旧文档的失败卡片没有出现', c2.after.indexOf('OLD_DOC_FAILURE') < 0, c2.after);
+  });
+
+  await run('C3', '高亮 Worker 并发初始化不丢语言', async () => {
+    const runPage = await renderer();
+    const c3 = await runPage(`(async()=>{
+      const w=new Worker('vendor/highlight-worker.js',{type:'module'});
+      const jobs=new Map();
+      w.onmessage=e=>{const f=jobs.get(e.data.jobId); if(f){f(e.data); jobs.delete(e.data.jobId);}};
+      let n=0;
+      const send=lang=>new Promise(resolve=>{const jobId=++n; jobs.set(jobId,resolve); w.postMessage({jobId,lang,code:'x = 1'})});
+      const first=await Promise.all([send('css'),send('python')]);
+      const again=await Promise.all([send('css'),send('python')]);
+      const more=await Promise.all([send('go'),send('rust'),send('go')]);
+      w.terminate();
+      const brief=a=>a.map(({ok,error})=>ok?'ok':String(error||'fail'));
+      return {first:brief(first), again:brief(again), more:brief(more)};
+    })()`);
+    eqJson('首次并发请求都成功', c3.first, ['ok', 'ok']);
+    eqJson('再次请求同一批语言都成功（曾经第二次 python 会报 not found）', c3.again, ['ok', 'ok']);
+    eqJson('继续并发请求其他语言也成功', c3.more, ['ok', 'ok', 'ok']);
+  });
+
+  await run('C4', '重新读取时晚到的旧响应不能覆盖新内容', async () => {
+    const f = await prepare();
+    const runPage = await renderer();
+    stubList(f.ws, ['good.md']);
+    let readNo = 0;
+    stubRead(async () => {
+      const mine = ++readNo;
+      await sleep(mine === 1 ? DELAY.read : DELAY.fast);
+      return { text: mine === 1 ? 'OLD_CONTENT' : 'LATEST_CONTENT', size: 13 };
+    });
+    createdWin.webContents.send('workspace:opened', f.ws);
+    await sleep(200);
+    const c4 = await runPage(`(async()=>{
+      [...document.querySelectorAll('.row')].find(e=>e.textContent.includes('good.md')).click();
+      await new Promise(r=>setTimeout(r,50));
+      document.querySelector('.pane:not(.is-pinned) button[data-act="reload"]').click();
+      await new Promise(r=>setTimeout(r,100));
+      const before=document.querySelector('.pane:not(.is-pinned) .pv-body').textContent;
+      await new Promise(r=>setTimeout(r,${DELAY.read + 300}));
+      return {before, after:document.querySelector('.pane:not(.is-pinned) .pv-body').textContent};
+    })()`);
+    ok('重新读取后显示新内容', c4.before.indexOf('LATEST_CONTENT') >= 0, c4.before);
+    ok('旧响应晚到时仍是新内容', c4.after.indexOf('LATEST_CONTENT') >= 0, c4.after);
+  });
+
+  if (createdWin) createdWin.destroy();
+  done();
+}
+
+app.whenReady()
+  .then(main)
+  .catch((err) => { console.error(err); process.exitCode = 1; })
+  .then(() => app.exit(process.exitCode || 0));

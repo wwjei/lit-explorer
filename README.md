@@ -189,6 +189,29 @@ pv.read('<root>/linked/marker.txt')      → EACCES_ROOT（junction 指向外部
 分词在 Worker 里一次完成（TextMate 语法有状态，不能分段），主线程只渲染可见窗口的 DOM。
 语言与主题按需加载（esbuild 切成独立 chunk），双主题 token 用 CSS 变量输出，切主题不重新分词。
 
+## 开发辅助：测试
+
+```bash
+npm test                  # 单元 + Electron 集成
+npm run test:unit         # 只跑不需要 Electron 的那部分（毫秒级）
+npm run test:integration  # 只跑集成套件
+```
+
+覆盖工作区路径边界（符号链接 / junction 越界）、Markdown 链接的协议白名单与属性
+转义、不可信 docx 不执行脚本、预览异步结果的归属（加载中固定、旧文档解析失败、
+同文件重新读取）、高亮 Worker 并发初始化、`pv://` 协议边界。夹具与 `userData` 都
+在 `.tmp/test/` 下，不会碰你正在用的实例；`test/` 不进安装包。
+
+集成套件偏慢，所以支持挑着跑：`--list` 看段落 id，`--only=S2` / `--skip=C1,C2` 选范围，
+被跳过的段落连准备动作一起跳过。**改哪儿跑哪儿，提交前再跑一次全量**；纯逻辑改动
+（Markdown 渲染、路径校验）用 `npm run test:unit`，不需要开窗口。每次运行都会打印
+各段耗时——那才是准数，文档里不抄数字。
+
+换来的是这些「正常使用看不出来」的问题——注入类要打开构造过的文件才触发，异步类
+要靠特定时序才复现——从「每次现写探针脚本」变成一条命令。但它用的是可控 IPC 桩，
+钉住的是逻辑而非真实磁盘时序，界面行为仍然只有截图钩子能验：全绿不等于可以发版。
+用法与取舍见 [docs/agents/verify.md](docs/agents/verify.md)。
+
 ## 开发辅助：命令行截图
 
 主进程带了一个调试用截图钩子，可以在不改代码的情况下驱动界面并截屏，便于回归验证：
