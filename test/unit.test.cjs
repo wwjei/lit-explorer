@@ -5,6 +5,8 @@
  *
  *   S2  Markdown 渲染：链接协议白名单、属性转义、普通语法不退化
  *   S3  工作区路径边界：assertAllowed 按真实路径比较
+ *   S4  渲染进程不能自行扩大授权根：offerRoot / isOfferedRoot
+ *   S5  切换工作区后旧工作区不再可读：resetAllowedRoots
  *
  * 跑法：npm run test:unit                     全跑
  *       npm run test:unit -- --only=S2        只跑一段
@@ -126,6 +128,27 @@ function loadRenderer() {
       eq('Windows 上大小写不同仍算同一个', fsApi.isOfferedRoot(sample.toUpperCase()), true);
     }
     eq('offerRoot 返回原值（便于链式使用）', fsApi.offerRoot(sample), sample);
+  });
+
+  await run('S5', '切换工作区后旧工作区不再可读', async () => {
+    const fsApi = require(path.join(ROOT, 'src/main/fs-api.js'));
+
+    const first = freshDir('ws-first');
+    const second = freshDir('ws-second');
+    fs.writeFileSync(path.join(first, 'a.txt'), 'FIRST');
+    fs.writeFileSync(path.join(second, 'b.txt'), 'SECOND');
+    const read = (p) => fsApi.readFileForPreview(p).then((r) => r.text || r.error, (e) => e.code);
+
+    fsApi.resetAllowedRoots();
+    await fsApi.allowRoot(first);
+    eq('第一个工作区可读', await read(path.join(first, 'a.txt')), 'FIRST');
+    eq('第二个工作区此时不可读', await read(path.join(second, 'b.txt')), 'EACCES_ROOT');
+
+    // openWorkspace 切换工作区时就是这两步
+    fsApi.resetAllowedRoots();
+    await fsApi.allowRoot(second);
+    eq('切换后新工作区可读', await read(path.join(second, 'b.txt')), 'SECOND');
+    eq('切换后旧工作区不再可读', await read(path.join(first, 'a.txt')), 'EACCES_ROOT');
   });
 
   done();

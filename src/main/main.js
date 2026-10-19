@@ -227,6 +227,9 @@ async function openWorkspace(dir, options = {}) {
 
   // 登记并统一使用真实路径：用户可能挑了一个符号链接 / junction，
   // 后续所有路径校验都在真实路径上做，界面里也用同一份地址。
+  // 先清掉上一个工作区的授权根——读权限只跟当前打开的这个工作区走，
+  // 否则在 A 里读过的目录，切到 B 之后仍然可读。
+  fsApi.resetAllowedRoots();
   const root = (await fsApi.allowRoot(abs)) || abs;
   // 打开过的目录也算「给过渲染进程」：它之后可以再打开一次
   fsApi.offerRoot(root);

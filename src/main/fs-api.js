@@ -176,6 +176,16 @@ function allowedRootList() {
   return Array.from(allowedRoots);
 }
 
+/**
+ * 清空已授权根，切换工作区时调用：读权限只跟着当前打开的那个工作区走，
+ * 否则在 A 里打开过的目录，切到 B 之后照样可读。
+ * 不动 offeredRoots —— 那是「渲染进程可以请求打开哪些目录」（含最近打开列表），
+ * 属于另一个问题，清了会让最近打开失效。
+ */
+function resetAllowedRoots() {
+  allowedRoots.clear();
+}
+
 /** 把某个目录提供给渲染进程时登记一下；返回原值，方便链式使用 */
 function offerRoot(dir) {
   if (dir) offeredRoots.add(path.resolve(dir));
@@ -360,6 +370,7 @@ async function statPath(target) {
 module.exports = {
   allowRoot,
   allowedRootList,
+  resetAllowedRoots,
   offerRoot,
   isOfferedRoot,
   offeredRootList,
