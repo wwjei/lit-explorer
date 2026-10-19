@@ -1,5 +1,21 @@
 # 发版
 
+## 发版前检查清单
+
+按顺序过一遍，前两步没过就别往下走：
+
+1. **清空 [PENDING.md](../../PENDING.md)。** 那里是「稍晚一点处理」的小问题池，
+   发版前它必须是空的。清不掉的逐条写明为什么可以带着发，并挪到该去的地方
+   （要拍板的进 [further_notes.md](../../further_notes.md)，等上游的进
+   [docs/security-debt.md](../security-debt.md)）。
+2. **本地跑一次 `npm test`。** CI 也会跑，但等一轮要一分多钟，本地先跑更快。
+   全绿不等于可以发版（界面观感没进断言），改了预览的话自己看一眼。
+3. 看一眼 [docs/security-debt.md](../security-debt.md)：里面的复查触发条件有没有被
+   这次改动碰到。
+4. 按下面的流程发。
+
+## 流程
+
 ```bash
 npm version <新版本> --no-git-tag-version   # 同时更新 package.json 与 package-lock.json
 git add -A && git commit

@@ -48,7 +48,5 @@ electron-builder / electron / esbuild 那一系只在构建机上跑。
 永远解析不到修好的 6.x），卡住所有构建没有意义。CI 里跑的就是这一步。
 
 它只回答「这个包进不进产物」，**不回答「这段代码在我们这里跑不跑得到」**，后者要人看。
-例如 echarts 那条 XSS（GHSA-fgmj-fm8m-jvvx）需要 Lines 系列，而 pptx-preview 只产出
-pie / line / bar；uuid 那条（GHSA-w5hq-g745-h8pq）只影响 v3/v5/v6 带 `buf` 的调用，
-而 pptx-preview 只 import 了 `v4`。两条都够不着，结论记在
-[further_notes.md](../../further_notes.md)。
+当前那三条进产物的 moderate 漏洞的可达性结论（都够不着）与复查触发条件，记在
+[docs/security-debt.md](../security-debt.md)。

@@ -46,9 +46,13 @@ npm run test:integration -- --only=C4           # 只跑一段
 - `docs/agents/` —— 给编码 agent 看的操作手册，按场景分文件，`AGENTS.md` 是索引。
   这里的内容会因为改代码而过期，改动相关的部分要顺手更新。
 - `docs/design/` —— 未实施功能的调研与方案。
-- `further_notes.md` —— 「想过但没做」的事，只放结论，细节指向 `docs/design/`。
-- `FEATURES.md` —— 已经做出来的行为。
+- `docs/security-debt.md` —— 已知但当前没有可行修法的依赖 / 安全问题。
+- `further_notes.md` —— 想做的功能与要拍板的事，只放结论，细节指向 `docs/design/`。
+- `PENDING.md` —— 顺手要清的小问题，**发版前必须是空的**。
+- `FEATURES.md` —— 已经做出来的行为、版本规划、明确的非目标。
 - `README.md` —— 使用者视角。
+
+同一件事只放一个池子。两边都写一遍，改了一边忘了另一边，下一个来的人就会照着过期的那份做事。
 
 ## 提交
 

@@ -38,9 +38,10 @@ lit explorer 是「读本机文件的工具」，所以威胁模型的重点不�
 下面这些**不算漏洞**，是已知且有意的行为：
 
 - 不可信 HTML 预览能读到**当前工作区**里的文件、能发起网络请求——这是「HTML 预览要能
-  引用相对资源」的直接结果，取舍记在 [further_notes.md](further_notes.md)；
+  引用相对资源」的直接结果，边界写在 [README 的隐私与联网一节](README.md#隐私与联网)；
 - 安装包没有代码签名，Windows 会提示「未知发布者」——见
   [README 的发布一节](README.md#发布)；
 - 工作区内指向外部的符号链接在列表里显示为不可用（删除线）——这是刻意的限制。
 
-已经修过的历史问题与当时的复现手法记在 [docs/audits/](docs/audits/)。
+已经修过的历史问题与当时的复现手法记在 [docs/audits/](docs/audits/)；
+已知但**当前没有可行修法**的依赖漏洞记在 [docs/security-debt.md](docs/security-debt.md)。
