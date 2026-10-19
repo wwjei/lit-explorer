@@ -15,6 +15,34 @@
 
 ---
 
+## N6 · 三条进产物的 moderate 漏洞：够不着，但依赖版本确实是旧的（挂起）
+
+出处：加 CI 时第一次成功跑成 `npm audit`（上一轮审查那次因 `registry.npmjs.org` DNS 失败
+没跑成，所以这个盲区一直没被看见）。用 `npm run build && npm run audit` 可以复现。
+
+报出来 11 项 moderate，其中 8 项在构建工具链里（`electron-builder` → `global-agent` →
+`roarr` → `sprintf-js` 那条），不随程序分发。**3 项会进安装包**：
+
+- `echarts <6.1.0` —— Lines 系列的 tooltip 用 innerHTML 渲染 `series.data[i].name`，
+  构造过的 pptx 图表能借此在宿主页里执行脚本（GHSA-fgmj-fm8m-jvvx）。
+- `uuid <11.1.1` —— v3 / v5 / v6 在传 `buf` 时缺缓冲区边界检查（GHSA-w5hq-g745-h8pq）。
+- `pptx-preview` —— 只因上面两个被牵连，自身没有独立的公告。
+
+**两条都够不着，所以现在不改：**
+
+- pptx-preview 只产出 `pie` / `line` / `bar` 三种系列（`dist/pptx-preview.es.js` 里
+  `type:"pie"`、`type:"line"`、`type:"bar"` 各一处），公告要求的 **Lines** 系列不会出现。
+- pptx-preview 只 `import{v4 as s}from"uuid"`，而受影响的是 v3 / v5 / v6。
+
+**「升一下就完了」不成立：** pptx-preview 把依赖钉成 `echarts: ^5.5.1`，永远解析不到修好的
+6.x；`npm audit fix --force` 的提议是把 pptx-preview 降到 1.0.0，那是破坏性降级，比现状更糟。
+
+**什么时候要重新看这条：** pptx-preview 换掉 echarts 的版本范围，或者开始用 Lines 系列 /
+uuid 的 v3、v5、v6。`scripts/audit-report.mjs` 会在「进产物的包出现 high / critical」时让
+CI 失败，但 moderate 的可达性要人判断，所以留着这条备查。
+
+---
+
 ## N5 · 自动更新（挂起，等签名与隐私立场）
 
 `electron-builder` 已经在为 NSIS 目标生成 `app-update.yml` 与 `.blockmap`，但应用里没接

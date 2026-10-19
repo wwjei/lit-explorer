@@ -45,8 +45,7 @@ jobs:
         run: npm run test:integration
 
       - name: 依赖漏洞扫描
-        # 不阻塞构建：结果随每次运行可见，实际处置走 Dependabot 的告警与 PR。
-        # 所有依赖都在 devDependencies，但其中 shiki / docx-preview / pptx-preview
-        # 会被打进安装包，所以扫完整依赖树，不用 --omit=dev。
-        continue-on-error: true
-        run: npm audit --audit-level=high
+        # 只看「会进安装包」的那部分：脚本拿 vendor/meta.json 把真正被打进产物的包与
+        # 构建工具链分开，只有前者出现 high / critical 才返回非零。原始 npm audit 列表
+        # 把两类混在一起，看了没法决定要不要紧张。
+        run: npm run audit

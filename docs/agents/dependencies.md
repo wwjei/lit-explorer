@@ -36,3 +36,19 @@ pptx-preview / jszip 都由 esbuild 打包进 `src/renderer/vendor/`，运行时
 它改依赖会同时改 `package.json` 与 `package-lock.json`，所以不会踩上面那个锁文件坑；
 CI 里的 `npm ci` 是最后一道校验。Electron 的大版本升级被显式忽略——sandbox、自定义协议、
 `webPreferences` 的行为都可能变，要人工过一遍。
+
+## 漏洞扫描要分两堆看
+
+`npm run audit`（`scripts/audit-report.mjs`）读 `vendor/meta.json`，把 `npm audit` 的结果
+按「会不会进安装包」分开：被 esbuild 打进 `src/renderer/vendor/` 的包跟着安装包分发，
+electron-builder / electron / esbuild 那一系只在构建机上跑。
+
+**退出码只由「会进安装包」且 high / critical 的项决定。** moderate 与「仅构建期」一律只
+报告——它们常常没有可用的修复（上游把范围钉死了，比如 pptx-preview 钉的 `echarts ^5.5.1`
+永远解析不到修好的 6.x），卡住所有构建没有意义。CI 里跑的就是这一步。
+
+它只回答「这个包进不进产物」，**不回答「这段代码在我们这里跑不跑得到」**，后者要人看。
+例如 echarts 那条 XSS（GHSA-fgmj-fm8m-jvvx）需要 Lines 系列，而 pptx-preview 只产出
+pie / line / bar；uuid 那条（GHSA-w5hq-g745-h8pq）只影响 v3/v5/v6 带 `buf` 的调用，
+而 pptx-preview 只 import 了 `v4`。两条都够不着，结论记在
+[further_notes.md](../../further_notes.md)。
