@@ -67,30 +67,6 @@
 
 ## 待排期（方案已就绪）
 
-### N3 · Markdown 编辑能力
-
-源码编辑 / 实时预览分屏 / 所见即所得三种形态的取舍，8 个编辑器库的体积与依赖对比，
-以及「改一句话却重排全文」的成因与两条破解思路（块级源映射、CodeMirror 6 即时渲染），
-都在 **[docs/design/markdown-editing.md](docs/design/markdown-editing.md)**。
-
-结论：**先别引依赖。** 下一步是拿 `FEATURES.md` 实测「解析 → 不动任何东西 → 序列化回去」
-的字节 diff，零 diff 的方案才有资格进入下一轮。
-
-**注意这条和路线图是冲突的：** [FEATURES.md](FEATURES.md) 第 2 节把「文件编辑、保存、
-重命名、删除、移动」列为 **v1 明确不做**，第 8 节的 v2.0 里也没有它。所以要么承认它只是
-「长期才可能翻案」，要么先改掉那句非目标——**别在没改 FEATURES.md 之前动手做**，
-否则等于悄悄推翻了已经写下来的产品边界。
-
----
-
-### N2 · 代码视图里的 Ctrl+F
-
-原因（代码视图虚拟滚动，DOM 里只有可见的几十行，DOM 查找最多只能命中当前视口）、
-修法（查找走 `state.lines` 文本模型，在 Shiki 的 token span 边界内套命中）与规模，
-都在 **[docs/design/codeview-find.md](docs/design/codeview-find.md)**。
-
-**这条其实已经排进 v1.2 了。** [FEATURES.md](FEATURES.md) 第 8 节的 v1.2 写着
-「源码/代码视图的查找、查找大小写与整词选项」，说的就是它。所以它不该待在「待排期」里——
-要么按 v1.2 推进，要么从路线图里拿掉。留在这里只因为本文档的方案比路线图那一行具体：
-真要动手时按 [docs/design/codeview-find.md](docs/design/codeview-find.md) 做，做完把
-两边一起删。
+**（暂无）** 方案已经调研清楚、只差优先级的功能放这里。目前没有——已经在
+[FEATURES.md](FEATURES.md) 第 8 节的版本规划里的，不进这个池子，它的方案文档由那一行
+自己指过去。
