@@ -1,0 +1,62 @@
+name: 缺陷报告
+description: 预览不对、界面异常、崩溃等
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        安全漏洞请**不要**发在这里，见 [SECURITY.md](../SECURITY.md)。
+
+  - type: input
+    id: version
+    attributes:
+      label: 版本
+      description: Release 的 tag，或者应用标题栏里的版本号
+      placeholder: 0.0.4-alpha
+    validations:
+      required: true
+
+  - type: textarea
+    id: what
+    attributes:
+      label: 发生了什么
+      description: 期望看到什么、实际看到什么
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      placeholder: |
+        1. 打开工作区 …
+        2. 选中 …
+        3. …
+    validations:
+      required: true
+
+  - type: textarea
+    id: file
+    attributes:
+      label: 相关文件
+      description: |
+        如果是某个文件预览不对，说明它的类型和大致结构就够；能给最小样例最好。
+        **上传前请先确认文件里没有敏感内容。**
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 涉及哪部分
+      multiple: true
+      options:
+        - 多栏导航 / 文件列表
+        - Markdown 预览
+        - 代码高亮
+        - docx / pptx 预览
+        - 图片 / PDF / HTML 预览
+        - 预览内查找
+        - 其它
+    validations:
+      required: false

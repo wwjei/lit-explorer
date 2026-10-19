@@ -1,0 +1,33 @@
+name: 功能建议
+description: 想要一个新能力，或者想改现有行为
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提之前先看一眼 [further_notes.md](../further_notes.md)——「想过但还没做」的事都记在
+        那里，可能已经有调研结论了。
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 你想解决什么问题
+      description: |
+        先说场景，再说你想要的方案。这样即使方案不合适，也可能换个做法解决同一个问题。
+    validations:
+      required: true
+
+  - type: textarea
+    id: idea
+    attributes:
+      label: 你设想的做法
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 试过别的办法吗
+      description: 比如用别的工具，或者拿项目现有功能绕一下
+    validations:
+      required: false
