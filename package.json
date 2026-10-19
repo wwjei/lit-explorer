@@ -4,9 +4,13 @@
   "private": true,
   "description": "lit explorer —— 面向开发者的本地项目文件浏览器：多栏目录导航 + 内嵌预览，双击用系统默认程序打开",
   "main": "src/main/main.js",
+  "author": {
+    "name": "wwjei"
+  },
   "scripts": {
     "build": "node scripts/build-renderer.mjs",
     "icons": "node scripts/build-icons.mjs",
+    "notices": "node scripts/build-notices.mjs",
     "test": "node test/unit.test.cjs && electron test/integration.test.cjs",
     "test:unit": "node test/unit.test.cjs",
     "test:integration": "electron test/integration.test.cjs",
@@ -16,10 +20,11 @@
     "preshot": "npm run build",
     "shot": "electron .",
     "probe": "node scripts/run-probe.mjs",
-    "predist": "npm run build && npm run icons",
+    "predist": "npm run build && npm run icons && npm run notices",
     "dist": "electron-builder --win --publish never"
   },
   "license": "MIT",
+  "//author": "必须是对象形式（author.name）：electron-builder 用 author.name 填 exe 的 CompanyName，写成字符串的话它会取到 undefined，exe 就留着 Electron 原版的厂商信息。",
   "//dependencies": "运行时不需要任何 npm 依赖：主进程只用 electron 与 node 内置模块，shiki / docx-preview / pptx-preview 已由 esbuild 打包进 src/renderer/vendor/。它们放在 devDependencies 里，避免 electron-builder 把 node_modules（其中 echarts+zrender 约 55 MB）打进 app.asar。",
   "dependencies": {},
   "devDependencies": {
@@ -44,10 +49,15 @@
       "package.json"
     ],
     "extraResources": [
+      "LICENSE",
       "FEATURES.md",
       "docs/**/*",
       "!docs/agents/**",
-      "sample-project/**/*"
+      "sample-project/**/*",
+      {
+        "from": "build/notices",
+        "to": "notices"
+      }
     ],
     "win": {
       "icon": "build/icon.ico",

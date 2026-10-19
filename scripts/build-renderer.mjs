@@ -12,6 +12,7 @@
 
 import { build, context } from 'esbuild';
 import { fileURLToPath } from 'node:url';
+import fs from 'node:fs/promises';
 import path from 'node:path';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -65,9 +66,15 @@ if (watch) {
   await docCtx.watch();
   console.log('[build] watching…');
 } else {
-  report(await build(options));
+  const workerResult = await build(options);
+  report(workerResult);
   const docResult = await build(docOptions);
   const key = Object.keys(docResult.metafile.outputs).find((f) => f.endsWith('docpreview.js'));
   const bytes = key ? docResult.metafile.outputs[key].bytes : 0;
   console.log('[build] docpreview.js ' + Math.round(bytes / 1024) + ' KB');
+
+  // 记下「这次真正打进了哪些文件」，build-notices.mjs 据此反查第三方包，
+  // 免得许可声明的包名单需要手工维护
+  const inputs = Object.keys({ ...workerResult.metafile.inputs, ...docResult.metafile.inputs }).sort();
+  await fs.writeFile(path.join(outdir, 'meta.json'), JSON.stringify({ inputs }, null, 0));
 }

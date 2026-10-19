@@ -7,3 +7,4 @@ out/
 # 构建产物（npm start 前会自动生成）
 src/renderer/vendor/
 build/icons/
+build/notices/
