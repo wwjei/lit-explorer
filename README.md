@@ -140,13 +140,19 @@ npm run build     # 生成 src/renderer/vendor/（高亮 Worker 按需 chunk + d
 只能调用 preload 暴露的白名单方法。主进程是唯一的系统访问入口，且**只提供读操作**——
 没有重命名、删除、移动、执行任意命令的接口。
 
-所有路径都要通过 `assertAllowed()`：只能访问已登记为工作区的根目录内部。实测：
+所有路径都要通过 `assertAllowed()`：只能访问已登记为工作区的根目录内部。它比较的是
+`realpath` 之后的真实路径——工作区里指向外部的 junction / 符号链接同样越不过去。实测：
 
 ```
 pv.read('C:\Windows\win.ini')            → EACCES_ROOT
 pv.openPath('...\calc.exe')              → EACCES_ROOT（不会真的启动）
 pv.read('<root>/../../package.json')     → EACCES_ROOT（目录穿越被拦下）
+pv.read('<root>/linked/marker.txt')      → EACCES_ROOT（junction 指向外部）
 ```
+
+预览内容一律按不可信处理：docx 的 altChunk 不渲染，文档渲染完会清掉脚本类节点、
+行内事件属性与危险协议；Markdown 链接只放行 `http(s)` / `mailto` / 相对地址，
+地址里的引号会被转义，事件处理器注入不进去。
 
 ### 为什么预览用自定义 `pv://` 协议
 
@@ -222,6 +228,8 @@ npm run dist      # predist 会先生成高亮 Worker 与图标
 
 - 拖放打开文件夹尚未实现（Electron 32+ 需要用 `webUtils.getPathForFile`）
 - 文件内容被外部修改时预览不会自动刷新，需点预览头的刷新按钮
+- 工作区内指向外部的符号链接 / junction 会在列表里显示为不可用（删除线），
+  点开会提示「超出已授权的工作区范围」；指向工作区内部的链接照常可用
 - 自绘的最大化按钮不支持 Windows 11 贴靠布局（Snap Layouts），需要分屏时用 `Win + 方向键`
 - 首次预览某种语言时有一次性的语法规则编译开销（约 140–600 ms，之后稳定在 10 ms 内）；
   代码视图会先显示纯文本再上色，不会白屏等待

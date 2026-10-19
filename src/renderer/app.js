@@ -479,7 +479,8 @@
     const selected = !!(state.sel && state.sel.node.path === node.path);
     row.classList.toggle('is-sel', selected);
     row.classList.toggle('is-trail', !selected && isInPath(node));
-    row.classList.toggle('is-broken', !!node.broken);
+    // blocked：链接指向工作区之外，点进去必然被拒，样子上就标成不可用
+    row.classList.toggle('is-broken', !!node.broken || !!node.blocked);
     const fav = isFavorite(node.path);
     const favBtn = row.querySelector('.row-fav');
     if (favBtn) {
@@ -494,7 +495,8 @@
     row.className = 'row';
     row.dataset.col = ci;
     row.dataset.idx = idx;
-    row.title = node.name + '\n' + node.path;
+    row.title = node.name + '\n' + node.path
+      + (node.blocked ? '\n（链接指向工作区之外，无法打开）' : '');
     row.setAttribute('role', 'button');
     row.innerHTML = nodeIcon(node)
       + '<span class="nm">' + esc(node.name) + '</span>'
@@ -742,6 +744,9 @@
       if (stale()) return;
     } catch (err) {
       console.error('[docpreview]', err);
+      // 失败卡片也要先看任务是否还属于自己：用户可能已经切走了，
+      // 这时候写进去会盖掉新文件的预览
+      if (stale()) return;
       box.innerHTML = fallbackCard(node, '预览失败：' + ((err && err.message) || err));
     }
   }
@@ -793,6 +798,8 @@
       mode: o.mode || 'preview',
       w: o.w || 0,
       bodyKey: '',
+      reqId: 0,           // 任务身份：每次真正重渲染都换一个，用来丢弃晚到的旧响应
+      pending: 0,         // 还在读/还在解析的渲染任务数，>0 说明正文是加载态空壳
       view: null,
       findEl: null,
       zoom: o.zoom || 0,  // 图片缩放：0 = 适应窗口，其余是倍数
@@ -994,8 +1001,10 @@
       continuous: tempPane.continuous
     });
     state.pins.unshift(pane);
-    // 正在看的那一屏整块搬过去：连续预览滚到第几张、文档读到哪一段都原地保留
-    const keep = adoptPaneBody(pane, tempPane);
+    // 正在看的那一屏整块搬过去：连续预览滚到第几张、文档读到哪一段都原地保留。
+    // 但正文还在读的时候不能搬——搬过去只是个「读取中…」的空壳，而这次读取属于
+    // 原来那一列、回来时会被丢弃，固定列就永远停在加载态。这种情况让新列自己重渲染。
+    const keep = tempPane.pending > 0 ? null : adoptPaneBody(pane, tempPane);
     // 查找条长在窗格上：内容被固定到新列时，查询词与高亮一并跟过去
     const carried = !!(findState && findState.pane === tempPane && findState.query);
     if (carried) carryFind(pane, findState.query);
@@ -1158,18 +1167,24 @@
     pane.bodyKey = key;
     pane.body.className = 'pv-body';
     dropPaneView(pane);
-    const body = renderPaneBody(pane, node, mode, key);
+    // 任务身份与内容 key 分开：key 只说明「该显示什么」，同一个文件重新读取时 key
+    // 不变，只有每次渲染新发的编号能区分前后两次请求，晚到的旧响应才不会盖住新内容。
+    const req = ++pane.reqId;
+    pane.pending++;
+    const body = Promise.resolve(renderPaneBody(pane, node, mode, key, req))
+      .finally(() => { pane.pending--; });
     // 正文是异步填的（读文件、解析文档、取图片地址），填完再把查找高亮落回去
     if (findState && findState.pane === pane) {
       Promise.resolve(body).then(() => {
-        if (findState && findState.pane === pane && pane.bodyKey === key) refreshFind();
+        if (findState && findState.pane === pane && pane.reqId === req) refreshFind();
       });
     }
   }
 
-  async function renderPaneBody(pane, node, mode, key) {
+  async function renderPaneBody(pane, node, mode, key, req) {
     const box = pane.body;
-    const stale = () => pane.bodyKey !== key;
+    // 只认自己那一次请求：晚到的旧响应直接丢掉，不碰 DOM
+    const stale = () => pane.reqId !== req;
 
     // 交给协议地址直接渲染的类型：HTML 迷你浏览器 / 图片 / PDF 内置阅读器
     if (mode === 'preview' && ['html', 'image', 'svg', 'pdf'].indexOf(node.kind) >= 0) {

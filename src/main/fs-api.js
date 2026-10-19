@@ -2,7 +2,8 @@
 
 /**
  * 文件系统访问层：只做读操作，不提供任何写入/删除能力。
- * 所有对外路径都会先经过 assertAllowed() 校验，确保不越出已授权的工作区根目录。
+ * 所有对外路径都会先经过 assertAllowed() 校验，比较的是「真实路径」——
+ * 指向工作区之外的符号链接 / junction 也越不过这条边界。
  */
 
 const fsp = require('node:fs/promises');
@@ -117,23 +118,67 @@ function mimeFor(filePath) {
   return MIME[ext] || 'application/octet-stream';
 }
 
-/** 登记一个工作区根目录 */
-function allowRoot(dir) {
-  if (!dir) return;
-  allowedRoots.add(path.resolve(dir));
+/** Windows 路径比较不区分大小写 */
+function samePath(a, b) {
+  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
+}
+
+/** abs 是否在 root 之内（按路径分段，不用裸前缀比较，避免 C:\a 匹配到 C:\ab） */
+function within(root, abs) {
+  if (samePath(root, abs)) return true;
+  const prefix = root.endsWith(path.sep) ? root : root + path.sep;
+  return process.platform === 'win32'
+    ? abs.toLowerCase().startsWith(prefix.toLowerCase())
+    : abs.startsWith(prefix);
+}
+
+/**
+ * 取路径的真实位置：能 realpath 就 realpath，路径还不存在时解析最长的已存在前缀，
+ * 再把剩下的部分接回去（这样也能为「将来要创建的文件」做校验）。
+ * 只做字符串前缀判断挡不住 junction / 符号链接——它们会指向根目录之外，
+ * 而后续的读写由文件系统跟随链接，所以必须比较真实路径。
+ */
+async function realPath(target) {
+  const abs = path.resolve(target);
+  let probe = abs;
+  const tail = [];
+  for (;;) {
+    try {
+      const real = await fsp.realpath(probe);
+      return tail.length ? path.join(real, ...tail.reverse()) : real;
+    } catch (err) {
+      if (err.code !== 'ENOENT' && err.code !== 'ENOTDIR') throw err;
+      const parent = path.dirname(probe);
+      if (parent === probe) return abs;   // 退到盘符根仍不存在，按原样返回
+      tail.push(path.basename(probe));
+      probe = parent;
+    }
+  }
+}
+
+/** 登记一个工作区根目录，存的是真实路径 */
+async function allowRoot(dir) {
+  if (!dir) return null;
+  const real = await realPath(dir);
+  allowedRoots.add(real);
+  return real;
 }
 
 function allowedRootList() {
   return Array.from(allowedRoots);
 }
 
-/** 路径必须在某个已授权根目录内，否则抛错（防目录穿越） */
-function assertAllowed(target) {
-  const abs = path.resolve(target);
+function isInsideAnyRoot(abs) {
   for (const root of allowedRoots) {
-    if (abs === root) return abs;
-    if (abs.startsWith(root + path.sep)) return abs;
+    if (within(root, abs)) return true;
   }
+  return false;
+}
+
+/** 路径的真实位置必须在某个已授权根目录内，否则抛错；返回真实路径供调用方使用 */
+async function assertAllowed(target) {
+  const abs = await realPath(target);
+  if (isInsideAnyRoot(abs)) return abs;
   const err = new Error('路径不在已授权的工作区内：' + abs);
   err.code = 'EACCES_ROOT';
   throw err;
@@ -145,7 +190,7 @@ function isDirEntry(dirent) {
 
 /** 读取一层目录（只做 readdir，不做 stat，保证大目录首屏足够快） */
 async function listDir(dir) {
-  const abs = assertAllowed(dir);
+  const abs = await assertAllowed(dir);
   const dirents = await fsp.readdir(abs, { withFileTypes: true });
   const entries = [];
   const symlinks = [];
@@ -169,6 +214,9 @@ async function listDir(dir) {
       const st = await fsp.stat(entry.path);
       entry.isDir = st.isDirectory();
       entry.kind = entry.isDir ? 'folder' : kindFor(name);
+      // 指向工作区之外的链接照样会被列出来，但点进去必然被 assertAllowed 挡住。
+      // 标成不可进入，别让它以普通目录的样子出现、点一下才报错。
+      if (!isInsideAnyRoot(await realPath(entry.path))) entry.blocked = true;
     } catch {
       entry.broken = true;
     }
@@ -179,7 +227,7 @@ async function listDir(dir) {
 
 /** 并发受限的批量 stat，用于补全大小与修改时间 */
 async function statEntries(dir, entries, concurrency = 24) {
-  const abs = assertAllowed(dir);
+  const abs = await assertAllowed(dir);
   const metas = Object.create(null);
   let cursor = 0;
 
@@ -214,7 +262,7 @@ function looksBinary(buf) {
 
 /** 读取文件内容用于预览：超长截断、二进制识别、编码兜底 */
 async function readFileForPreview(filePath) {
-  const abs = assertAllowed(filePath);
+  const abs = await assertAllowed(filePath);
   const st = await fsp.stat(abs);
   if (st.isDirectory()) return { error: 'IS_DIR' };
 
@@ -266,7 +314,7 @@ async function readFileForPreview(filePath) {
  * 仍然只读，且必须通过 assertAllowed()；超过上限直接拒绝，不做部分读取。
  */
 async function readFileBytes(filePath, maxBytes = MAX_DOC_BYTES) {
-  const abs = assertAllowed(filePath);
+  const abs = await assertAllowed(filePath);
   const st = await fsp.stat(abs);
   if (st.isDirectory()) return { error: 'IS_DIR' };
   if (st.size > maxBytes) return { tooLarge: true, size: st.size, path: abs };
@@ -276,7 +324,7 @@ async function readFileBytes(filePath, maxBytes = MAX_DOC_BYTES) {
 
 /** 单个路径的元信息（预览头、文件夹摘要用） */
 async function statPath(target) {
-  const abs = assertAllowed(target);
+  const abs = await assertAllowed(target);
   const st = await fsp.stat(abs);
   return { path: abs, size: st.size, mtime: st.mtimeMs, isDir: st.isDirectory() };
 }

@@ -69,22 +69,47 @@ const LANGS = {
 const MAX_TOKENIZE_LINE = 2000;
 
 let highlighter = null;
+let initPromise = null;
 const loaded = new Set();
+const loading = new Map();
+
+/**
+ * 初始化只做一次：onmessage 是异步的，并发请求会在 await 处交错，
+ * 各自看到 highlighter === null 就会建出两个实例、互相覆盖全局引用。
+ * 共享同一个 Promise 可以保证「loaded 里有的语言」一定在最终实例里。
+ */
+function init(firstLang) {
+  if (!initPromise) {
+    initPromise = createHighlighterCore({
+      themes: [THEMES[THEME_LIGHT](), THEMES[THEME_DARK]()],
+      langs: [LANGS[firstLang]()],
+      engine: createJavaScriptRegexEngine({ forgiving: true })
+    }).then((hl) => {
+      highlighter = hl;
+      loaded.add(firstLang);
+      return hl;
+    });
+  }
+  return initPromise;
+}
+
+/** 语言按需加载，同一个语言的并发请求也只加载一次 */
+function loadLang(lang) {
+  if (loaded.has(lang)) return Promise.resolve();
+  let pending = loading.get(lang);
+  if (!pending) {
+    pending = highlighter.loadLanguage(LANGS[lang]()).then(
+      () => { loaded.add(lang); loading.delete(lang); },
+      (err) => { loading.delete(lang); throw err; }   // 失败不缓存，下次还能重试
+    );
+    loading.set(lang, pending);
+  }
+  return pending;
+}
 
 async function ensure(lang) {
-  if (!highlighter) {
-    highlighter = await createHighlighterCore({
-      themes: [THEMES[THEME_LIGHT](), THEMES[THEME_DARK]()],
-      langs: [LANGS[lang]()],
-      engine: createJavaScriptRegexEngine({ forgiving: true })
-    });
-    loaded.add(lang);
-    return highlighter;
-  }
-  if (!loaded.has(lang)) {
-    await highlighter.loadLanguage(LANGS[lang]());
-    loaded.add(lang);
-  }
+  await init(lang);
+  await loadLang(lang);
   return highlighter;
 }
 

@@ -4,11 +4,24 @@
 
   const esc = PV.highlight.escapeHtml;
 
+  /** 链接协议白名单：相对地址与锚点放行，有协议头的只认 http(s) / mailto */
+  function safeHref(url) {
+    const u = String(url).trim();
+    if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(u)) return true;
+    return /^(https?|mailto):/i.test(u);
+  }
+
   function inline(s) {
     const codes = [];
     s = s.replace(/`([^`]+)`/g, (m, c) => { codes.push(c); return '\u0000' + (codes.length - 1) + '\u0000'; });
     s = esc(s);
-    s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+    // 地址跟着正文一起转义过（& < > 已安全）；协议判断不受转义影响，
+    // 剩下的唯一危险字符是引号——转义成 %22 后就不可能逃出 href 属性。
+    s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, text, url) => {
+      if (!safeHref(url)) return m;
+      const href = url.replace(/"/g, '%22').replace(/'/g, '%27');
+      return '<a href="' + href + '" target="_blank" rel="noopener">' + text + '</a>';
+    });
     s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
     s = s.replace(/(^|[^*\w])\*([^*\n]+)\*/g, '$1<em>$2</em>');
     s = s.replace(/~~([^~]+)~~/g, '<del>$1</del>');

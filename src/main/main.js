@@ -76,7 +76,7 @@ function registerPreviewProtocol() {
   protocol.handle('pv', async (request) => {
     let abs;
     try {
-      abs = fsApi.assertAllowed(filePathFromUrl(request.url));
+      abs = await fsApi.assertAllowed(filePathFromUrl(request.url));
     } catch {
       return new Response('forbidden', { status: 403 });
     }
@@ -219,13 +219,15 @@ async function openWorkspace(dir, options = {}) {
     return { error: 'NOT_A_DIRECTORY' };
   }
 
-  fsApi.allowRoot(abs);
+  // 登记并统一使用真实路径：用户可能挑了一个符号链接 / junction，
+  // 后续所有路径校验都在真实路径上做，界面里也用同一份地址。
+  const root = (await fsApi.allowRoot(abs)) || abs;
   const state = await store.load();
-  const recent = [abs, ...(state.recentRoots || []).filter((p) => p !== abs)].slice(0, 8);
-  await store.patch({ lastRoot: abs, recentRoots: recent });
-  win.setTitle(path.basename(abs) + ' · lit explorer');
-  win.webContents.send('workspace:opened', abs);
-  return { root: abs };
+  const recent = [root, ...(state.recentRoots || []).filter((p) => p !== root)].slice(0, 8);
+  await store.patch({ lastRoot: root, recentRoots: recent });
+  win.setTitle(path.basename(root) + ' · lit explorer');
+  win.webContents.send('workspace:opened', root);
+  return { root: root };
 }
 
 /* ------------------------------------------------------------------ *
@@ -284,9 +286,9 @@ function registerIpc() {
     }
   });
 
-  ipcMain.handle('fs:preview-url', (_e, filePath) => {
+  ipcMain.handle('fs:preview-url', async (_e, filePath) => {
     try {
-      return { url: toPreviewUrl(fsApi.assertAllowed(filePath)) };
+      return { url: toPreviewUrl(await fsApi.assertAllowed(filePath)) };
     } catch (err) {
       return { error: err.code || 'EURL' };
     }
@@ -294,7 +296,7 @@ function registerIpc() {
 
   ipcMain.handle('shell:open', async (_e, filePath) => {
     try {
-      const abs = fsApi.assertAllowed(filePath);
+      const abs = await fsApi.assertAllowed(filePath);
       // openPath 就是资源管理器双击的行为：交给系统文件关联
       const message = await shell.openPath(abs);
       return message ? { error: 'OPEN_FAILED', message } : { ok: true };
@@ -303,9 +305,9 @@ function registerIpc() {
     }
   });
 
-  ipcMain.handle('shell:reveal', (_e, filePath) => {
+  ipcMain.handle('shell:reveal', async (_e, filePath) => {
     try {
-      shell.showItemInFolder(fsApi.assertAllowed(filePath));
+      shell.showItemInFolder(await fsApi.assertAllowed(filePath));
       return { ok: true };
     } catch (err) {
       return { error: err.code || 'EREVEAL', message: err.message };

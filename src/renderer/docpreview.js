@@ -9,6 +9,36 @@ import { renderAsync } from 'docx-preview';
 import { init as initPptx } from 'pptx-preview';
 import JSZip from 'jszip';
 
+/**
+ * 解析器把不可信文档直接渲染进宿主页面（宿主有 pv 桥接权限），渲染完再过一遍：
+ * 脚本类节点、内联事件属性、危险协议的地址一律抹掉。
+ *
+ * 真正的关口是 renderDocx 里的 renderAltChunks: false；这一层是兜底。
+ * 它同步跑在 renderAsync 返回之后，那时 altChunk 的 iframe 还没来得及加载
+ * srcdoc，所以即使那个选项被改回 true，脚本也执行不了（实测如此）。
+ */
+function sanitizeDocDom(root) {
+  for (const el of root.querySelectorAll('script, iframe, object, embed')) el.remove();
+  for (const el of root.querySelectorAll('*')) {
+    for (const attr of Array.from(el.attributes)) {
+      const name = attr.name.toLowerCase();
+      if (name.startsWith('on')) {
+        el.removeAttribute(attr.name);
+      } else if (name === 'href' || name === 'src' || name === 'xlink:href') {
+        if (!safeDocUrl(name, attr.value)) el.removeAttribute(attr.name);
+      }
+    }
+  }
+}
+
+/** 有协议头的地址只放行固定几种；相对地址（锚点、图片相对路径）原样保留 */
+function safeDocUrl(name, value) {
+  const url = String(value || '').trim();
+  if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(url)) return true;
+  if (name === 'href') return /^(https?:|mailto:)/i.test(url);
+  return /^(https?:|data:image\/|blob:)/i.test(url);
+}
+
 /** Word：渲染为近似版式的分页 DOM（样式由 docx-preview 注入到容器内） */
 async function renderDocx(data, container) {
   const host = document.createElement('div');
@@ -23,8 +53,11 @@ async function renderDocx(data, container) {
     renderFooters: true,
     renderFootnotes: true,
     useBase64URL: true,
-    experimental: true
+    experimental: true,
+    // altChunk 会被写进没有 sandbox 的 iframe srcdoc，继承宿主源并拿到 pv 桥接
+    renderAltChunks: false
   });
+  sanitizeDocDom(host);
   if (!host.querySelector('.docx-wrapper, section.docx')) {
     throw new Error('未能解析出文档内容');
   }
@@ -89,6 +122,7 @@ async function renderPptx(data, container) {
   const width = Math.max(360, container.clientWidth - 36);
   const previewer = initPptx(host, { width, mode: 'list' });
   await previewer.preview(fixed.data);
+  sanitizeDocDom(host);
   // pptx-preview 解析失败时会静默返回 0 张幻灯片，这里主动暴露出来走兜底卡片
   if (!host.querySelector('.pptx-preview-slide-wrapper')) {
     throw new Error('未能解析出幻灯片，可能是不支持的 PPTX 结构');
