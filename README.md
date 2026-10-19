@@ -4,6 +4,8 @@
 
 面向开发者的本地项目文件浏览器：左侧多栏目录导航，右侧即时预览，双击文件用系统默认程序打开。
 
+只支持 **Windows**（x64），没有 macOS / Linux 的构建目标，也没有跨平台适配的计划。
+
 图标是黑底白色字标，三个竖笔同时是 `l` `i` `T`，也对应界面里的多栏结构——
 几何定义在 `scripts/build-icons.mjs`，SVG 母版与各尺寸 ICO 都由它生成。
 
@@ -154,6 +156,21 @@ pv.read('<root>/linked/marker.txt')      → EACCES_ROOT（junction 指向外部
 行内事件属性与危险协议；Markdown 链接只放行 `http(s)` / `mailto` / 相对地址，
 地址里的引号会被转义，事件处理器注入不进去。
 
+可读范围只有**当前打开的那一个工作区**：切换工作区时会清掉上一个的授权，
+在 A 里读过的目录不会因为切到 B 而继续可读。
+
+### 隐私与联网
+
+没有账号、没有遥测、没有崩溃上报，不往任何服务器发数据，也没有内置的更新检查。
+
+网络请求只有一个来源：**你自己预览的文件**。HTML 预览里的脚本、Markdown 里的外链图片、
+`fetch()` 都会照常联网——它们跑在 Chromium 里，行为和浏览器一致。除此之外应用自身不发起
+任何请求，`pv://` 协议只解析本机文件。
+
+可读范围就是工作区，边界见上面「安全模型」；不可信 HTML 预览能读到**当前工作区**内的文件
+（这是「HTML 预览要能引用相对资源」的直接结果），取舍记在
+[further_notes.md](further_notes.md)。
+
 ### 为什么预览用自定义 `pv://` 协议
 
 直接用 `file://` 加载预览页有两个问题：一是相对路径的样式表/脚本解析受限，二是会把整块磁盘暴露给预览页。
@@ -241,24 +258,36 @@ npm run shot -- --open="./sample-project" --shot=".tmp/shot.png" --shot-js=".tmp
 ## 发布
 
 推送 `v` 开头的 tag 会触发 [.github/workflows/release.yml](.github/workflows/release.yml)：
-在 `windows-latest` 上安装依赖、构建 NSIS 安装包与免安装版，然后创建 Release 并上传产物。
+先在 `windows-latest` 上跑一遍 [.github/workflows/ci.yml](.github/workflows/ci.yml) 的测试，
+过了才构建 NSIS 安装包与免安装版，然后创建 Release 并上传产物。
 tag 里带连字符（如 `v0.0.1-alpha`）会自动标记为预发布。
 
 ```bash
-git tag v0.0.2-alpha
-git push origin v0.0.2-alpha
+git tag v0.0.4-alpha
+git push origin v0.0.4-alpha
 ```
+
+日常提交不需要打 tag：推 `main` 只跑测试，不构建。
 
 本地打包（产物在 `dist/`）：
 
 ```bash
-npm run dist      # predist 会先生成高亮 Worker 与图标
+npm run dist      # predist 会先生成高亮 Worker、图标与第三方许可声明
+node scripts/build-checksums.mjs   # 生成 SHA256SUMS.txt
 ```
 
 - `Lit-Explorer-Setup-<version>.exe` —— NSIS 安装包，可选安装目录
 - `Lit-Explorer-<version>-portable.exe` —— 免安装版
+- `SHA256SUMS.txt` —— 上面两个的校验和
 
-未配置代码签名，Windows SmartScreen 会提示未知发布者。
+**未配置代码签名**，Windows SmartScreen 会提示「未知发布者」。下载后可以核对校验和：
+
+```bash
+sha256sum -c SHA256SUMS.txt
+```
+
+安装目录的 `resources/` 下附带 `LICENSE`、`FEATURES.md`、`docs/` 与第三方许可声明
+`notices/THIRD-PARTY-NOTICES.md`。
 
 ## 已知限制
 
@@ -292,3 +321,13 @@ npm run dist      # predist 会先生成高亮 Worker 与图标
   直接拖到长列表最底部时，最后几张可能要等一下才加载出来
 - 多选（Ctrl/Shift）尚未实现
 - 未配置代码签名，分发时 Windows 会提示未知发布者
+
+## 许可与参与
+
+以 [MIT 许可](LICENSE)发布。产物里打包压缩过的第三方代码（shiki、docx-preview、
+pptx-preview 等，压缩后版权头不可读）各自的许可，由 `npm run notices` 生成成一份
+第三方许可声明，随安装包放在 `resources/notices/THIRD-PARTY-NOTICES.md`。
+
+想改代码请看 [CONTRIBUTING.md](CONTRIBUTING.md)；报告安全漏洞请看 [SECURITY.md](SECURITY.md)，
+不要开公开 issue。已经做出来的行为在 [FEATURES.md](FEATURES.md)，想过但没做的在
+[further_notes.md](further_notes.md)。
