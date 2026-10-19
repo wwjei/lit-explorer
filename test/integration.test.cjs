@@ -6,6 +6,7 @@
  *
  *   proto  pv:// 协议边界（工作区内 200、区外与经链接指向区外 403）
  *   S1     不可信 docx 不执行脚本（altChunk / 超链接）
+ *   S4     渲染进程不能自行扩大授权根（workspace:open 只认主进程给过的目录）
  *   C1     加载完成前固定，固定列不能停在加载态
  *   C2     旧文档解析失败不覆盖新文件的预览
  *   C3     高亮 Worker 并发初始化不丢语言
@@ -51,8 +52,11 @@ function loadMainModule() {
     getPath: () => TMP,
     getVersion: () => '0.0.0'
   };
+  // registerIpc 注册的处理函数收到这里：测试要直接调用真实的那个实现，
+  // 而不是在测试里重写一份（那样就测不到接线了）。
+  const recorder = { handlers: {}, handle(channel, fn) { this.handlers[channel] = fn; } };
   const ctx = {
-    require: (n) => (n === 'electron' ? Object.assign({}, electron, { app: fakeApp })
+    require: (n) => (n === 'electron' ? Object.assign({}, electron, { app: fakeApp, ipcMain: recorder })
       : n === './fs-api' ? fsApi
         : n === './store' ? { load: async () => ({}), patch: async () => ({}) }
           : require(n)),
@@ -61,6 +65,8 @@ function loadMainModule() {
     URL, Response, console, setTimeout, clearTimeout
   };
   vm.runInNewContext(fs.readFileSync(path.join(ROOT, 'src/main/main.js'), 'utf8'), ctx, { filename: 'main.js' });
+  ctx.registerIpc();
+  ctx.handlers = recorder.handlers;
   return ctx;
 }
 
@@ -171,6 +177,29 @@ async function main() {
     ok('正常正文照常渲染', s1.bodyText);
     ok('超链接没有危险协议', !/^javascript:/i.test(s1.linkHref), s1.linkHref);
     eq('超链接的脚本没有执行', s1.hrefExecuted, 'undefined');
+  });
+
+  await run('S4', '渲染进程不能自行扩大授权根', async () => {
+    await prepare();
+    const runPage = await renderer();
+    // 把真实的 workspace:open 接到测试进程的 ipcMain 上，让渲染进程真调一次，
+    // 这样测的是接线而不是测试里另写的一份实现
+    ipcMain.handle('workspace:open', mainCtx.handlers['workspace:open']);
+
+    const denied = await runPage(`pv.openRoot(${JSON.stringify(path.join(ROOT, 'docs'))})
+      .then((r) => r, (e) => ({ threw: String((e && e.message) || e) }))`);
+    eq('渲染进程打不开主进程没给过的目录', denied && denied.error, 'NOT_OFFERED');
+
+    // 主进程给过的目录要能过这道检查（后面报错是因为测试里没有窗口对象，与检查无关）
+    const sample = mainCtx.handlers['workspace:sample']();
+    let allowed;
+    try {
+      allowed = await mainCtx.handlers['workspace:open'](null, sample);
+    } catch (err) {
+      allowed = { threw: String((err && err.message) || err) };
+    }
+    ok('主进程给过的目录不会被这道检查挡住',
+      !allowed || allowed.error !== 'NOT_OFFERED', allowed);
   });
 
   await run('C1', '加载完成前固定，固定列不能停在加载态', async () => {

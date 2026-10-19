@@ -111,6 +111,23 @@ function loadRenderer() {
       fs.realpathSync(path.join(ws, 'inside.txt')));
   });
 
+  await run('S4', '渲染进程不能自行扩大授权根', () => {
+    const fsApi = require(path.join(ROOT, 'src/main/fs-api.js'));
+    const sample = path.join(ROOT, 'sample-project');
+    const other = path.join(ROOT, 'docs');
+
+    eq('主进程没给过的目录打不开', fsApi.isOfferedRoot(sample), false);
+    fsApi.offerRoot(sample);
+    eq('给过之后可以打开', fsApi.isOfferedRoot(sample), true);
+    eq('别的目录仍然打不开', fsApi.isOfferedRoot(other), false);
+    eq('空值打不开', fsApi.isOfferedRoot(''), false);
+    eq('路径写法归一后仍算同一个', fsApi.isOfferedRoot(path.join(sample, 'sub', '..')), true);
+    if (process.platform === 'win32') {
+      eq('Windows 上大小写不同仍算同一个', fsApi.isOfferedRoot(sample.toUpperCase()), true);
+    }
+    eq('offerRoot 返回原值（便于链式使用）', fsApi.offerRoot(sample), sample);
+  });
+
   done();
 })().catch((err) => {
   console.error(err);

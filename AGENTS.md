@@ -18,6 +18,7 @@ lit explorer：Electron 写的本地项目文件浏览器（多栏目录导航 +
 | 改产品行为，写文档与注释 | [docs/agents/conventions.md](docs/agents/conventions.md) |
 | 接手没做完的事、看已知但不修的问题 | [further_notes.md](further_notes.md) |
 | 想弄清某个设计为什么是这样（如高亮的阈值） | [docs/highlighting.md](docs/highlighting.md) 这类设计文档 |
+| 看历史审查记录（为什么有某些防御代码） | [docs/audits/](docs/audits/) 下按日期归档的记录 |
 
 ## 红线
 

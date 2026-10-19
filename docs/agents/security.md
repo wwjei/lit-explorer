@@ -10,6 +10,10 @@
   而读写由文件系统跟随链接，只做字符串前缀判断挡不住。新增入口时不要绕开它，
   也不要自己写 `startsWith` 判断。
 - 不要在 `preload.js` 暴露写、删除、移动或执行任意命令的接口；
+- 授权决策留在主进程。渲染进程只能打开主进程**给过**的目录（`fs-api.js` 的
+  `offerRoot` / `isOfferedRoot`），新增「打开某个目录」的入口时，路径要先由主进程
+  提供（示例项目、最近打开、已打开过的）或者来自 `dialog`，不要直接把渲染进程传来的
+  路径交给 `allowRoot`；
 - 预览 HTML 走 `pv://` 协议（`standard + secure + corsEnabled`），每次请求都要过
   `assertAllowed()`，不要图省事换成 `file://`；
 - 整份读取（如给 docx / pptx 用的 `fs:read-bytes`）要有体积上限，超限直接拒绝而非部分读取。

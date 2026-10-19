@@ -104,6 +104,12 @@ async function createWindow() {
   const state = await store.load();
   const bounds = state.window && state.window.width ? state.window : null;
 
+  // 主进程给过渲染进程的目录：命令行指定、上次的、最近打开过的。
+  // 渲染进程只能从这些里挑着打开（见 workspace:open 的处理）。
+  fsApi.offerRoot(OPEN_ARG);
+  fsApi.offerRoot(state.lastRoot);
+  for (const recent of state.recentRoots || []) fsApi.offerRoot(recent);
+
   win = new BrowserWindow(Object.assign(
     {
       width: 1440,
@@ -222,6 +228,8 @@ async function openWorkspace(dir, options = {}) {
   // 登记并统一使用真实路径：用户可能挑了一个符号链接 / junction，
   // 后续所有路径校验都在真实路径上做，界面里也用同一份地址。
   const root = (await fsApi.allowRoot(abs)) || abs;
+  // 打开过的目录也算「给过渲染进程」：它之后可以再打开一次
+  fsApi.offerRoot(root);
   const state = await store.load();
   const recent = [root, ...(state.recentRoots || []).filter((p) => p !== root)].slice(0, 8);
   await store.patch({ lastRoot: root, recentRoots: recent });
@@ -234,7 +242,7 @@ async function openWorkspace(dir, options = {}) {
  * IPC
  * ------------------------------------------------------------------ */
 function registerIpc() {
-  ipcMain.handle('workspace:sample', () => assetPath('sample-project'));
+  ipcMain.handle('workspace:sample', () => fsApi.offerRoot(assetPath('sample-project')));
 
   ipcMain.handle('workspace:pick', async () => {
     const res = await dialog.showOpenDialog(win, {
@@ -245,7 +253,12 @@ function registerIpc() {
     return openWorkspace(res.filePaths[0]);
   });
 
-  ipcMain.handle('workspace:open', (_e, dir) => openWorkspace(dir));
+  // 只接受主进程给过的目录（示例项目、最近打开、上次的工作区、已打开过的）。
+  // 渲染进程不能凭自己拼的路径把任意现存目录登记成新的授权根——授权决策留在主进程。
+  ipcMain.handle('workspace:open', async (_e, dir) => {
+    if (!fsApi.isOfferedRoot(dir)) return { error: 'NOT_OFFERED' };
+    return openWorkspace(dir);
+  });
 
   ipcMain.handle('fs:list', async (_e, dir) => {
     try {

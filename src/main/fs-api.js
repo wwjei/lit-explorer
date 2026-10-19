@@ -12,6 +12,14 @@ const path = require('node:path');
 /** 允许访问的根目录集合（由主进程在打开工作区时登记） */
 const allowedRoots = new Set();
 
+/**
+ * 主进程「给过」渲染进程的候选目录（示例项目、最近打开、上次的工作区、已打开过的）。
+ * 渲染进程请求打开工作区时只认这份名单——它不能凭一个自己拼出来的路径，把任意现存
+ * 目录登记成新的授权根。这拦不住已经在合法宿主页面里跑起来的脚本（那要靠预览侧的
+ * 注入防线），但它去掉了「注入之后顺手把 C:\ 变成工作区」这条放大路径。
+ */
+const offeredRoots = new Set();
+
 /** 文本预览上限：超过则只读前 5 MB 并标记截断 */
 const MAX_TEXT_BYTES = 5 * 1024 * 1024;
 
@@ -166,6 +174,26 @@ async function allowRoot(dir) {
 
 function allowedRootList() {
   return Array.from(allowedRoots);
+}
+
+/** 把某个目录提供给渲染进程时登记一下；返回原值，方便链式使用 */
+function offerRoot(dir) {
+  if (dir) offeredRoots.add(path.resolve(dir));
+  return dir;
+}
+
+/** 渲染进程请求打开的这个目录，是不是主进程给过的 */
+function isOfferedRoot(dir) {
+  if (!dir) return false;
+  const abs = path.resolve(String(dir));
+  for (const p of offeredRoots) {
+    if (samePath(p, abs)) return true;
+  }
+  return false;
+}
+
+function offeredRootList() {
+  return Array.from(offeredRoots);
 }
 
 function isInsideAnyRoot(abs) {
@@ -332,6 +360,9 @@ async function statPath(target) {
 module.exports = {
   allowRoot,
   allowedRootList,
+  offerRoot,
+  isOfferedRoot,
+  offeredRootList,
   assertAllowed,
   kindFor,
   mimeFor,

@@ -2008,7 +2008,10 @@
   });
   $('#w-sample').addEventListener('click', async () => {
     const dir = await pv.getSampleRoot();
-    if (dir) await pv.openRoot(dir);
+    if (!dir) return;
+    const res = await pv.openRoot(dir);
+    // 主进程只接受它自己给过的目录；真被拒了要说一声，别让按钮看起来没反应
+    if (res && res.error) toast('打不开示例项目：' + res.error);
   });
 
   /* 搜索 */
