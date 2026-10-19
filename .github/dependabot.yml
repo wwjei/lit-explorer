@@ -1,0 +1,37 @@
+version: 2
+
+updates:
+  # 依赖改动会同时更新 package.json 与 package-lock.json，CI 里的 `npm ci` 负责校验
+  # 两者是否同步。手工搬动依赖是这个项目出过三次的事故来源，交给 Dependabot 一次改齐。
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      # shiki 一次升级会牵动十几个 @shikijs/* 子包，不分组就是十几个 PR
+      shiki:
+        patterns:
+          - shiki
+          - "@shikijs/*"
+      # 其余非破坏性升级合成一个 PR，减少噪音
+      minor-and-patch:
+        patterns: ["*"]
+        update-types:
+          - minor
+          - patch
+    ignore:
+      # Electron 大版本升级要人工过一遍：sandbox、自定义协议、webPreferences
+      # 的行为都可能变，不是改个版本号的事
+      - dependency-name: electron
+        update-types: ["version-update:semver-major"]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "chore(ci)"

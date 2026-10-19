@@ -1,0 +1,52 @@
+name: CI
+
+# 推送到任意分支、以及每个 PR 都跑测试。
+# 在这之前只有打 tag 才会触发构建，测试从来没进过 CI —— 回归测试等于只在本地跑，
+# 把测试跑挂的提交照样能打出 tag 发出去。
+#
+# workflow_call 是给 release.yml 复用的：发版前先过同一套测试，不重复写一遍。
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: 测试
+    runs-on: windows-latest
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v7
+
+      - name: 安装 Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装依赖
+        # npm ci 同时校验 package.json 与 package-lock.json 是否同步，不一致直接失败。
+        # 手工搬动依赖而忘了同步锁文件是这个项目出过三次的事故，别再绕过这一步。
+        run: npm ci
+
+      - name: 构建渲染进程产物
+        # 集成测试跑的是真实构建产物（src/renderer/vendor/），不先构建会测到空文件
+        run: npm run build
+
+      - name: 单元测试
+        run: npm run test:unit
+
+      - name: 集成测试
+        run: npm run test:integration
+
+      - name: 依赖漏洞扫描
+        # 不阻塞构建：结果随每次运行可见，实际处置走 Dependabot 的告警与 PR。
+        # 所有依赖都在 devDependencies，但其中 shiki / docx-preview / pptx-preview
+        # 会被打进安装包，所以扫完整依赖树，不用 --omit=dev。
+        continue-on-error: true
+        run: npm audit --audit-level=high
