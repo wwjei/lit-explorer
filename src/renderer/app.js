@@ -69,12 +69,6 @@
       + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
   }
 
-  function metaText(node) {
-    if (node.isDir) return '';
-    const m = meta.get(node.path);
-    return m ? fmtSize(m.size) : '';
-  }
-
   function subPath(node) {
     if (!state.root || !node) return '';
     const root = state.root.replace(/[\\/]+$/, '');
@@ -504,9 +498,8 @@
     row.setAttribute('role', 'button');
     row.innerHTML = nodeIcon(node)
       + '<span class="nm">' + esc(node.name) + '</span>'
-      + '<span class="meta">' + esc(metaText(node)) + '</span>'
-      + '<button class="row-fav" tabindex="-1" aria-label="快速访问"></button>'
-      + (node.isDir ? '<span class="chev">' + icon('chevron', '', 14) + '</span>' : '');
+      + (node.isDir ? '<span class="chev">' + icon('chevron', '', 14) + '</span>' : '')
+      + '<button class="row-fav" tabindex="-1" aria-label="快速访问"></button>';
     applyRowClass(row, node);
     return row;
   }
@@ -892,6 +885,8 @@
   /* ---- 窗格宽度：每列独立，拖动左边界只改这一列 ---- */
   /** 本次渲染各列实际用的宽度（pane.w 是用户设定，这里是被压缩后的结果） */
   let paneWidths = new Map();
+  /** 手动把最左那一列拖宽过之后留下的栏区宽度（0 = 按默认预留） */
+  let mainFloor = 0;
 
   function bodyWidth() {
     return $('#app-body').clientWidth || window.innerWidth;
@@ -902,10 +897,15 @@
     return Math.max(320, Math.round(bodyWidth() * 0.32));
   }
 
-  /** 预览列可用的总宽度：固定列多了以后栏区让步到一栏宽，好让临时预览列保住自己的宽度 */
+  /**
+   * 预览列可用的总宽度：固定列多了以后栏区让步到一栏宽，好让临时预览列保住自己的宽度。
+   * mainFloor 是「手动把最左那一列拖宽过」之后留下的栏区宽度：这时栏区按这个下限让位，
+   * 拖出来的宽度不会被右邻列抢回去。
+   */
   function paneBudget() {
     const n = visiblePanes().length;
-    const reserve = n >= 3 ? MAIN_HARD_MIN : mainComfortWidth();
+    const auto = n >= 3 ? MAIN_HARD_MIN : mainComfortWidth();
+    const reserve = mainFloor ? Math.max(MAIN_HARD_MIN, Math.min(auto, mainFloor)) : auto;
     return Math.max(PANE_MIN * n, bodyWidth() - reserve);
   }
 
@@ -967,6 +967,17 @@
     }
   }
 
+  /**
+   * 手动拖动之前，把「现在看到的宽度」记成各列的设定宽度。
+   * 这样拖动时各列加起来正好等于当前总宽，分界线就是 1:1 跟着指针走，
+   * 不会再出现「拖了没反应」——因为可用宽度早已被别的列的设定值占满。
+   * 代价是这些列不再回弹到更早的设定值：手拖过的布局就是新的设定。
+   */
+  function freezePaneWidths() {
+    fitPaneWidths();
+    for (const p of visiblePanes()) p.w = Math.max(PANE_MIN, Math.floor(effWidth(p)));
+  }
+
   function pinCurrent() {
     if (!tempPane.node) return;
     if (state.pins.length >= MAX_PINS) {
@@ -983,10 +994,70 @@
       continuous: tempPane.continuous
     });
     state.pins.unshift(pane);
+    // 正在看的那一屏整块搬过去：连续预览滚到第几张、文档读到哪一段都原地保留
+    const keep = adoptPaneBody(pane, tempPane);
     // 查找条长在窗格上：内容被固定到新列时，查询词与高亮一并跟过去
-    if (findState && findState.pane === tempPane) carryFind(pane, findState.query);
+    const carried = !!(findState && findState.pane === tempPane && findState.query);
+    if (carried) carryFind(pane, findState.query);
     renderPreview();
+    // 位置要等这一列挂进文档、有了布局之后才落得下去（搬家的元素在文档外读不到高度）
+    if (keep) restorePaneTop(pane, keep);
+    // 正文是搬过来的，没有走重渲染那条路，高亮在这里补落一次
+    if (carried) refreshFind();
     toast('已固定：' + pane.node.name);
+  }
+
+  /**
+   * 把一列的内容整块交给另一列（DOM 直接搬家，不重新渲染）：
+   * 滚动位置、已经解码好的图片、连续预览的列表都原样跟着走——固定住一列
+   * 不会让它又从第一张图 / 文首开始。
+   * 返回搬家前的位置，等新列进了文档再由 restorePaneTop 落回去。
+   */
+  function adoptPaneBody(to, from) {
+    const keep = paneScrollKeep(paneScrollHost(from));
+    to.body.className = from.body.className;
+    to.bodyKey = from.bodyKey;
+    to.images = from.images;
+    to.view = from.view;
+    from.images = [];
+    from.view = null;
+    from.bodyKey = '';
+    from.body.className = 'pv-body is-empty';
+    while (from.body.firstChild) to.body.appendChild(from.body.firstChild);
+    return keep;
+  }
+
+  /**
+   * 记下这一列正在看的位置：图片列按「最上面那张图」记，其它按滚动像素记。
+   * 图片列换列后宽度可能变（临时列收起、固定列分到更多宽度），图片跟着变高变矮，
+   * 只记像素会落到别的一张上，所以记「哪一张 + 它相对视口顶部的偏移」。
+   */
+  function paneScrollKeep(sc) {
+    if (!sc) return null;
+    const keep = { top: sc.scrollTop, item: -1, off: 0 };
+    if (!sc.classList.contains('imgseq')) return keep;
+    const box = sc.getBoundingClientRect();
+    const items = sc.querySelectorAll('.imgseq-item');
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].getBoundingClientRect().bottom > box.top + 4) {
+        keep.item = i;
+        keep.off = Math.round(items[i].offsetTop - sc.offsetTop - sc.scrollTop);
+        break;
+      }
+    }
+    return keep;
+  }
+
+  function restorePaneTop(pane, keep) {
+    if (!keep) return;
+    const sc = paneScrollHost(pane);
+    if (!sc) return;
+    if (keep.item >= 0) {
+      const items = sc.querySelectorAll('.imgseq-item');
+      const at = items[Math.min(keep.item, items.length - 1)];
+      if (at) { sc.scrollTop = Math.max(0, at.offsetTop - sc.offsetTop - keep.off); return; }
+    }
+    sc.scrollTop = keep.top;
   }
 
   /** 把临时列上的查找条交给新的固定列（正文由 renderPane 重渲染后自动重新落高亮） */
@@ -1210,12 +1281,16 @@
     setZoom(pane, next);
   }
 
-  /** Ctrl+滚轮缩放（不按 Ctrl 的滚轮留给滚动，不抢） */
+  /**
+   * Ctrl+滚轮缩放（不按 Ctrl 的滚轮留给滚动，不抢）。
+   * 监听挂在图片容器上，而这个容器可能已经被「固定」搬到别的窗格里，
+   * 所以每次按键都按它当前所在的窗格算。
+   */
   function bindZoomWheel(pane, host) {
     host.addEventListener('wheel', (e) => {
       if (!e.ctrlKey) return;
       e.preventDefault();
-      stepZoom(pane, e.deltaY < 0 ? 1 : -1);
+      stepZoom(paneOf(host) || pane, e.deltaY < 0 ? 1 : -1);
     }, { passive: false });
   }
 
@@ -1225,7 +1300,8 @@
     img.alt = node.name;
     img.draggable = false;
     if (lazy) img.loading = 'lazy';
-    img.addEventListener('load', () => applyZoom(pane));
+    // 图片可能已经跟着内容搬到了别的窗格，缩放要落在它现在那一列上
+    img.addEventListener('load', () => applyZoom(paneOf(img) || pane));
     pane.images.push(img);
     return img;
   }
@@ -1733,6 +1809,15 @@
     return null;
   }
 
+  /** 窗格里的滚动容器，不管它现在能不能滚（图片列的高度要等图片解码完才准） */
+  function paneScrollHost(pane) {
+    for (const sel of PANE_SCROLLERS) {
+      const el = pane.body.querySelector(sel);
+      if (el) return el;
+    }
+    return null;
+  }
+
   /** 返回是否真的滚了：焦点在预览里但这一列没得滚时，按键就到此为止 */
   function scrollPaneBy(pane, dir) {
     const el = paneScroller(pane);
@@ -1810,7 +1895,7 @@
     pv.setState({ leftSplitRatio: state.splitRatio });
   });
 
-  /* 拖动窗格左侧边界：只改这一列的宽度，左右两侧各列都不动 */
+  /** 手动拖动窗格左侧边界：分界线跟着指针走，左邻那一列让出 / 收回同样的宽度 */
   let paneDrag = null;
   panesEl.addEventListener('pointerdown', (e) => {
     const grip = e.target.closest ? e.target.closest('.pane-resize') : null;
@@ -1818,7 +1903,7 @@
     const pane = paneOf(grip);
     if (!pane) return;
     e.preventDefault();
-    paneDrag = { pane: pane, x: e.clientX, w: effWidth(pane) };
+    paneDrag = { pane: pane, x: e.clientX, w: effWidth(pane), tempW: tempPane.w, frozen: false };
     grip.classList.add('is-drag');
     // 合成事件没有真实指针，捕获失败不影响拖动
     try { grip.setPointerCapture(e.pointerId); } catch { /* ignore */ }
@@ -1827,19 +1912,47 @@
   panesEl.addEventListener('pointermove', (e) => {
     if (!paneDrag) return;
     const pane = paneDrag.pane;
-    const others = visiblePanes().reduce((sum, p) => sum + (p === pane ? 0 : effWidth(p)), 0);
-    const max = Math.max(PANE_MIN, paneDragMax() - others);
-    pane.w = Math.min(max, Math.max(PANE_MIN, paneDrag.w - (e.clientX - paneDrag.x)));
+    if (!paneDrag.frozen) {
+      // 以「现在看到的宽度」作为各列的设定宽度再开始拖：这时它们加起来正好是当前总宽，
+      // 分界线就是 1:1 跟着指针走，不会被「按比例压缩」那一套稀释掉
+      freezePaneWidths();
+      const list = visiblePanes();
+      const at = list.indexOf(pane);
+      paneDrag.left = at > 0 ? list[at - 1] : null;
+      paneDrag.w = pane.w;
+      paneDrag.leftW = paneDrag.left ? paneDrag.left.w : 0;
+      paneDrag.frozen = true;
+    }
+    const dx = e.clientX - paneDrag.x;   // 向左拖为负
+    if (paneDrag.left) {
+      // 这两列加起来不变：一列变宽，另一列就变窄，各自都不低于下限
+      const pair = paneDrag.w + paneDrag.leftW;
+      const want = Math.min(pair - PANE_MIN, Math.max(PANE_MIN, paneDrag.w - dx));
+      pane.w = want;
+      paneDrag.left.w = pair - want;
+    } else {
+      // 最左那一列：左边是栏区，加宽就从栏区借，栏区不低于硬下限
+      const others = visiblePanes().reduce((s, p) => s + (p === pane ? 0 : p.w), 0);
+      const max = Math.max(PANE_MIN, paneDragMax() - others);
+      pane.w = Math.min(max, Math.max(PANE_MIN, paneDrag.w - dx));
+      // 记下这一拖给栏区留了多宽：拖动结束后按这个下限留住它，
+      // 不然刚拖出来的宽度会被「按比例压缩」分给右边的固定列
+      const left = bodyWidth() - (pane.w + others);
+      const auto = visiblePanes().length >= 3 ? MAIN_HARD_MIN : mainComfortWidth();
+      mainFloor = left >= auto ? 0 : left;
+    }
     applyPaneWidths();
   });
   panesEl.addEventListener('pointerup', () => {
     if (!paneDrag) return;
-    const pane = paneDrag.pane;
-    pane.grip.classList.remove('is-drag');
+    const drag = paneDrag;
+    const pane = drag.pane;
     paneDrag = null;
+    pane.grip.classList.remove('is-drag');
     document.body.classList.remove('resizing');
-    // 临时预览列的宽度沿用原来的设置项，重启后恢复
+    // 临时预览列的宽度沿用原来的设置项，重启后恢复（它自己拖动、或被左邻让出宽度都算）
     if (!pane.pinned) pv.setState({ previewWidth: pane.w });
+    else if (tempPane.w !== drag.tempW) pv.setState({ previewWidth: tempPane.w });
   });
 
   /* 顶部按钮 */
@@ -2026,19 +2139,6 @@
     if (!dir || !metas) return;
     for (const key of Object.keys(metas)) {
       if (metas[key]) meta.set(key, metas[key]);
-    }
-    // 只更新受影响栏的可见行，避免整列重绘
-    for (let ci = 0; ci < state.path.length; ci++) {
-      if (!state.path[ci] || state.path[ci].path !== dir) continue;
-      const colEl = colsEl.children[ci];
-      if (!colEl) continue;
-      const items = itemsOf(ci);
-      colEl.querySelectorAll('.row').forEach((row) => {
-        const node = items[+row.dataset.idx];
-        if (!node) return;
-        const span = row.querySelector('.meta');
-        if (span) span.textContent = metaText(node);
-      });
     }
     // 元信息到齐后刷新预览头（大小 / 修改时间）
     renderPreview();

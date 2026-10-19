@@ -204,7 +204,7 @@ body.is-maximized .app{box-shadow:none}
   border-radius:7px;position:relative;
 }
 .row .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px}
-.row .meta{flex:none;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+/* 目录多一个进入箭头，排在闪电左边：闪电始终贴右，文件与目录对齐 */
 .row .chev{flex:none;color:var(--muted);opacity:0;margin-right:-2px}
 .row .row-fav{
   flex:none;width:22px;height:22px;border-radius:5px;
@@ -223,7 +223,6 @@ body.is-maximized .app{box-shadow:none}
 .row.is-sel{background:var(--sel);box-shadow:inset 0 0 0 1px var(--sel-line)}
 .row.is-sel .nm{font-weight:500;color:var(--accent-ink)}
 .row.is-sel .chev{opacity:1;color:var(--accent-ink)}
-.row.is-sel .meta{color:color-mix(in srgb,var(--accent-ink) 60%,var(--muted))}
 .row.is-broken .nm{color:var(--muted);text-decoration:line-through}
 
 /* ============ 最左栏：项目根目录 / 快速访问 两个面板 ============ */
