@@ -74,7 +74,7 @@
     </div>
 
     <aside class="preview" id="preview">
-      <!-- 预览窗格由 app.js 生成：临时预览列在最左，固定住的列依次排在右侧；
+      <!-- 预览窗格由 pane.js 生成：临时预览列在最左，固定住的列依次排在右侧；
            每个窗格左侧的边界都可以拖动调宽 -->
       <div class="panes" id="panes"></div>
     </aside>
@@ -113,6 +113,11 @@
 <script src="markdown.js"></script>
 <!-- docx / pptx 预览（npm run build 生成，缺失时该类型回落到兜底卡片） -->
 <script src="vendor/docpreview.js"></script>
+<!-- 窗格（PV.pane）、正文渲染（PV.body）与预览内查找（PV.find）先就位，
+     app.js 负责导航与接线 -->
+<script src="pane.js"></script>
+<script src="preview-body.js"></script>
+<script src="find.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

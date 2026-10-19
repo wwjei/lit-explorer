@@ -1,10 +1,19 @@
-/* 渲染进程主逻辑 */
+/* 渲染进程主逻辑：目录导航 + 交互接线
+ *
+ * 预览窗格的生命周期与布局在 pane.js（PV.pane），正文与头部怎么画在
+ * preview-body.js（PV.body），预览内查找在 find.js（PV.find）。
+ * 这个文件负责：
+ *   - 多栏目录导航：加载、选中、面包屑、虚拟滚动、快速访问
+ *   - 键盘、指针、顶部按钮、主进程事件，以及把上面三个模块接起来
+ *
+ * 加载顺序：icons.js → highlight.js → markdown.js → vendor/docpreview.js →
+ *           pane.js → preview-body.js → find.js → app.js。
+ */
 (function () {
   'use strict';
 
   const { icon, nodeIcon } = PV.icons;
   const { escapeHtml: esc } = PV.highlight;
-  const mdToHtml = PV.markdown.toHtml;
 
   /* 行高与虚拟滚动参数：必须与 styles.css 中 .row 的高度一致 */
   const ROW_H = 28;
@@ -18,10 +27,7 @@
   const colsEl = $('#cols');
   const crumbsEl = $('#crumbs');
   const previewEl = $('#preview');
-  const panesEl = $('#panes');
 
-  /** 最多固定几个预览窗格（加上临时预览列，最多四列并行） */
-  const MAX_PINS = 3;
   /** 最左栏上下两个面板各自的最小高度 */
   const SPLIT_MIN = 48;
 
@@ -34,48 +40,18 @@
     mode: 'preview', // 临时预览列的「预览 / 源码」模式
     query: '',
     theme: 'light',
-    previewOpen: true,       // 临时预览列是否显示（固定列不受它影响）
     pendingScroll: false,
     hideDot: false,          // 是否隐藏以 . 开头的条目
     previewDocx: true,       // 是否内嵌预览 .docx（设置里可关）
     previewPptx: true,       // 是否内嵌预览 .pptx（设置里可关）
     favs: [],                // 当前工作区的快速访问项 [{ path, name, isDir, kind }]
     favoritesByRoot: {},     // 持久化的快速访问项（按工作区根目录分组）
-    pins: [],                // 固定住的预览列（最多 MAX_PINS 个），[0] 是最新固定的，排在最左
     favTop: false,           // 最左栏：快速访问面板是否在上（false = 项目根目录在上）
     splitRatio: 2 / 3        // 最左栏「上 : 下」的高度比例，跟着位置走，与哪个面板在上面无关
   };
 
-  /** 路径 -> { size, mtime }，由主进程异步补发 */
-  const meta = new Map();
   let renderedColKeys = [];
   let welcomeVisible = false;
-
-  /* ============================ 格式化 ============================ */
-  const UNITS = ['B', 'KB', 'MB', 'GB', 'TB'];
-
-  function fmtSize(bytes) {
-    let n = Number(bytes) || 0;
-    let i = 0;
-    while (n >= 1024 && i < UNITS.length - 1) { n /= 1024; i++; }
-    return (i === 0 ? n.toFixed(0) : n.toFixed(1)) + ' ' + UNITS[i];
-  }
-
-  function fmtTime(ms) {
-    if (!ms) return '';
-    const d = new Date(ms);
-    const p = (v) => String(v).padStart(2, '0');
-    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate())
-      + ' ' + p(d.getHours()) + ':' + p(d.getMinutes());
-  }
-
-  function subPath(node) {
-    if (!state.root || !node) return '';
-    const root = state.root.replace(/[\\/]+$/, '');
-    const abs = node.path;
-    const rel = abs.toLowerCase().startsWith(root.toLowerCase()) ? abs.slice(root.length) : abs;
-    return rel.replace(/^[\\/]+/, '');
-  }
 
   /* ============================ 快速访问 ============================ */
   /** 快速访问项按工作区分组；Windows 路径大小写不敏感，统一成小写作为键 */
@@ -208,10 +184,8 @@
     state.sel = { col: targetCol, node: target };
     if (target.isDir) {
       state.path.push(target);
-    } else if (!state.previewOpen) {
-      state.previewOpen = true;
-      $('#btn-preview').classList.remove('is-on');
-      pv.setState({ previewOpen: true });
+    } else if (!PV.pane.previewOpen()) {
+      setPreviewVisible(true);
     }
     state.pendingScroll = true;
     render();
@@ -320,6 +294,18 @@
     return list;
   }
 
+  /**
+   * 某个目录当前显示出来的条目（过滤与排序都算过），没开在栏里就返回 null。
+   * 连续预览要「顺序跟栏内一致」，拿的就是这个。
+   */
+  function itemsInDir(dir) {
+    for (let ci = 0; ci < state.cols.length; ci++) {
+      const col = state.cols[ci];
+      if (col && col.dir === dir && col.entries) return itemsOf(ci);
+    }
+    return null;
+  }
+
   function isInPath(node) {
     for (let i = 1; i < state.path.length; i++) {
       if (state.path[i].path === node.path) return true;
@@ -370,10 +356,9 @@
     state.mode = 'preview';
     state.favs = normalizeFavorites(state.favoritesByRoot[favKey(dir)]);
     // 固定列装的是上一个工作区的文件，换工作区后一律清掉
-    while (state.pins.length) destroyPane(state.pins.pop());
-    closeFind();
-    tempPane.node = null;
-    tempPane.bodyKey = '';
+    PV.pane.clearPins();
+    PV.find.close();
+    PV.pane.resetTemp();
     setWelcome(false);
     render();
     await loadColumn(0);
@@ -393,10 +378,8 @@
       state.cols.length = ci + 1;
       state.pendingScroll = false;
       // 预览被收起时，重新单击文件应当把预览内容带回来
-      if (!state.previewOpen && opts.revealPreview) {
-        state.previewOpen = true;
-        $('#btn-preview').classList.remove('is-on');
-        pv.setState({ previewOpen: true });
+      if (!PV.pane.previewOpen() && opts.revealPreview) {
+        setPreviewVisible(true);
       }
       render();
     }
@@ -663,1001 +646,23 @@
     }
   }
 
-  /* ============================ 渲染：预览 ============================ */
-  function emptyState() {
-    return '<div class="state">'
-      + '<div class="big">' + icon('folder', '', 26) + '</div>'
-      + '<h4>未选择文件</h4>'
-      + '<p>在左侧栏中选择一个文件即可在此预览，双击则调用系统默认程序打开。</p>'
-      + '<div class="keys">'
-      + '<span><kbd>↑</kbd><kbd>↓</kbd> 选择</span>'
-      + '<span><kbd>→</kbd> 进入目录</span>'
-      + '<span><kbd>←</kbd> 返回上级</span>'
-      + '<span><kbd>⏎</kbd> 打开</span>'
-      + '<span><kbd>Ctrl</kbd><kbd>F</kbd> 查找</span>'
-      + '</div></div>';
-  }
+  /* ============================ 渲染：预览正文 ============================ */
+  // 正文与头部怎么画在 preview-body.js（PV.body）：Markdown / 代码视图 / 图片与
+  // 连续预览 / HTML 迷你浏览器 / PDF / docx / pptx 的分派都在那里，这里只把它接到
+  // 窗格上（见下面 PV.pane.init）。
 
-  function loadingState(text) {
-    return '<div class="state"><div class="spinner"></div><p>' + esc(text || '读取中…') + '</p></div>';
-  }
-
-  function fallbackCard(node, note) {
-    const m = meta.get(node.path);
-    return '<div class="state">'
-      + '<div class="big">' + icon('box', '', 24) + '</div>'
-      + '<h4>' + esc(node.name) + '</h4>'
-      + '<p>' + esc(note || '该类型暂不支持内嵌预览') + (m ? '（' + fmtSize(m.size) + '）' : '') + '</p>'
-      + '<div class="state-action"><button class="btn-quiet" data-act="external">'
-      + icon('external', '', 14) + '<span>用默认程序打开</span></button></div>'
-      + '</div>';
-  }
-
-  function browserChrome(node, url) {
-    // 地址栏显示真实文件地址（可读），iframe 用 pv:// 协议加载（相对资源可解析）
-    const shown = 'file:///' + node.path.replace(/\\/g, '/');
-    return '<div class="browser">'
-      + '<div class="browser-bar">'
-      + '<span class="dots"><i class="r"></i><i class="y"></i><i class="g"></i></span>'
-      + '<div class="addr">' + icon('lock', '', 12) + '<span title="' + esc(shown) + '">' + esc(shown) + '</span></div>'
-      + '<button class="iconbtn" data-act="reload" title="刷新">' + icon('refresh', '', 15) + '</button>'
-      + '</div>'
-      + '<iframe class="frame" title="' + esc(node.name) + ' 预览" '
-      + 'sandbox="allow-scripts allow-forms allow-popups allow-modals" src="' + esc(url) + '"></iframe>'
-      + '</div>';
-  }
-
-  /** PDF：交给 Chromium 内置阅读器渲染（需要 webPreferences.plugins） */
-  function pdfFrame(node, url) {
-    return '<div class="pdfview"><iframe class="pdf-frame" title="' + esc(node.name) + ' 预览" '
-      + 'src="' + esc(url) + '"></iframe></div>';
-  }
-
-  /** docx / pptx：整份字节读进渲染进程，交给 vendor/docpreview.js 里的纯前端解析器 */
-  async function renderDocPreview(pane, node, kind, stale) {
-    const box = pane.body;
-    if (!PV.docpreview) {
-      box.innerHTML = fallbackCard(node, '预览组件未构建：请先运行 npm run build');
-      return;
-    }
-    box.innerHTML = loadingState('正在解析 ' + (kind === 'docx' ? 'Word' : 'PowerPoint') + ' 文档…');
-    const res = await pv.readBytes(node.path);
-    if (stale()) return;
-    if (res.error) { box.innerHTML = fallbackCard(node, '读取失败：' + res.error); return; }
-    if (res.tooLarge) {
-      box.innerHTML = fallbackCard(node, '文件较大（' + fmtSize(res.size) + '），暂不内嵌预览');
-      return;
-    }
-
-    const raw = res.data;
-    let buf = raw;
-    if (raw instanceof Uint8Array) buf = raw.buffer.slice(raw.byteOffset, raw.byteOffset + raw.byteLength);
-    else if (raw && raw.type === 'Buffer' && Array.isArray(raw.data)) buf = new Uint8Array(raw.data).buffer;
-
-    const wrap = document.createElement('div');
-    wrap.className = 'docview';
-    box.innerHTML = '';
-    box.appendChild(wrap);
-    try {
-      if (kind === 'docx') await PV.docpreview.renderDocx(buf, wrap);
-      else await PV.docpreview.renderPptx(buf, wrap);
-      if (stale()) return;
-    } catch (err) {
-      console.error('[docpreview]', err);
-      // 失败卡片也要先看任务是否还属于自己：用户可能已经切走了，
-      // 这时候写进去会盖掉新文件的预览
-      if (stale()) return;
-      box.innerHTML = fallbackCard(node, '预览失败：' + ((err && err.message) || err));
-    }
-  }
-
-  /** 源码视图用的语言 id：按当前窗格的模式取，未知语言返回 null（纯文本） */
-  function langForNode(node, mode) {
-    if (mode === 'source') {
-      if (node.kind === 'md') return 'markdown';
-      if (node.kind === 'html') return 'html';
-      if (node.kind === 'svg') return 'xml';
-    }
-    return PV.highlight.langFor(node.name);
-  }
-
-  /* ============================ 预览窗格 ============================ *
-   * 预览区由若干「窗格」组成，每个窗格各自记住文件、模式与宽度：
-   *   - 临时预览：只跟随「选中文件」更新。选中文件夹不动它（文件夹没有预览）
-   *   - 固定列：由图钉固定下来，最多 MAX_PINS 个，新固定的排在旧固定的右边
-   * 选中项已经出现在某个固定列里时，临时预览不再重复展示同一份内容。
-   * 每个窗格左侧的边界都可以拖动，且只改这一列的宽度。
-   * ------------------------------------------------------------------ */
-  const PANE_MIN = 240;        // 单个窗格的最小宽度
-  const MAIN_HARD_MIN = 260;   // 栏区的绝对下限（约一栏宽），手动拖动也不越过
-  let paneSeq = 0;
-  const panes = new Map();
-
-  function createPane(opts) {
-    const o = opts || {};
-    const el = document.createElement('div');
-    el.className = 'pane' + (o.pinned ? ' is-pinned' : '');
-    const grip = document.createElement('div');
-    grip.className = 'pane-resize';
-    grip.title = '拖动调整此预览列宽度';
-    const head = document.createElement('div');
-    head.className = 'pv-head';
-    const body = document.createElement('div');
-    body.className = 'pv-body is-empty';
-    el.appendChild(grip);
-    el.appendChild(head);
-    el.appendChild(body);
-    const pane = {
-      id: ++paneSeq,
-      pinned: !!o.pinned,
-      el: el,
-      grip: grip,
-      head: head,
-      body: body,
-      node: o.node || null,
-      mode: o.mode || 'preview',
-      w: o.w || 0,
-      bodyKey: '',
-      reqId: 0,           // 任务身份：每次真正重渲染都换一个，用来丢弃晚到的旧响应
-      pending: 0,         // 还在读/还在解析的渲染任务数，>0 说明正文是加载态空壳
-      view: null,
-      findEl: null,
-      zoom: o.zoom || 0,  // 图片缩放：0 = 适应窗口，其余是倍数
-      continuous: !!o.continuous, // 连续预览：同目录图片竖着排下来
-      images: []          // 当前窗格里的 <img>，改缩放时直接落到它们身上
-    };
-    el.dataset.pane = String(pane.id);
-    panes.set(pane.id, pane);
-    return pane;
-  }
-
-  /** 临时预览列：始终在最左，内容跟随选中的文件 */
-  const tempPane = createPane({});
-
-  function destroyPane(pane) {
-    // 查找条长在这个窗格里，窗格没了查找状态也就没意义了
-    if (findState && findState.pane === pane) findState = null;
-    dropPaneView(pane);
-    panes.delete(pane.id);
-    pane.el.remove();
-  }
-
-  /** 代码视图自带 ResizeObserver，换内容前必须销毁，否则越挂越多 */
-  function dropPaneView(pane) {
-    if (pane.view && pane.view.destroy) pane.view.destroy();
-    pane.view = null;
-  }
-
-  function paneOf(el) {
-    const host = el && el.closest ? el.closest('.pane') : null;
-    if (!host) return null;
-    return panes.get(Number(host.dataset.pane)) || null;
-  }
-
-  function paneMode(pane) {
-    return pane.pinned ? pane.mode : state.mode;
-  }
-
-  function allPanes() {
-    return [tempPane].concat(state.pins);
-  }
-
-  /** 临时预览列是否多余：用户关掉了它，或者内容已经在固定列里 */
-  function tempPaneHidden() {
-    if (!state.previewOpen) return true;
-    if (!state.pins.length) return false;
-    if (!tempPane.node) return true;
-    return isPinnedPath(tempPane.node.path);
-  }
-
-  function isPinnedPath(path) {
-    return state.pins.some((p) => p.node && p.node.path === path);
-  }
-
-  /** 实际显示出来的窗格：临时预览（若不多余）在最左，固定列按固定先后从右往左排 */
-  function visiblePanes() {
-    const list = [];
-    if (!tempPaneHidden()) list.push(tempPane);
-    for (let i = 0; i < state.pins.length; i++) list.push(state.pins[i]);
-    return list;
-  }
-
-  /**
-   * 临时预览列只在这两种情况下更新：
-   * 1. 选中了一个文件，且这个文件没有出现在任何固定列里
-   * 2. 都不满足时保持原样——选中文件夹、或选中「已经固定住的文件」都不动它
-   *    （比如固定了 A、临时列在看 B，再点回 A 时 B 要留着）
-   */
-  function syncTempPane() {
-    const sel = state.sel;
-    if (!sel || sel.node.isDir) return;
-    if (isPinnedPath(sel.node.path)) return;
-    tempPane.node = sel.node;
-  }
-
-  /**
-   * 排列顺序固定为「临时预览 | 固定 1 | 固定 2 | …」。
-   * 用 flex order 排，而不是把节点重新 append 一遍：把一个已经挂在文档里的节点
-   * 重新 append（等于先摘下来再插回去）会把它内部的滚动位置清零——固定列里
-   * 正读到一半的文档会突然跳回顶部。
-   */
-  function syncPaneOrder(list) {
-    for (let i = 0; i < list.length; i++) {
-      const pane = list[i];
-      if (pane.el.parentNode !== panesEl) panesEl.appendChild(pane.el);
-      pane.el.style.order = String(i);
-    }
-  }
-
-  /* ---- 窗格宽度：每列独立，拖动左边界只改这一列 ---- */
-  /** 本次渲染各列实际用的宽度（pane.w 是用户设定，这里是被压缩后的结果） */
-  let paneWidths = new Map();
-  /** 手动把最左那一列拖宽过之后留下的栏区宽度（0 = 按默认预留） */
-  let mainFloor = 0;
-
-  function bodyWidth() {
-    return $('#app-body').clientWidth || window.innerWidth;
-  }
-
-  /** 栏区的舒适宽度：新增预览列、窗口变窄时按这个值给它留位 */
-  function mainComfortWidth() {
-    return Math.max(320, Math.round(bodyWidth() * 0.32));
-  }
-
-  /**
-   * 预览列可用的总宽度：固定列多了以后栏区让步到一栏宽，好让临时预览列保住自己的宽度。
-   * mainFloor 是「手动把最左那一列拖宽过」之后留下的栏区宽度：这时栏区按这个下限让位，
-   * 拖出来的宽度不会被右邻列抢回去。
-   */
-  function paneBudget() {
-    const n = visiblePanes().length;
-    const auto = n >= 3 ? MAIN_HARD_MIN : mainComfortWidth();
-    const reserve = mainFloor ? Math.max(MAIN_HARD_MIN, Math.min(auto, mainFloor)) : auto;
-    return Math.max(PANE_MIN * n, bodyWidth() - reserve);
-  }
-
-  /** 手动拖动时的上限：可以把栏区压到一栏宽，但不允许更窄 */
-  function paneDragMax() {
-    return Math.max(PANE_MIN, bodyWidth() - MAIN_HARD_MIN);
-  }
-
-  function ensurePaneWidths() {
-    if (!tempPane.w) tempPane.w = Math.max(PANE_MIN, Math.round(bodyWidth() * 0.46));
-  }
-
-  /**
-   * 空间不够时按比例压缩，但**只压渲染宽度、不改用户设定的宽度**——
-   * pane.w 是「我希望它多宽」，关掉几个预览列后要能原样回来。
-   * 压缩顺序也有讲究：先让固定列让位（它们是参考用的，240px 也看得清），
-   * 临时预览列是正在读的那一列，尽量保住用户拖出来的宽度。
-   */
-  function squeezeInto(list, eff, amount) {
-    const flex = list.filter((p) => eff.get(p) > PANE_MIN);
-    if (!flex.length) return;
-    const cap = flex.reduce((s, p) => s + (eff.get(p) - PANE_MIN), 0);
-    const cut = Math.min(amount, cap);
-    flex.forEach((p) => { eff.set(p, eff.get(p) - Math.round(cut * (eff.get(p) - PANE_MIN) / cap)); });
-  }
-
-  function fitPaneWidths() {
-    const list = visiblePanes();
-    const budget = paneBudget();
-    const eff = new Map();
-    for (const p of list) eff.set(p, p.w);
-    const total = () => list.reduce((s, p) => s + eff.get(p), 0);
-    let over = total() - budget;
-    if (over > 0) {
-      const pins = list.filter((p) => p !== tempPane);
-      for (let guard = 0; guard < 8 && over > 0; guard++) {
-        squeezeInto(pins, eff, over);
-        over = total() - budget;
-      }
-      for (let guard = 0; guard < 8 && over > 0; guard++) {
-        squeezeInto(list, eff, over);
-        over = total() - budget;
-      }
-    }
-    paneWidths = eff;
-  }
-
-  /** 某一列当前实际渲染的宽度 */
-  function effWidth(pane) {
-    const w = paneWidths.get(pane);
-    return w === undefined ? pane.w : w;
-  }
-
-  function applyPaneWidths() {
-    fitPaneWidths();
-    for (const pane of allPanes()) {
-      if (pane.el.hidden) continue;
-      pane.el.style.width = Math.round(effWidth(pane)) + 'px';
-    }
-  }
-
-  /**
-   * 手动拖动之前，把「现在看到的宽度」记成各列的设定宽度。
-   * 这样拖动时各列加起来正好等于当前总宽，分界线就是 1:1 跟着指针走，
-   * 不会再出现「拖了没反应」——因为可用宽度早已被别的列的设定值占满。
-   * 代价是这些列不再回弹到更早的设定值：手拖过的布局就是新的设定。
-   */
-  function freezePaneWidths() {
-    fitPaneWidths();
-    for (const p of visiblePanes()) p.w = Math.max(PANE_MIN, Math.floor(effWidth(p)));
-  }
-
-  function pinCurrent() {
-    if (!tempPane.node) return;
-    if (state.pins.length >= MAX_PINS) {
-      toast('最多固定 ' + MAX_PINS + ' 个预览，先取消一个再固定');
-      return;
-    }
-    // 新固定的排在已有固定列的左边：它本来就在临时预览列的位置上，固定后原地不动
-    const pane = createPane({
-      pinned: true,
-      node: tempPane.node,
-      mode: state.mode,
-      w: Math.max(PANE_MIN, tempPane.w || Math.round(bodyWidth() * 0.46)),
-      zoom: tempPane.zoom,
-      continuous: tempPane.continuous
-    });
-    state.pins.unshift(pane);
-    // 正在看的那一屏整块搬过去：连续预览滚到第几张、文档读到哪一段都原地保留。
-    // 但正文还在读的时候不能搬——搬过去只是个「读取中…」的空壳，而这次读取属于
-    // 原来那一列、回来时会被丢弃，固定列就永远停在加载态。这种情况让新列自己重渲染。
-    const keep = tempPane.pending > 0 ? null : adoptPaneBody(pane, tempPane);
-    // 查找条长在窗格上：内容被固定到新列时，查询词与高亮一并跟过去
-    const carried = !!(findState && findState.pane === tempPane && findState.query);
-    if (carried) carryFind(pane, findState.query);
-    renderPreview();
-    // 位置要等这一列挂进文档、有了布局之后才落得下去（搬家的元素在文档外读不到高度）
-    if (keep) restorePaneTop(pane, keep);
-    // 正文是搬过来的，没有走重渲染那条路，高亮在这里补落一次
-    if (carried) refreshFind();
-    toast('已固定：' + pane.node.name);
-  }
-
-  /**
-   * 把一列的内容整块交给另一列（DOM 直接搬家，不重新渲染）：
-   * 滚动位置、已经解码好的图片、连续预览的列表都原样跟着走——固定住一列
-   * 不会让它又从第一张图 / 文首开始。
-   * 返回搬家前的位置，等新列进了文档再由 restorePaneTop 落回去。
-   */
-  function adoptPaneBody(to, from) {
-    const keep = paneScrollKeep(paneScrollHost(from));
-    to.body.className = from.body.className;
-    to.bodyKey = from.bodyKey;
-    to.images = from.images;
-    to.view = from.view;
-    from.images = [];
-    from.view = null;
-    from.bodyKey = '';
-    from.body.className = 'pv-body is-empty';
-    while (from.body.firstChild) to.body.appendChild(from.body.firstChild);
-    return keep;
-  }
-
-  /**
-   * 记下这一列正在看的位置：图片列按「最上面那张图」记，其它按滚动像素记。
-   * 图片列换列后宽度可能变（临时列收起、固定列分到更多宽度），图片跟着变高变矮，
-   * 只记像素会落到别的一张上，所以记「哪一张 + 它相对视口顶部的偏移」。
-   */
-  function paneScrollKeep(sc) {
-    if (!sc) return null;
-    const keep = { top: sc.scrollTop, item: -1, off: 0 };
-    if (!sc.classList.contains('imgseq')) return keep;
-    const box = sc.getBoundingClientRect();
-    const items = sc.querySelectorAll('.imgseq-item');
-    for (let i = 0; i < items.length; i++) {
-      if (items[i].getBoundingClientRect().bottom > box.top + 4) {
-        keep.item = i;
-        keep.off = Math.round(items[i].offsetTop - sc.offsetTop - sc.scrollTop);
-        break;
-      }
-    }
-    return keep;
-  }
-
-  function restorePaneTop(pane, keep) {
-    if (!keep) return;
-    const sc = paneScrollHost(pane);
-    if (!sc) return;
-    if (keep.item >= 0) {
-      const items = sc.querySelectorAll('.imgseq-item');
-      const at = items[Math.min(keep.item, items.length - 1)];
-      if (at) { sc.scrollTop = Math.max(0, at.offsetTop - sc.offsetTop - keep.off); return; }
-    }
-    sc.scrollTop = keep.top;
-  }
-
-  /** 把临时列上的查找条交给新的固定列（正文由 renderPane 重渲染后自动重新落高亮） */
-  function carryFind(pane, query) {
-    closeFind();
-    if (!query) return;
-    const bar = ensureFindBar(pane);
-    bar.hidden = false;
-    bar.querySelector('.find-input').value = query;
-    findState = { pane: pane, query: query, hits: [], index: -1, capped: false };
-  }
-
-  function unpinPane(pane) {
-    const at = state.pins.indexOf(pane);
-    if (at < 0) return;
-    state.pins.splice(at, 1);
-    destroyPane(pane);
-    renderPreview();
-    toast('已取消固定：' + ((pane.node && pane.node.name) || ''));
-  }
-
-  function paneHeadHtml(pane, node) {
-    const m = meta.get(node.path);
-    const sub = [subPath(node) || node.name];
-    sub.push(String(node.kind || '').toUpperCase());
-    if (m) { sub.push(fmtSize(m.size)); sub.push(fmtTime(m.mtime)); }
-    if (pane.continuous) sub.push('连续预览');
-
-    const mode = paneMode(pane);
-    const canSource = ['html', 'md', 'svg'].indexOf(node.kind) >= 0;
-    const seg = canSource
-      ? '<div class="pv-seg"><div class="seg">'
-        + '<button data-mode="preview" class="' + (mode === 'preview' ? 'is-on' : '') + '">预览</button>'
-        + '<button data-mode="source" class="' + (mode === 'source' ? 'is-on' : '') + '">源码</button>'
-        + '</div></div>'
-      : '';
-
-    // 图片：− [适应/150%] + 的缩放档位，以及进入连续预览的向下箭头
-    const imageBar = (mode === 'preview' && isImageNode(node))
-      ? '<div class="pv-zoom">'
-        + '<button data-act="zoom-out" title="缩小（也可 Ctrl+滚轮）" aria-label="缩小">'
-        + icon('zoomOut', '', 13) + '</button>'
-        + '<button class="zoom-val" data-act="zoom-reset" title="点一下回到适应窗口">'
-        + zoomText(pane.zoom) + '</button>'
-        + '<button data-act="zoom-in" title="放大（也可 Ctrl+滚轮）" aria-label="放大">'
-        + icon('zoomIn', '', 13) + '</button>'
-        + '</div>'
-        + '<button class="iconbtn seqbtn' + (pane.continuous ? ' is-on' : '')
-        + '" data-act="seq" aria-label="连续预览" title="'
-        + (pane.continuous ? '退出连续预览' : '连续预览：向下滚动看同目录后面的图片') + '">'
-        + icon('arrowDown', '', 15) + '</button>'
-      : '';
-
-    // 图钉 / 刷新 / 关闭放在最右，低频的三个排在左边
-    return '<span class="pv-ic">' + nodeIcon(node, 17) + '</span>'
-      + '<div class="pv-name"><div class="pv-nm" title="' + esc(node.name) + '">' + esc(node.name) + '</div>'
-      + '<div class="pv-sub" title="' + esc(sub.join(' · ')) + '">' + esc(sub.join(' · ')) + '</div></div>'
-      + '<div class="pv-actions">' + seg + imageBar
-      + '<div class="pv-btns">'
-      + '<button class="iconbtn" data-act="copy" title="复制路径">' + icon('copy', '', 15) + '</button>'
-      + '<button class="iconbtn" data-act="reveal" title="在资源管理器中显示">' + icon('reveal', '', 15) + '</button>'
-      + '<button class="iconbtn" data-act="external" title="用默认程序打开">' + icon('external', '', 15) + '</button>'
-      + '<button class="iconbtn pinbtn' + (pane.pinned ? ' is-on' : '') + '" data-act="pin" title="'
-      + (pane.pinned ? '取消固定' : '固定此预览') + '" aria-label="固定预览">'
-      + icon(pane.pinned ? 'pinFilled' : 'pin', '', 15) + '</button>'
-      + '<button class="iconbtn" data-act="reload" title="重新读取">' + icon('refresh', '', 15) + '</button>'
-      + '<button class="iconbtn" data-act="close" title="' + (pane.pinned ? '关闭此预览列' : '收起预览') + '">'
-      + icon('close', '', 15) + '</button>'
-      + '</div></div>';
-  }
-
-  /** 渲染一个窗格：头部每次重建（元信息会异步补发），内容按 key 增量渲染 */
-  function renderPane(pane, force) {
-    const node = pane.node;
-    // 连续预览只对「图片 + 预览模式」有意义，切到别的文件/源码视图时自动退出
-    if (pane.continuous && !(node && paneMode(pane) === 'preview' && isImageNode(node))) {
-      pane.continuous = false;
-    }
-    pane.head.innerHTML = node ? paneHeadHtml(pane, node) : '';
-
-    if (!node) {
-      if (findState && findState.pane === pane) closeFind();
-      if (force || pane.bodyKey !== 'none') {
-        pane.bodyKey = 'none';
-        dropPaneView(pane);
-        pane.images = [];
-        pane.body.className = 'pv-body is-empty';
-        pane.body.innerHTML = emptyState();
-      }
-      return;
-    }
-
-    const mode = paneMode(pane);
-    const key = [node.path, mode, pane.continuous ? 'seq' : '',
-      node.kind === 'docx' && !state.previewDocx ? 'docx-off' : '',
-      node.kind === 'pptx' && !state.previewPptx ? 'pptx-off' : ''].join('\u0001');
-    if (!force && key === pane.bodyKey) return;
-    pane.bodyKey = key;
-    pane.body.className = 'pv-body';
-    dropPaneView(pane);
-    // 任务身份与内容 key 分开：key 只说明「该显示什么」，同一个文件重新读取时 key
-    // 不变，只有每次渲染新发的编号能区分前后两次请求，晚到的旧响应才不会盖住新内容。
-    const req = ++pane.reqId;
-    pane.pending++;
-    const body = Promise.resolve(renderPaneBody(pane, node, mode, key, req))
-      .finally(() => { pane.pending--; });
-    // 正文是异步填的（读文件、解析文档、取图片地址），填完再把查找高亮落回去
-    if (findState && findState.pane === pane) {
-      Promise.resolve(body).then(() => {
-        if (findState && findState.pane === pane && pane.reqId === req) refreshFind();
-      });
-    }
-  }
-
-  async function renderPaneBody(pane, node, mode, key, req) {
-    const box = pane.body;
-    // 只认自己那一次请求：晚到的旧响应直接丢掉，不碰 DOM
-    const stale = () => pane.reqId !== req;
-
-    // 交给协议地址直接渲染的类型：HTML 迷你浏览器 / 图片 / PDF 内置阅读器
-    if (mode === 'preview' && ['html', 'image', 'svg', 'pdf'].indexOf(node.kind) >= 0) {
-      box.innerHTML = loadingState();
-      const res = await pv.previewUrl(node.path);
-      if (stale()) return;
-      if (!res.url) { box.innerHTML = fallbackCard(node, '无法生成预览地址'); return; }
-      if (node.kind === 'html') box.innerHTML = browserChrome(node, res.url);
-      else if (node.kind === 'pdf') box.innerHTML = pdfFrame(node, res.url);
-      else if (pane.continuous) await renderImageSeq(pane, node, key);
-      else renderImageView(pane, node, res.url);
-      return;
-    }
-
-    // 设置里关掉时不再内嵌解析，走下面的通用分支落到兜底卡片
-    if (node.kind === 'docx' && state.previewDocx) { await renderDocPreview(pane, node, 'docx', stale); return; }
-    if (node.kind === 'pptx' && state.previewPptx) { await renderDocPreview(pane, node, 'pptx', stale); return; }
-
-    box.innerHTML = loadingState();
-    const res = await pv.read(node.path);
-    if (stale()) return;
-
-    if (res.error) {
-      box.innerHTML = fallbackCard(node, res.error === 'IS_DIR' ? '这是一个目录' : '读取失败：' + res.error);
-      return;
-    }
-    if (res.binary) {
-      box.innerHTML = fallbackCard(node, '该类型暂不支持内嵌预览');
-      return;
-    }
-
-    const notice = [];
-    if (res.truncated) notice.push('文件较大，仅显示前 5 MB');
-    if (res.lossy) notice.push('编码无法识别，可能存在乱码');
-    const noticeHtml = notice.length ? '<div class="notice">' + notice.join(' · ') + '</div>' : '';
-
-    if (node.kind === 'md' && mode === 'preview') {
-      box.innerHTML = noticeHtml + '<div class="prose-wrap"><article class="prose">' + mdToHtml(res.text) + '</article></div>';
-      PV.highlight.highlightFences(box.querySelector('.prose'));
-      return;
-    }
-
-    // 其余一律走代码视图：分词在 Worker 里做，主线程只渲染可见窗口
-    box.innerHTML = noticeHtml;
-    pane.view = PV.highlight.mount(box, {
-      text: res.text,
-      size: res.size,
-      mtime: res.mtime,
-      path: node.path,
-      lang: langForNode(node, mode)
-    });
-  }
-
-  /* ============================ 图片：缩放与连续预览 ============================ *
-   * 单张：− / + 按档位缩放，点中间那格回到「适应窗口」，Ctrl+滚轮同样能缩放。
-   * 连续：向下箭头进入，把「当前图片所在目录里排在它后面的图片」竖着排下来，
-   *       滚动即看下一张；图片走原生懒加载，只有快滚到的才会真的去取。
-   * ------------------------------------------------------------------------- */
-  /** 缩放档位（pane.zoom = 0 表示适应窗口） */
-  const ZOOM_STEPS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4, 6, 8];
-  /** 连续预览一次最多列多少张，避免超大目录把 DOM 撑爆 */
-  const SEQ_MAX = 300;
-
-  function isImageNode(node) {
-    return !!node && !node.isDir && (node.kind === 'image' || node.kind === 'svg');
-  }
-
-  function zoomText(zoom) {
-    return zoom ? Math.round(zoom * 100) + '%' : '适应';
-  }
-
-  /** 把 pane.zoom 落到这个窗格里的每张图上（各自按自己的原始尺寸算） */
-  function applyZoom(pane) {
-    for (const img of pane.images) {
-      if (!pane.zoom) {
-        img.style.width = '';
-        img.style.height = '';
-        continue;
-      }
-      // 还没解码出尺寸的图先不动，等 load 回来再套
-      if (!img.naturalWidth) continue;
-      img.style.width = Math.max(24, Math.round(img.naturalWidth * pane.zoom)) + 'px';
-      img.style.height = 'auto';
-    }
-    const wrap = pane.body.querySelector('.img-wrap');
-    if (wrap) wrap.classList.toggle('is-zoom', !!pane.zoom);
-    const seq = pane.body.querySelector('.imgseq');
-    if (seq) seq.classList.toggle('is-zoom', !!pane.zoom);
-  }
-
-  function setZoom(pane, zoom) {
-    pane.zoom = zoom;
-    applyZoom(pane);
-    const label = pane.head.querySelector('[data-act="zoom-reset"]');
-    if (label) label.textContent = zoomText(zoom);
-  }
-
-  /** 在档位之间走一步；从「适应窗口」出发时，放大到 100%、缩小到 75% */
-  function stepZoom(pane, dir) {
-    const cur = pane.zoom || 0;
-    let next;
-    if (!cur) {
-      next = dir > 0 ? 1 : 0.75;
-    } else {
-      const at = ZOOM_STEPS.indexOf(cur);
-      const from = at < 0 ? ZOOM_STEPS.findIndex((z) => z > cur) : at + dir;
-      next = ZOOM_STEPS[Math.min(ZOOM_STEPS.length - 1, Math.max(0, from))];
-    }
-    setZoom(pane, next);
-  }
-
-  /**
-   * Ctrl+滚轮缩放（不按 Ctrl 的滚轮留给滚动，不抢）。
-   * 监听挂在图片容器上，而这个容器可能已经被「固定」搬到别的窗格里，
-   * 所以每次按键都按它当前所在的窗格算。
-   */
-  function bindZoomWheel(pane, host) {
-    host.addEventListener('wheel', (e) => {
-      if (!e.ctrlKey) return;
-      e.preventDefault();
-      stepZoom(paneOf(host) || pane, e.deltaY < 0 ? 1 : -1);
-    }, { passive: false });
-  }
-
-  function newImage(pane, node, url, lazy) {
-    const img = document.createElement('img');
-    img.src = url;
-    img.alt = node.name;
-    img.draggable = false;
-    if (lazy) img.loading = 'lazy';
-    // 图片可能已经跟着内容搬到了别的窗格，缩放要落在它现在那一列上
-    img.addEventListener('load', () => applyZoom(paneOf(img) || pane));
-    pane.images.push(img);
-    return img;
-  }
-
-  function renderImageView(pane, node, url) {
-    pane.body.innerHTML = '';
-    pane.images = [];
-    const wrap = document.createElement('div');
-    wrap.className = 'img-wrap';
-    wrap.appendChild(newImage(pane, node, url, false));
-    pane.body.appendChild(wrap);
-    applyZoom(pane);
-    bindZoomWheel(pane, wrap);
-  }
-
-  /** 同目录里的图片，顺序与栏内一致（搜索过滤也算） */
-  async function imageSequence(node) {
-    const dir = node.path.replace(/[\\/][^\\/]*$/, '');
-    let entries = null;
-    for (let ci = 0; ci < state.cols.length; ci++) {
-      const col = state.cols[ci];
-      if (col && col.dir === dir && col.entries) { entries = itemsOf(ci); break; }
-    }
-    if (!entries) {
-      // 这个目录没开在栏里（固定列可能指向别处）：直接问一次文件系统
-      const res = await pv.list(dir);
-      entries = res && res.entries ? res.entries.slice() : [];
-      entries.sort((a, b) => (a.isDir !== b.isDir)
-        ? (a.isDir ? -1 : 1)
-        : a.name.localeCompare(b.name, 'zh-Hans-CN', { numeric: true }));
-    }
-    return entries.filter(isImageNode);
-  }
-
-  async function renderImageSeq(pane, node, key) {
-    const seq = await imageSequence(node);
-    if (pane.bodyKey !== key) return;
-
-    let at = seq.findIndex((e) => e.path === node.path);
-    if (at < 0) at = 0;
-    const rest = seq.slice(at);
-    const shown = rest.slice(0, SEQ_MAX);
-
-    const urls = await Promise.all(shown.map((e) => pv.previewUrl(e.path)));
-    if (pane.bodyKey !== key) return;
-
-    pane.body.innerHTML = '';
-    pane.images = [];
-    const box = document.createElement('div');
-    box.className = 'imgseq';
-    for (let i = 0; i < shown.length; i++) {
-      const fig = document.createElement('figure');
-      fig.className = 'imgseq-item' + (shown[i].path === node.path ? ' is-current' : '');
-      fig.dataset.path = shown[i].path;
-      if (urls[i] && urls[i].url) {
-        fig.appendChild(newImage(pane, shown[i], urls[i].url, i > 0));
-      } else {
-        const bad = document.createElement('div');
-        bad.className = 'imgseq-cap';
-        bad.textContent = '无法生成预览地址';
-        fig.appendChild(bad);
-      }
-      const cap = document.createElement('figcaption');
-      cap.className = 'imgseq-cap';
-      cap.innerHTML = '<span class="n">' + (at + i + 1) + ' / ' + seq.length + '</span>'
-        + '<span class="nm" title="' + esc(shown[i].name) + '">' + esc(shown[i].name) + '</span>';
-      fig.appendChild(cap);
-      box.appendChild(fig);
-    }
-    if (rest.length > shown.length) {
-      const note = document.createElement('div');
-      note.className = 'imgseq-note';
-      note.textContent = '这个目录后面还有 ' + (rest.length - shown.length)
-        + ' 张图片，只列到前 ' + SEQ_MAX + ' 张';
-      box.appendChild(note);
-    }
-    pane.body.appendChild(box);
-    applyZoom(pane);
-    bindZoomWheel(pane, box);
-    box.scrollTop = 0;
-  }
-
-  function toggleSeq(pane) {
-    pane.continuous = !pane.continuous;
-    toast(pane.continuous ? '连续预览：向下滚动看同目录后面的图片' : '已退出连续预览');
-    renderPane(pane, true);
-  }
-
-  function renderPreview(force) {
-    syncTempPane();
-    // 关掉临时预览列不影响固定列：整块预览区只在「一列都没有」时才收起
-    const list = visiblePanes();
-    previewEl.hidden = list.length === 0;
-    if (!list.length) return;
-
-    for (const pane of allPanes()) pane.el.hidden = list.indexOf(pane) < 0;
-    syncPaneOrder(list);
-
-    ensurePaneWidths();
-    applyPaneWidths();   // 里面会按可用宽度重算每列的实际宽度
-
-    for (let i = 0; i < list.length; i++) renderPane(list[i], force);
-    // 临时预览列被收起来（内容已经在固定列里）时，挂在它上面的查找条一并收掉
-    if (findState && findState.pane.el.hidden) closeFind();
-  }
-
-  /* ============================ 预览内查找 ============================ *
-   * Ctrl+F 在「渲染成真实 DOM 的预览」里查关键字：
-   *   - 参与查找：Markdown 预览、Word / PPT 内嵌预览
-   *   - 不参与：代码视图（按窗口渲染，DOM 里只有可见的几十行）、图片、PDF、HTML（在 iframe 里）
-   * 命中处原地包一层 <mark>，当前命中再加 .is-current 并滚到视口中间。
-   * ------------------------------------------------------------------ */
-  /** 单次查找最多标记多少个命中，避免超大文档把主线程卡住 */
-  const FIND_MAX = 2000;
-  /** 最近一次指针位置：Ctrl+F 优先作用在指针下的那个窗格 */
-  const pointer = { x: -1, y: -1 };
-  let activePaneId = 0;
-  let findState = null;   // { pane, query, hits, index, capped }
-
-  function paneFindable(pane) {
-    if (!pane || !pane.node || pane.node.isDir) return false;
-    if (pane.el.hidden) return false;
-    const box = pane.body;
-    if (!box || box.classList.contains('is-empty')) return false;
-    if (box.querySelector('.codeview, .img-wrap, .imgseq, iframe')) return false;
-    return !!box.querySelector('.prose, .docview');
-  }
-
-  /** Ctrl+F 会落在哪个窗格：指针下的 → 最近点过的 → 最左的可见窗格 */
-  function targetPane() {
-    const list = visiblePanes().filter((p) => !p.el.hidden);
-    if (!list.length) return null;
-    const hovered = paneOf(document.elementFromPoint(pointer.x, pointer.y));
-    if (hovered && list.indexOf(hovered) >= 0) return hovered;
-    const active = panes.get(activePaneId);
-    if (active && list.indexOf(active) >= 0) return active;
-    return list[0];
-  }
-
-  function ensureFindBar(pane) {
-    if (pane.findEl) return pane.findEl;
-    const el = document.createElement('div');
-    el.className = 'find-bar';
-    el.hidden = true;
-    el.innerHTML = icon('search', 'find-ic', 14)
-      + '<input class="find-input" type="text" placeholder="在预览中查找…" spellcheck="false" '
-      + 'autocomplete="off" aria-label="在预览中查找">'
-      + '<span class="find-count"></span>'
-      + '<button class="iconbtn" data-find="prev" title="上一个匹配 (Shift+Enter)" aria-label="上一个匹配">'
-      + icon('arrowUp', '', 14) + '</button>'
-      + '<button class="iconbtn" data-find="next" title="下一个匹配 (Enter)" aria-label="下一个匹配">'
-      + icon('arrowDown', '', 14) + '</button>'
-      + '<button class="iconbtn" data-find="close" title="关闭查找 (Esc)" aria-label="关闭查找">'
-      + icon('close', '', 14) + '</button>';
-    // 夹在窗格头部与正文之间
-    pane.el.insertBefore(el, pane.body);
-    pane.findEl = el;
-
-    const input = el.querySelector('.find-input');
-    input.addEventListener('input', () => {
-      if (!findState || findState.pane !== pane) return;
-      findState.query = input.value.trim();
-      applyFind();
-    });
-    input.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); stepFind(e.shiftKey ? -1 : 1); return; }
-      // 这里必须拦下 Esc，否则会冒泡到全局处理器去清空文件名搜索框
-      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeFind(); }
-    });
-    el.addEventListener('click', (e) => {
-      const btn = e.target.closest('button[data-find]');
-      if (!btn) return;
-      if (btn.dataset.find === 'prev') stepFind(-1);
-      else if (btn.dataset.find === 'next') stepFind(1);
-      else closeFind();
-    });
-    return el;
-  }
-
-  function openFind(pane) {
-    if (!pane) return false;
-    if (findState && findState.pane !== pane) closeFind();
-    const bar = ensureFindBar(pane);
-    bar.hidden = false;
-    if (!findState) findState = { pane: pane, query: '', hits: [], index: -1, capped: false };
-    const input = bar.querySelector('.find-input');
-    input.focus();
-    input.select();
-    updateFindBar();
-    return true;
-  }
-
-  /** 关掉查找：撤掉高亮、清空输入，焦点不停在查找框里 */
-  function closeFind() {
-    const f = findState;
-    findState = null;
-    if (!f) return;
-    clearMarks(f.pane.body);
-    const bar = f.pane.findEl;
-    if (!bar) return;
-    const input = bar.querySelector('.find-input');
-    if (input) { input.value = ''; input.blur(); }
-    bar.hidden = true;
-  }
-
-  function updateFindBar() {
-    const f = findState;
-    if (!f || !f.pane.findEl) return;
-    const count = f.pane.findEl.querySelector('.find-count');
-    if (!f.query) {
-      count.textContent = '';
-      count.classList.remove('is-none');
-    } else if (!f.hits.length) {
-      count.textContent = '无匹配';
-      count.classList.add('is-none');
-    } else {
-      count.textContent = (f.index + 1) + '/' + f.hits.length + (f.capped ? '+' : '');
-      count.classList.remove('is-none');
-    }
-  }
-
-  /** 正文里所有可参与查找的文本节点（跳过查找条自身、脚本样式与已经包好的命中） */
-  function collectTextNodes(root) {
-    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-      acceptNode(node) {
-        if (!node.nodeValue || !node.nodeValue.trim()) return NodeFilter.FILTER_REJECT;
-        const parent = node.parentNode;
-        if (!parent) return NodeFilter.FILTER_REJECT;
-        if (parent.closest('script, style, textarea, .find-bar, mark.find-hit')) {
-          return NodeFilter.FILTER_REJECT;
-        }
-        return NodeFilter.FILTER_ACCEPT;
-      }
-    });
-    const out = [];
-    let n = walker.nextNode();
-    while (n) { out.push(n); n = walker.nextNode(); }
-    return out;
-  }
-
-  /** 把命中处原地包成 <mark>，返回全部命中元素（文档顺序） */
-  function markMatches(root, query) {
-    const needle = query.toLowerCase();
-    const hits = [];
-    let capped = false;
-    for (const node of collectTextNodes(root)) {
-      const text = node.nodeValue;
-      const lower = text.toLowerCase();
-      let at = lower.indexOf(needle);
-      if (at < 0) continue;
-      const frag = document.createDocumentFragment();
-      let cut = 0;
-      while (at >= 0) {
-        if (hits.length >= FIND_MAX) { capped = true; break; }
-        if (at > cut) frag.appendChild(document.createTextNode(text.slice(cut, at)));
-        const mark = document.createElement('mark');
-        mark.className = 'find-hit';
-        mark.textContent = text.slice(at, at + needle.length);
-        frag.appendChild(mark);
-        hits.push(mark);
-        cut = at + needle.length;
-        at = lower.indexOf(needle, cut);
-      }
-      // 触发上限时，这一节剩下的原文照原样补回去
-      if (cut < text.length) frag.appendChild(document.createTextNode(text.slice(cut)));
-      node.parentNode.replaceChild(frag, node);
-      if (capped) break;
-    }
-    return { hits: hits, capped: capped };
-  }
-
-  /** 撤掉查找高亮，把正文还原成纯文本节点 */
-  function clearMarks(root) {
-    if (!root) return;
-    const marks = root.querySelectorAll('mark.find-hit');
-    if (!marks.length) return;
-    const parents = [];
-    for (const mark of marks) {
-      const parent = mark.parentNode;
-      if (!parent) continue;
-      parent.replaceChild(document.createTextNode(mark.textContent), mark);
-      if (parents.indexOf(parent) < 0) parents.push(parent);
-    }
-    // 合并被切开后相邻的文本节点，避免反复查找让 DOM 越来越碎
-    for (const parent of parents) parent.normalize();
-  }
-
-  function applyFind() {
-    const f = findState;
-    if (!f) return;
-    clearMarks(f.pane.body);
-    f.hits = [];
-    f.index = -1;
-    f.capped = false;
-    if (f.query) {
-      const res = markMatches(f.pane.body, f.query);
-      f.hits = res.hits;
-      f.capped = res.capped;
-      if (f.hits.length) { f.index = 0; focusFindHit(); }
-    }
-    updateFindBar();
-  }
-
-  /** 当前命中换成强调色并滚到视口中间 */
-  function focusFindHit() {
-    const f = findState;
-    if (!f) return;
-    for (let i = 0; i < f.hits.length; i++) {
-      f.hits[i].classList.toggle('is-current', i === f.index);
-    }
-    const hit = f.hits[f.index];
-    if (hit && hit.scrollIntoView) hit.scrollIntoView({ block: 'center', inline: 'nearest' });
-  }
-
-  function stepFind(delta) {
-    const f = findState;
-    if (!f || !f.hits.length) return;
-    f.index = (f.index + delta + f.hits.length) % f.hits.length;
-    focusFindHit();
-    updateFindBar();
-  }
-
-  /** 正文重渲染之后重新落高亮；已经不满足查找条件就直接关掉查找条 */
-  function refreshFind() {
-    const f = findState;
-    if (!f) return;
-    if (f.pane.el.hidden || !paneFindable(f.pane)) { closeFind(); return; }
-    applyFind();
-  }
 
   /* ============================ 总渲染 ============================ */
   function render() {
     if (!state.root) {
       renderCrumbs();
       renderStatus();
-      renderPreview();
+      PV.pane.renderPreview();
       return;
     }
     renderCrumbs();
     renderColumns();
-    renderPreview();
+    PV.pane.renderPreview();
     renderStatus();
   }
 
@@ -1679,13 +684,18 @@
     pv.setState({ theme: state.theme });
   }
 
-  function togglePreview(force) {
-    state.previewOpen = typeof force === 'boolean' ? force : !state.previewOpen;
-    $('#btn-preview').classList.toggle('is-on', !state.previewOpen);
+  /** 预览区的显示开关：窗格那边、按钮状态与持久化一起改 */
+  function setPreviewVisible(on) {
+    PV.pane.setPreviewOpen(on);
+    $('#btn-preview').classList.toggle('is-on', !on);
     // 预览整个收起来时，挂在上面的查找条也一起收掉
-    if (!state.previewOpen) closeFind();
-    renderPreview();
-    pv.setState({ previewOpen: state.previewOpen });
+    if (!on) PV.find.close();
+    pv.setState({ previewOpen: on });
+  }
+
+  function togglePreview(force) {
+    setPreviewVisible(typeof force === 'boolean' ? force : !PV.pane.previewOpen());
+    PV.pane.renderPreview();
   }
 
   function ensureVisible(ci, idx) {
@@ -1795,56 +805,23 @@
     goToPathIndex(+btn.dataset.crumb);
   });
 
-  /* 记录指针位置与最近操作的窗格：Ctrl+F 默认落在指针下的那个窗格 */
-  document.addEventListener('pointermove', (e) => {
-    pointer.x = e.clientX;
-    pointer.y = e.clientY;
-  }, { passive: true });
+  /* 记录最近操作的窗格：Ctrl+F 与 ↑↓ 都优先作用在它身上 */
   previewEl.addEventListener('pointerdown', (e) => {
-    const pane = paneOf(e.target);
-    if (pane) activePaneId = pane.id;
+    const pane = PV.pane.paneOf(e.target);
+    if (pane) PV.pane.setActive(pane);
   });
   // 点回栏区就把「当前操作区」交还给文件列表（↑↓ 随之回到换选中项）
-  colsEl.addEventListener('pointerdown', () => { activePaneId = 0; });
+  colsEl.addEventListener('pointerdown', () => { PV.pane.clearActive(); });
   // 滚轮滚过哪一边，也把操作区算到哪一边
   previewEl.addEventListener('wheel', (e) => {
-    const pane = paneOf(e.target);
-    if (pane) activePaneId = pane.id;
+    const pane = PV.pane.paneOf(e.target);
+    if (pane) PV.pane.setActive(pane);
   }, { passive: true });
-  colsEl.addEventListener('wheel', () => { activePaneId = 0; }, { passive: true });
-
-  /* 焦点在预览里时 ↑↓ 滚的是预览内容，不动文件列表的选中项 */
-  const PANE_SCROLLERS = ['.prose-wrap', '.cv-scroll', '.imgseq', '.img-wrap', '.docview', '.pdfview'];
-
-  function paneScroller(pane) {
-    for (const sel of PANE_SCROLLERS) {
-      const el = pane.body.querySelector(sel);
-      if (el && el.scrollHeight > el.clientHeight + 2) return el;
-    }
-    return null;
-  }
-
-  /** 窗格里的滚动容器，不管它现在能不能滚（图片列的高度要等图片解码完才准） */
-  function paneScrollHost(pane) {
-    for (const sel of PANE_SCROLLERS) {
-      const el = pane.body.querySelector(sel);
-      if (el) return el;
-    }
-    return null;
-  }
-
-  /** 返回是否真的滚了：焦点在预览里但这一列没得滚时，按键就到此为止 */
-  function scrollPaneBy(pane, dir) {
-    const el = paneScroller(pane);
-    if (!el) return false;
-    const step = Math.max(72, Math.round(el.clientHeight * 0.15));
-    el.scrollTop += dir * step;
-    return true;
-  }
+  colsEl.addEventListener('wheel', () => { PV.pane.clearActive(); }, { passive: true });
 
   /* 预览区操作：所有窗格的头部按钮与卡片内按钮走同一套分派 */
   previewEl.addEventListener('click', (e) => {
-    const pane = paneOf(e.target);
+    const pane = PV.pane.paneOf(e.target);
     if (!pane) return;
     const node = pane.node;
 
@@ -1855,21 +832,21 @@
       // 临时预览列沿用全局模式，固定住的窗格各记一份
       if (pane.pinned) pane.mode = btn.dataset.mode;
       else state.mode = btn.dataset.mode;
-      renderPane(pane, true);
+      PV.pane.renderPane(pane, true);
       return;
     }
     const act = btn.dataset.act;
-    if (act === 'pin') { if (pane.pinned) unpinPane(pane); else pinCurrent(); return; }
-    if (act === 'close') { if (pane.pinned) unpinPane(pane); else togglePreview(false); return; }
-    if (act === 'zoom-in') { if (node) stepZoom(pane, 1); return; }
-    if (act === 'zoom-out') { if (node) stepZoom(pane, -1); return; }
-    if (act === 'zoom-reset') { if (node) setZoom(pane, 0); return; }
-    if (act === 'seq') { if (node) toggleSeq(pane); return; }
+    if (act === 'pin') { if (pane.pinned) PV.pane.unpinPane(pane); else PV.pane.pinCurrent(); return; }
+    if (act === 'close') { if (pane.pinned) PV.pane.unpinPane(pane); else togglePreview(false); return; }
+    if (act === 'zoom-in') { if (node) PV.body.stepZoom(pane, 1); return; }
+    if (act === 'zoom-out') { if (node) PV.body.stepZoom(pane, -1); return; }
+    if (act === 'zoom-reset') { if (node) PV.body.setZoom(pane, 0); return; }
+    if (act === 'seq') { if (node) PV.body.toggleSeq(pane); return; }
     if (!node) return;
     if (act === 'reload') {
       btn.classList.add('spin');
       setTimeout(() => btn.classList.remove('spin'), 520);
-      renderPane(pane, true);
+      PV.pane.renderPane(pane, true);
     } else if (act === 'copy') {
       pv.copyText(node.path).then(() => toast('已复制路径：' + node.path));
     } else if (act === 'reveal') {
@@ -1908,66 +885,6 @@
     panelDrag = null;
     document.body.classList.remove('resizing-v');
     pv.setState({ leftSplitRatio: state.splitRatio });
-  });
-
-  /** 手动拖动窗格左侧边界：分界线跟着指针走，左邻那一列让出 / 收回同样的宽度 */
-  let paneDrag = null;
-  panesEl.addEventListener('pointerdown', (e) => {
-    const grip = e.target.closest ? e.target.closest('.pane-resize') : null;
-    if (!grip) return;
-    const pane = paneOf(grip);
-    if (!pane) return;
-    e.preventDefault();
-    paneDrag = { pane: pane, x: e.clientX, w: effWidth(pane), tempW: tempPane.w, frozen: false };
-    grip.classList.add('is-drag');
-    // 合成事件没有真实指针，捕获失败不影响拖动
-    try { grip.setPointerCapture(e.pointerId); } catch { /* ignore */ }
-    document.body.classList.add('resizing');
-  });
-  panesEl.addEventListener('pointermove', (e) => {
-    if (!paneDrag) return;
-    const pane = paneDrag.pane;
-    if (!paneDrag.frozen) {
-      // 以「现在看到的宽度」作为各列的设定宽度再开始拖：这时它们加起来正好是当前总宽，
-      // 分界线就是 1:1 跟着指针走，不会被「按比例压缩」那一套稀释掉
-      freezePaneWidths();
-      const list = visiblePanes();
-      const at = list.indexOf(pane);
-      paneDrag.left = at > 0 ? list[at - 1] : null;
-      paneDrag.w = pane.w;
-      paneDrag.leftW = paneDrag.left ? paneDrag.left.w : 0;
-      paneDrag.frozen = true;
-    }
-    const dx = e.clientX - paneDrag.x;   // 向左拖为负
-    if (paneDrag.left) {
-      // 这两列加起来不变：一列变宽，另一列就变窄，各自都不低于下限
-      const pair = paneDrag.w + paneDrag.leftW;
-      const want = Math.min(pair - PANE_MIN, Math.max(PANE_MIN, paneDrag.w - dx));
-      pane.w = want;
-      paneDrag.left.w = pair - want;
-    } else {
-      // 最左那一列：左边是栏区，加宽就从栏区借，栏区不低于硬下限
-      const others = visiblePanes().reduce((s, p) => s + (p === pane ? 0 : p.w), 0);
-      const max = Math.max(PANE_MIN, paneDragMax() - others);
-      pane.w = Math.min(max, Math.max(PANE_MIN, paneDrag.w - dx));
-      // 记下这一拖给栏区留了多宽：拖动结束后按这个下限留住它，
-      // 不然刚拖出来的宽度会被「按比例压缩」分给右边的固定列
-      const left = bodyWidth() - (pane.w + others);
-      const auto = visiblePanes().length >= 3 ? MAIN_HARD_MIN : mainComfortWidth();
-      mainFloor = left >= auto ? 0 : left;
-    }
-    applyPaneWidths();
-  });
-  panesEl.addEventListener('pointerup', () => {
-    if (!paneDrag) return;
-    const drag = paneDrag;
-    const pane = drag.pane;
-    paneDrag = null;
-    pane.grip.classList.remove('is-drag');
-    document.body.classList.remove('resizing');
-    // 临时预览列的宽度沿用原来的设置项，重启后恢复（它自己拖动、或被左邻让出宽度都算）
-    if (!pane.pinned) pv.setState({ previewWidth: pane.w });
-    else if (tempPane.w !== drag.tempW) pv.setState({ previewWidth: tempPane.w });
   });
 
   /* 顶部按钮 */
@@ -2029,8 +946,8 @@
       if (k === 'b') { e.preventDefault(); togglePreview(); return; }
       if (k === 'f') {
         e.preventDefault();
-        const pane = targetPane();
-        if (pane && paneFindable(pane)) { openFind(pane); return; }
+        const pane = PV.find.targetPane();
+        if (pane && PV.find.canFind(pane)) { PV.find.open(pane); return; }
         // 有预览但类型不支持查找（源码视图 / 图片 / PDF / HTML）时给一句提示，
         // 别默默跳到文件名搜索框上去
         if (pane) { toast('这一列不支持查找：Markdown 与 Word / PPT 预览里可以用 Ctrl+F'); return; }
@@ -2059,7 +976,7 @@
     }
     if (e.key === '/') { e.preventDefault(); $('#search').focus(); return; }
     // 焦点不在查找框里时，Esc 先关掉查找条
-    if (e.key === 'Escape' && findState) { closeFind(); return; }
+    if (e.key === 'Escape' && PV.find.isOpen()) { PV.find.close(); return; }
     if (!state.root) return;
 
     const sel = state.sel;
@@ -2068,10 +985,10 @@
 
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
       // 最近一次点在预览里：↑↓ 归预览内容（读长文档、翻连续预览都用它），不动文件选中项
-      const focused = panes.get(activePaneId);
+      const focused = PV.pane.active();
       if (focused && !focused.el.hidden) {
         e.preventDefault();
-        scrollPaneBy(focused, e.key === 'ArrowDown' ? 1 : -1);
+        PV.pane.scrollPaneBy(focused, e.key === 'ArrowDown' ? 1 : -1);
         return;
       }
       if (!items.length) return;
@@ -2124,8 +1041,7 @@
   /* 窗口尺寸变化：重排虚拟列表窗口，必要时压缩预览列宽度、重算左栏上下比例 */
   window.addEventListener('resize', () => {
     for (let ci = 0; ci < state.path.length; ci++) renderColumnWindow(ci);
-    fitPaneWidths();
-    applyPaneWidths();
+    PV.pane.relayout();
     const colEl = colsEl.children[0];
     if (colEl && colEl.querySelector('.fav-panel')) applyLeftSplit(colEl);
   });
@@ -2134,6 +1050,24 @@
   colsEl.addEventListener('scroll', () => {
     colsEl.classList.toggle('is-scrolled', colsEl.scrollLeft > 0);
   }, { passive: true });
+
+  /* ============================ 把模块接起来 ============================ */
+  // pane.js 管窗格的生命周期与布局，preview-body.js 管正文与头部画成什么样；
+  // 它们需要的应用状态都由这里提供。
+  PV.body.init({
+    toast: toast,
+    root: function () { return state.root; },
+    previewPrefs: function () { return { docx: state.previewDocx, pptx: state.previewPptx }; },
+    itemsInDir: itemsInDir
+  });
+  PV.pane.init({
+    toast: toast,
+    mode: function () { return state.mode; },
+    selection: function () { return state.sel; },
+    renderHead: PV.body.head,
+    renderBody: PV.body.render,
+    bodyKey: PV.body.key
+  });
 
   /* ============================ 主进程事件 ============================ */
   // 异步链路上的异常必须显式暴露，否则预览会静默停在旧内容上
@@ -2155,11 +1089,9 @@
   pv.onMeta((payload) => {
     const { dir, metas } = payload || {};
     if (!dir || !metas) return;
-    for (const key of Object.keys(metas)) {
-      if (metas[key]) meta.set(key, metas[key]);
-    }
+    PV.body.setMeta(metas);
     // 元信息到齐后刷新预览头（大小 / 修改时间）
-    renderPreview();
+    PV.pane.renderPreview();
   });
 
   pv.onTheme((theme) => applyTheme(theme));
@@ -2176,7 +1108,7 @@
     if (!prefs) return;
     state.previewDocx = prefs.previewDocx !== false;
     state.previewPptx = prefs.previewPptx !== false;
-    renderPreview(true);
+    PV.pane.renderPreview(true);
     toast('Word 内嵌预览：' + (state.previewDocx ? '开' : '关')
       + ' · PPT 内嵌预览：' + (state.previewPptx ? '开' : '关'));
   });
@@ -2187,8 +1119,8 @@
     document.documentElement.dataset.theme = st.theme === 'dark' ? 'dark' : 'light';
     state.theme = st.theme === 'dark' ? 'dark' : 'light';
     $('#theme-ic').innerHTML = state.theme === 'light' ? PV.icons.ICONS.moon : PV.icons.ICONS.sun;
-    state.previewOpen = st.previewOpen !== false;
-    $('#btn-preview').classList.toggle('is-on', !state.previewOpen);
+    PV.pane.setPreviewOpen(st.previewOpen !== false);
+    $('#btn-preview').classList.toggle('is-on', !PV.pane.previewOpen());
     state.hideDot = !!st.hideDot;
     state.favTop = !!st.favTop;
     // 上下比例跟着位置走：默认上 2/3、下 1/3，拖动过之后一直用拖动结果
@@ -2203,7 +1135,7 @@
       state.favs = normalizeFavorites(state.favoritesByRoot[favKey(state.root)]);
       render();
     }
-    if (st.previewWidth > 0) tempPane.w = Math.max(PANE_MIN, st.previewWidth);
+    if (st.previewWidth > 0) PV.pane.setTempWidth(st.previewWidth);
     applyMaximized(await pv.isMaximized());
     // 主进程可能在读设置的同时已经把工作区打开了，这里不能反过来盖住它
     if (!st.lastRoot && !state.root) {

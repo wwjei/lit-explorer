@@ -11,6 +11,8 @@
  *   C2     旧文档解析失败不覆盖新文件的预览
  *   C3     高亮 Worker 并发初始化不丢语言
  *   C4     重新读取时晚到的旧响应不能覆盖新内容
+ *   F1     预览内查找（命中、切到不支持查找的列时自动关、固定时跟过去）
+ *   P1     图片列（连续预览列出同目录图片、缩放档位、切到非图片时退出）
  *
  * 跑法：npm run test:integration                        全跑
  *       npm run test:integration -- --only=C4           只跑一段
@@ -288,6 +290,115 @@ async function main() {
     })()`);
     ok('重新读取后显示新内容', c4.before.indexOf('LATEST_CONTENT') >= 0, c4.before);
     ok('旧响应晚到时仍是新内容', c4.after.indexOf('LATEST_CONTENT') >= 0, c4.after);
+  });
+
+  await run('F1', '预览内查找：命中、切走自动关、固定时跟过去', async () => {
+    const f = await prepare();
+    const runPage = await renderer();
+    stubList(f.ws, ['doc.md', 'code.js']);
+    // ipcMain.handle 的监听器第一个参数是 event，路径在第二个
+    stubRead((_e, p) => ({
+      text: /\.md$/.test(String(p)) ? 'ZEBRA one\n\nZEBRA two\n' : 'const a = 1;\n',
+      size: 24
+    }));
+    createdWin.webContents.send('workspace:opened', f.ws);
+    await sleep(200);
+    const f1 = await runPage(`(async()=>{
+      const wait=(ms)=>new Promise(r=>setTimeout(r,ms));
+      const pane=()=>document.querySelector('.pane:not(.is-pinned)');
+      const openFindBar=()=>document.querySelector('.find-bar:not([hidden])');
+      const clickRow=(n)=>[...document.querySelectorAll('.row')].find(e=>e.textContent.includes(n)).click();
+      const ctrlF=()=>document.dispatchEvent(new KeyboardEvent('keydown',
+        {key:'f',ctrlKey:true,bubbles:true,cancelable:true}));
+      const search=(q)=>{const i=openFindBar().querySelector('.find-input');
+        i.value=q; i.dispatchEvent(new Event('input',{bubbles:true}));};
+
+      clickRow('doc.md');
+      await wait(400);
+      ctrlF();
+      await wait(80);
+      const opened=!!openFindBar();
+      search('ZEBRA');
+      await wait(120);
+      const hits=pane().querySelectorAll('mark.find-hit').length;
+      const count=openFindBar().querySelector('.find-count').textContent;
+      openFindBar().querySelector('[data-find="next"]').click();
+      await wait(60);
+      const afterNext=openFindBar().querySelector('.find-count').textContent;
+
+      // 切到不支持查找的代码视图：查找条应当自己关掉
+      clickRow('code.js');
+      await wait(500);
+      const closedOnCode=!openFindBar();
+      const codeView=!!pane().querySelector('.codeview');
+
+      // 回到 Markdown 再查一次，这次固定住：正文与查找条一起搬到新列
+      clickRow('doc.md');
+      await wait(400);
+      ctrlF();
+      await wait(80);
+      search('ZEBRA');
+      await wait(120);
+      pane().querySelector('button[data-act="pin"]').click();
+      await wait(400);
+      const pin=document.querySelector('.pane.is-pinned');
+      const pbar=pin.querySelector('.find-bar');
+      const carried=!!pbar && !pbar.hidden && pbar.querySelector('.find-input').value==='ZEBRA';
+      const pinHits=pin.querySelectorAll('mark.find-hit').length;
+      return {opened, hits, count, afterNext, closedOnCode, codeView, carried, pinHits};
+    })()`);
+    ok('Ctrl+F 打开查找条', f1.opened, f1);
+    eq('命中数正确', f1.hits, 2);
+    eq('计数显示 1/2', f1.count, '1/2');
+    eq('下一个匹配后计数变 2/2', f1.afterNext, '2/2');
+    ok('切到代码视图后查找条自动关闭', f1.closedOnCode && f1.codeView, f1);
+    ok('固定时查询词跟到新列', f1.carried, f1);
+    eq('固定列里的命中重新落上', f1.pinHits, 2);
+  });
+
+  await run('P1', '图片列：连续预览、缩放、切走自动退出', async () => {
+    const f = await prepare();
+    const runPage = await renderer();
+    stubList(f.ws, ['a.svg', 'b.svg', 'c.svg', 'note.md']);
+    stubRead(() => ({ text: 'NOTE_BODY\n', size: 10 }));
+    const svg = 'data:image/svg+xml,' + encodeURIComponent(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="80" height="60"><rect width="80" height="60" fill="#369"/></svg>');
+    ipcMain.removeHandler('fs:preview-url');
+    ipcMain.handle('fs:preview-url', () => ({ url: svg }));
+    createdWin.webContents.send('workspace:opened', f.ws);
+    await sleep(200);
+    const p1 = await runPage(`(async()=>{
+      const wait=(ms)=>new Promise(r=>setTimeout(r,ms));
+      const pane=()=>document.querySelector('.pane:not(.is-pinned)');
+      const clickRow=(n)=>[...document.querySelectorAll('.row')].find(e=>e.textContent.includes(n)).click();
+
+      clickRow('a.svg');
+      await wait(400);
+      const single=!!pane().querySelector('.img-wrap');
+
+      pane().querySelector('button[data-act="seq"]').click();
+      await wait(700);
+      const items=pane().querySelectorAll('.imgseq-item').length;
+      const current=pane().querySelectorAll('.imgseq-item.is-current').length;
+
+      pane().querySelector('button[data-act="zoom-in"]').click();
+      await wait(150);
+      const zoom=pane().querySelector('[data-act="zoom-reset"]').textContent;
+
+      // 切到非图片：连续预览自动退出
+      clickRow('note.md');
+      await wait(400);
+      return {
+        single, items, current, zoom,
+        seqExited: pane().querySelector('.imgseq') === null,
+        switchedToText: !!pane().querySelector('.prose')
+      };
+    })()`);
+    ok('单张图片渲染成 .img-wrap', p1.single, p1);
+    eq('连续预览列出同目录三张图', p1.items, 3);
+    eq('连续预览只标出当前那一张', p1.current, 1);
+    eq('放大一档显示 100%', p1.zoom, '100%');
+    ok('切到非图片时退出连续预览', p1.seqExited && p1.switchedToText, p1);
   });
 
   if (createdWin) createdWin.destroy();
