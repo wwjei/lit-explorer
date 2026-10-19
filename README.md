@@ -87,32 +87,55 @@ ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ node node_modules/electr
 
 ## 目录结构
 
+只列需要知道的东西，完整清单看仓库。文档各管一件事，分工见 [AGENTS.md](AGENTS.md)。
+
 ```
 project_viewer/
-├── index.html              # 设计原型（单文件，仅用于视觉评审）
-├── FEATURES.md             # 产品功能特性定义
-├── docs/highlighting.md    # 代码高亮方案（选型、管线、降级阈值、实测）
+├── README.md / README.en.md   # 用法（中文 / 英文简版）
+├── FEATURES.md                # 产品行为定义、版本规划、明确的非目标
+├── CONTRIBUTING.md            # 参与开发（含几条红线）
+├── SECURITY.md                # 安全策略与报告渠道
+├── AGENTS.md                  # 文档索引：什么场景读哪份
+├── further_notes.md           # 想做的功能、要拍板的事
+├── PENDING.md                 # 顺手要清的小问题（发版前必须为空）
+├── index.html                 # 设计原型（单文件，仅用于视觉评审）
+├── docs/
+│   ├── highlighting.md        # 代码高亮方案（选型、管线、降级阈值、实测）
+│   ├── security-debt.md       # 已知但没有可行修法的依赖 / 安全问题
+│   ├── agents/                # 操作手册，按场景分文件
+│   ├── design/                # 未实施功能的调研与方案
+│   └── audits/                # 历史审查记录，按日期归档
 ├── scripts/
-│   └── build-renderer.mjs  # 用 esbuild 打包高亮 Worker（按需分包）
+│   ├── build-renderer.mjs     # esbuild 打包高亮 Worker（按需分包）与 docpreview
+│   ├── build-icons.mjs        # 由 SVG 母版生成各尺寸 ICO
+│   ├── build-notices.mjs      # 生成随包分发的第三方许可声明
+│   ├── build-checksums.mjs    # 生成发布产物的 SHA256SUMS.txt
+│   └── audit-report.mjs       # 漏洞扫描，按「进不进安装包」分开看
 ├── src/
-│   ├── main/
-│   │   ├── main.js         # 主进程：无边框窗口、IPC、pv:// 协议、菜单
-│   │   ├── fs-api.js       # 文件系统访问层（只读，带路径授权校验）
-│   │   ├── store.js        # 界面偏好持久化（userData/state.json）
-│   │   └── preload.js      # contextBridge 白名单 API
-│   └── renderer/
-│       ├── index.html      # 界面结构（标题栏含自绘窗口控制）
-│       ├── styles.css      # 样式（设计变量与原型一致）
-│       ├── app.js          # 多栏导航、预览分派、虚拟滚动、交互
-│       ├── icons.js        # 图标与文件类型映射
-│       ├── highlight.js    # 高亮客户端：Worker 调度、降级、窗口渲染
-│       ├── highlight/
-│       │   └── worker.js   # Shiki 分词（源文件，需打包）
-│       ├── docpreview.js   # docx / pptx 预览入口（需打包成 vendor/docpreview.js）
-│       ├── vendor/         # 打包产物（npm start 前自动生成）
-│       └── markdown.js     # Markdown 渲染
-└── sample-project/         # 示例工作区
+│   ├── main/                  # 主进程：唯一的系统访问入口，只读
+│   │   ├── main.js            # 无边框窗口、IPC、pv:// 协议、菜单
+│   │   ├── fs-api.js          # 文件系统访问层（带路径授权校验）
+│   │   ├── store.js           # 界面偏好持久化（userData/state.json）
+│   │   └── preload.js         # contextBridge 白名单 API
+│   └── renderer/              # 渲染进程（无 Node 能力）
+│       ├── index.html         # 界面结构（标题栏含自绘窗口控制）
+│       ├── styles.css         # 样式（设计变量与原型一致）
+│       ├── app.js             # 编排：导航、快捷键、事件接线
+│       ├── pane.js            # 分栏与列：虚拟滚动、固定列、列宽
+│       ├── preview-body.js    # 预览正文：各类型的渲染与降级
+│       ├── find.js            # 预览内查找
+│       ├── icons.js           # 图标与文件类型映射
+│       ├── markdown.js        # Markdown 渲染
+│       ├── highlight.js       # 高亮客户端：Worker 调度、降级、窗口渲染
+│       ├── highlight/worker.js# Shiki 分词（源文件，需打包）
+│       ├── docpreview.js      # docx / pptx 预览入口（需打包成 vendor/docpreview.js）
+│       └── vendor/            # 打包产物（npm start 前自动生成）
+├── test/                      # 单元与集成测试、界面探针骨架
+└── sample-project/            # 示例工作区
 ```
+
+`src/renderer/` 的四层是有意的分工：`app.js` 只做编排，`pane.js` 管分栏与列的生命周期，
+`preview-body.js` 管「这个东西怎么渲染」，`find.js` 管查找。加功能前先看清该落在哪一层。
 
 ### 构建
 
@@ -168,8 +191,8 @@ pv.read('<root>/linked/marker.txt')      → EACCES_ROOT（junction 指向外部
 任何请求，`pv://` 协议只解析本机文件。
 
 可读范围就是工作区，边界见上面「安全模型」；不可信 HTML 预览能读到**当前工作区**内的文件
-（这是「HTML 预览要能引用相对资源」的直接结果），取舍记在
-[further_notes.md](further_notes.md)。
+（这是「HTML 预览要能引用相对资源」的直接结果），当时怎么权衡的记在
+[docs/audits/2026-10-19-security-review.md](docs/audits/2026-10-19-security-review.md) 末尾。
 
 ### 为什么预览用自定义 `pv://` 协议
 
