@@ -15,6 +15,7 @@
     "dev": "npm run build && electron . --dev",
     "preshot": "npm run build",
     "shot": "electron .",
+    "probe": "node scripts/run-probe.mjs",
     "predist": "npm run build && npm run icons",
     "dist": "electron-builder --win --publish never"
   },

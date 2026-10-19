@@ -18,8 +18,8 @@ npm run test:integration  # 只跑集成套件
 两个套件都用 `.tmp/test/` 下的临时夹具与独立 `userData`，不碰用户正在用的实例。
 `test/` 不在 `electron-builder` 的 `files` 里，不进安装包。
 
-加用例时用 `test/helpers.cjs` 的 `section / ok / eq / eqJson / done`：断言要打印出
-实际值（失败信息就是排错线索），改坏的既有行为要能直接反映成红。
+加用例时用 `test/helpers.cjs` 的 `run(id, title, fn) / ok / eq / eqJson / done`：
+断言要打印出实际值（失败信息就是排错线索），改坏的既有行为要能直接反映成红。
 
 ### 迭代时只跑相关的那一段
 
@@ -39,18 +39,19 @@ npm run test:integration -- --skip=C1,C2   # 其余都跑，跳过这两段
 建议：改哪儿跑哪儿，**提交前再跑一次全量**。全量是给「改了公共代码 / 准备提交」用的，
 不是每次保存都跑。
 
-### 时间花在哪
+### 耗时模型
 
-`done()` 会把各段耗时打印出来——**以那张表为准，本文不抄数字**（抄了就会过期，
-而且不会有人记得回来改）。从表里能直接读出两件事：
+三个量级，够用来决定跑哪一段。**具体数字以 `done()` 打印的那张表为准，本文不抄**
+（抄了就会过期，而且不会有人记得回来改）：
 
-- **大部分时间是刻意注入的等待**，不是真实开销。C1 / C2 / C4 各自注入 500ms 的读
-  或解析延迟，断言前再留 2～3 倍余量，为的是机器一忙也不假红。
-- 其余是 Electron 启动、页面加载，以及 C3 里 Worker 真的去加载语言 chunk。
+- **单元套件是毫秒级**：它不启动 Electron。改了 Markdown 渲染或路径校验就只跑它。
+- **集成套件是秒级，而且每段都要付一次 Electron 启动的固定成本**——这个下限跑不掉，
+  所以段落分得再细也不会归零；挑一段跑省下的是那一段自身的开销。
+- **集成套件里大部分是刻意注入的等待**，不是真实工作：C1 / C2 / C4 各注入 500ms 的
+  读或解析延迟，断言前再留 2～3 倍余量，为的是机器一忙也不假红。想提速，旋钮是
+  `test/integration.test.cjs` 顶部的 `DELAY`，代价是抗抖动变差。
 
-所以想提速，旋钮是 `test/integration.test.cjs` 顶部的 `DELAY`，代价是抗抖动变差；
-段落分得再细也不会低于 Electron 启动的那个下限。首次运行或刚 `npm run build` 之后
-会明显慢一些（文件缓存冷），不是用例的问题。
+首次运行、或刚 `npm run build` 之后会明显慢一些（文件缓存冷），不是用例的问题。
 
 ### 收益与边界
 
@@ -66,14 +67,27 @@ npm run test:integration -- --skip=C1,C2   # 其余都跑，跳过这两段
 不是真实磁盘时序；界面行为（布局、固定列、查找、图片缩放、连续预览）仍然只有截图
 钩子能验。`npm test` 全绿不等于可以发版。
 
-## 截图钩子
+## 界面探针
 
-主进程带了一个截图钩子，可以在不改代码的情况下驱动界面并截屏；参数见
-`npm run shot -- --help`。
+界面行为（布局、固定列、查找、图片缩放、连续预览）自动化测试覆盖不到，靠探针驱动。
+主进程的截图钩子能在不改代码的情况下驱动界面并截屏（参数见 `npm run shot -- --help`），
+但每次都从零写选择器与等待太费，所以骨架与 runner 都在仓库里：
 
 ```bash
-npm run shot -- --open="./sample-project" --shot=".tmp/shot.png" --shot-js=".tmp/probe.js"
+npm run probe -- .tmp/my-probe.js --open=.tmp/panews --shot=.tmp/p.png
 ```
+
+- `test/probe-harness.js` 是骨架，挂在 `window.H` 上：`H.pick / H.temp / H.pin /
+  H.panes / H.layout / H.scrollTop / H.anchor / H.click / H.type / H.key / H.toast`。
+  **文件顶部那份选择器清单是界面的约定**——改界面结构时先更新它，别让每个探针
+  各自硬编码选择器。
+- `scripts/run-probe.mjs` 把骨架与探针拼成一个脚本交给 `--shot-js`，默认带上独立的
+  `--user-data-dir`（不碰用户正在用的实例），并走 `npm run shot` 以便先 build，
+  不会拿到过期产物。
+- 探针文件是一个返回对象的 IIFE，返回值以 `[shot-js] {...}` 打到 stdout。
+
+一次性探针写 `.tmp/`（被 gitignore）；要长期当回归依据的，写进 `test/`，或者转成
+`test/integration.test.cjs` 里的一段。
 
 ## 用构建出的安装包验证（仅 Windows）
 

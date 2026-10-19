@@ -212,9 +212,22 @@ npm run test:integration  # 只跑集成套件
 钉住的是逻辑而非真实磁盘时序，界面行为仍然只有截图钩子能验：全绿不等于可以发版。
 用法与取舍见 [docs/agents/verify.md](docs/agents/verify.md)。
 
-## 开发辅助：命令行截图
+## 开发辅助：界面探针
 
-主进程带了一个调试用截图钩子，可以在不改代码的情况下驱动界面并截屏，便于回归验证：
+界面行为（布局、固定列、查找、图片缩放、连续预览）自动化测试覆盖不到，靠探针驱动。
+主进程有一个调试用截图钩子，可以在不改代码的情况下驱动界面并截屏；写探针不用从零
+开始，骨架与 runner 都在仓库里：
+
+```bash
+npm run probe -- .tmp/my-probe.js --open=.tmp/panews --shot=.tmp/p.png
+```
+
+`test/probe-harness.js` 把常用的选择器与等待挂在 `window.H` 上（`H.pick / H.temp /
+H.pin / H.layout / H.scrollTop / H.anchor / H.type / H.key / H.toast`），文件顶部那份
+清单就是界面的约定。探针文件是一个返回对象的 IIFE，返回值以 `[shot-js] {...}` 打到
+stdout。`npm run probe` 默认带独立的 `userData`，不会碰你正在用的实例。
+
+只用原始截图钩子（参数见 `npm run shot -- --help`）：
 
 ```bash
 npm run shot -- --open="./sample-project" --shot=".tmp/shot.png" --shot-js=".tmp/probe.js"
