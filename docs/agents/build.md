@@ -2,8 +2,9 @@
 
 ## 生成物
 
-`src/renderer/vendor/`、`build/icons/` 与 `assets/icon.svg` 是生成物，已在 `.gitignore` 里，
-不要手改、不要提交。`npm start` / `dev` / `shot` / `dist` 都带 `pre*` 钩子会自动先构建。
+`src/renderer/vendor/`、`build/icons/` 与 `build/icon.ico` 是生成物，已在 `.gitignore` 里，
+不要手改、不要提交。`npm run build` 会先生成图标，再构建渲染进程；
+`npm start` / `dev` / `shot` / `dist` 都会先走这一步。
 
 `src/renderer/` 下这两处必须过 esbuild，因为它们的依赖是裸模块名，浏览器无法解析：
 
@@ -12,8 +13,9 @@
 - `docpreview.js` → docx / pptx 预览。打成 IIFE 挂到 `window.PV.docpreview`，
   由 `index.html` 直接 `<script>` 加载。
 
-图标的几何定义在 `scripts/build-icons.mjs`（自带 SDF 光栅化与 PNG / ICO 编码，无第三方依赖）。
-改图标改脚本，不要改产物。
+图标源文件是 `assets/icon-source.png`（正方形、8 位 RGBA、非交错 PNG），
+README 与界面直接使用它。`scripts/build-icons.mjs` 自带 PNG 解码、预乘 alpha 的面积缩放
+与 PNG / ICO 编码，无第三方依赖；改图标时替换源图，再运行 `npm run icons`，不要改产物。
 
 ## 渲染进程的模块分层
 

@@ -1,13 +1,13 @@
 # lit explorer
 
-<img src="assets/icon.svg" width="88" height="88" alt="lit explorer">
+<img src="assets/icon-source.png" width="88" height="88" alt="lit explorer">
 
 面向开发者的本地项目文件浏览器：左侧多栏目录导航，右侧即时预览，双击文件用系统默认程序打开。
 
 只支持 **Windows**（x64），没有 macOS / Linux 的构建目标，也没有跨平台适配的计划。
 
-图标是黑底白色字标，三个竖笔同时是 `l` `i` `T`，也对应界面里的多栏结构——
-几何定义在 `scripts/build-icons.mjs`，SVG 母版与各尺寸 ICO 都由它生成。
+图标以黑白灰层叠窗格表现多栏浏览与文件预览，使用透明背景的
+`assets/icon-source.png` 原图；`scripts/build-icons.mjs` 从它生成各尺寸 PNG 与 ICO。
 
 界面基线来自 `index.html`（早期设计原型），正式程序在 `src/`（Electron）。
 
