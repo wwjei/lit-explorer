@@ -8,7 +8,7 @@
     "name": "wwjei"
   },
   "scripts": {
-    "build": "node scripts/build-renderer.mjs",
+    "build": "npm run icons && node scripts/build-renderer.mjs",
     "icons": "node scripts/build-icons.mjs",
     "notices": "node scripts/build-notices.mjs",
     "audit": "node scripts/audit-report.mjs",
@@ -21,7 +21,7 @@
     "preshot": "npm run build",
     "shot": "electron .",
     "probe": "node scripts/run-probe.mjs",
-    "predist": "npm run build && npm run icons && npm run notices",
+    "predist": "npm run build && npm run notices",
     "dist": "electron-builder --win --publish never"
   },
   "license": "MIT",

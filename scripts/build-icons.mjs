@@ -1,98 +1,112 @@
 /**
- * 生成应用图标：黑底 + 白色「lit」字标。
- *
- * 三个竖条同时是字母 l / i / t，也对应文件浏览器的多栏结构。
- * 几何定义在这里是唯一来源，SVG 与各尺寸 PNG/ICO 都由它生成，
- * 避免矢量图和位图各改一份导致不一致。
+ * 从 assets/icon-source.png 生成各尺寸 PNG/ICO，保留原图的透明边缘与立体层次。
  *
  * 用法：node scripts/build-icons.mjs
- * 产物：assets/icon.svg（矢量母版）、build/icon.ico（多尺寸）、build/icons/*.png
+ * 产物：build/icon.ico（多尺寸）、build/icons/*.png
  */
 
-import { deflateSync, crc32 } from 'node:zlib';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { deflateSync, inflateSync, crc32 } from 'node:zlib';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const SIZE = 1024;
-const INK = '#ffffff';
-const BG = '#000000';
+/* ---------------- PNG 解码与缩放 ---------------- */
+function decodePng(buffer) {
+  if (!buffer.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]))) {
+    throw new Error('assets/icon-source.png 的 PNG 文件头无效');
+  }
+  let width = 0;
+  let height = 0;
+  let bitDepth = 0;
+  let colorType = 0;
+  const compressed = [];
+  for (let offset = 8; offset < buffer.length;) {
+    if (offset + 12 > buffer.length) throw new Error('PNG 数据块不完整');
+    const length = buffer.readUInt32BE(offset);
+    if (offset + length + 12 > buffer.length) throw new Error('PNG 数据块越界');
+    const type = buffer.toString('ascii', offset + 4, offset + 8);
+    const body = buffer.subarray(offset + 8, offset + 8 + length);
+    if (type === 'IHDR') {
+      if (length !== 13 || body[10] || body[11] || body[12]) {
+        throw new Error('图标源文件必须是非交错的标准 PNG');
+      }
+      width = body.readUInt32BE(0);
+      height = body.readUInt32BE(4);
+      bitDepth = body[8];
+      colorType = body[9];
+    } else if (type === 'IDAT') compressed.push(body);
+    else if (type === 'IEND') break;
+    offset += length + 12;
+  }
+  if (bitDepth !== 8 || colorType !== 6 || !width || width !== height) {
+    throw new Error('assets/icon-source.png 必须是正方形的 8 位 RGBA PNG');
+  }
 
-/* ---------------- 几何（1024 画布，视觉重心居中） ---------------- */
-const BAR_W = 128;
-/** 笔画端部圆角：明显小于半宽，做成圆角矩形而不是胶囊 */
-const CAP_R = 36;
-const BG_RADIUS = 228;        // 22.3%，接近现代桌面图标
-const ASC_TOP = 228;          // 上升部顶线（l 与 T 横线对齐）
-const BASELINE = 796;         // 基线
-const STEM_H = BASELINE - ASC_TOP;
-const X_TOP = 372;            // i 的字干顶（x-height）
-
-const COL_L = 180;
-const COL_I = 380;
-const COL_T = 580;            // T 横线左端
-const T_BAR_W = 264;
-const T_STEM_X = COL_T + (T_BAR_W - BAR_W) / 2;
-
-const SHAPES = [
-  // l
-  { type: 'rect', x: COL_L, y: ASC_TOP, w: BAR_W, h: STEM_H, r: CAP_R },
-  // i：点 + 字干（点也用圆角矩形，和笔画保持同一套造型语言）
-  { type: 'rect', x: COL_I, y: ASC_TOP, w: BAR_W, h: 120, r: CAP_R },
-  { type: 'rect', x: COL_I, y: X_TOP, w: BAR_W, h: BASELINE - X_TOP, r: CAP_R },
-  // T：横线在最上，竖笔从横线中间往下
-  { type: 'rect', x: COL_T, y: ASC_TOP, w: T_BAR_W, h: BAR_W, r: CAP_R },
-  { type: 'rect', x: T_STEM_X, y: ASC_TOP, w: BAR_W, h: STEM_H, r: CAP_R }
-];
-
-/* ---------------- 有符号距离场 ---------------- */
-function rectSdf(px, py, s) {
-  const cx = s.x + s.w / 2;
-  const cy = s.y + s.h / 2;
-  const hx = s.w / 2 - s.r;
-  const hy = s.h / 2 - s.r;
-  const dx = Math.abs(px - cx) - hx;
-  const dy = Math.abs(py - cy) - hy;
-  const ox = Math.max(dx, 0);
-  const oy = Math.max(dy, 0);
-  return Math.sqrt(ox * ox + oy * oy) + Math.min(Math.max(dx, dy), 0) - s.r;
+  const bpp = 4;
+  const stride = width * bpp;
+  const raw = inflateSync(Buffer.concat(compressed));
+  if (raw.length !== height * (stride + 1)) throw new Error('PNG 像素数据长度不符');
+  const pixels = Buffer.alloc(height * stride);
+  const paeth = (a, b, c) => {
+    const p = a + b - c;
+    const pa = Math.abs(p - a);
+    const pb = Math.abs(p - b);
+    const pc = Math.abs(p - c);
+    return pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+  };
+  for (let y = 0; y < height; y++) {
+    const filter = raw[y * (stride + 1)];
+    if (filter > 4) throw new Error(`不支持的 PNG 过滤器：${filter}`);
+    const src = y * (stride + 1) + 1;
+    const dst = y * stride;
+    for (let x = 0; x < stride; x++) {
+      const left = x >= bpp ? pixels[dst + x - bpp] : 0;
+      const up = y ? pixels[dst + x - stride] : 0;
+      const upperLeft = y && x >= bpp ? pixels[dst + x - stride - bpp] : 0;
+      const predictor = filter === 1 ? left
+        : filter === 2 ? up
+          : filter === 3 ? Math.floor((left + up) / 2)
+            : filter === 4 ? paeth(left, up, upperLeft) : 0;
+      pixels[dst + x] = (raw[src + x] + predictor) & 0xff;
+    }
+  }
+  return { width, height, pixels };
 }
 
-function circleSdf(px, py, s) {
-  const dx = px - s.cx;
-  const dy = py - s.cy;
-  return Math.sqrt(dx * dx + dy * dy) - s.r;
-}
-
-/** 覆盖率：1px 过渡带做抗锯齿 */
-const coverage = (d) => Math.min(1, Math.max(0, 0.5 - d));
+const source = decodePng(readFileSync(path.join(root, 'assets', 'icon-source.png')));
 
 function renderRgba(size) {
-  const scale = SIZE / size;
   const data = Buffer.alloc(size * size * 4);
+  const scale = source.width / size;
+  // 按像素面积缩小，避免大图缩到任务栏尺寸时跳采样；预乘 alpha 防止透明边缘出现白边。
   for (let y = 0; y < size; y++) {
+    const top = y * scale;
+    const bottom = (y + 1) * scale;
     for (let x = 0; x < size; x++) {
-      // 取像素中心在 1024 坐标系下的位置
-      const px = (x + 0.5) * scale;
-      const py = (y + 0.5) * scale;
-
-      const bg = coverage(rectSdf(px, py, { x: 0, y: 0, w: SIZE, h: SIZE, r: BG_RADIUS }));
-      let glyph = 1e9;
-      for (const s of SHAPES) {
-        glyph = Math.min(glyph, s.type === 'circle' ? circleSdf(px, py, s) : rectSdf(px, py, s));
-      }
-      const ink = coverage(glyph) * bg;
-
-      // 黑底 + 白字：按覆盖率合成
-      const r = Math.round(0 * (1 - ink) + 255 * ink);
-      const g = Math.round(0 * (1 - ink) + 255 * ink);
-      const b = Math.round(0 * (1 - ink) + 255 * ink);
+      const left = x * scale;
+      const right = (x + 1) * scale;
       const i = (y * size + x) * 4;
-      data[i] = r;
-      data[i + 1] = g;
-      data[i + 2] = b;
-      data[i + 3] = Math.round(255 * bg);
+      let alpha = 0;
+      const premultiplied = [0, 0, 0];
+      for (let sy = Math.floor(top); sy < Math.min(source.height, Math.ceil(bottom)); sy++) {
+        const height = Math.min(bottom, sy + 1) - Math.max(top, sy);
+        for (let sx = Math.floor(left); sx < Math.min(source.width, Math.ceil(right)); sx++) {
+          const weight = height * (Math.min(right, sx + 1) - Math.max(left, sx));
+          const sourceIndex = (sy * source.width + sx) * 4;
+          const a = source.pixels[sourceIndex + 3] / 255;
+          alpha += a * weight;
+          for (let channel = 0; channel < 3; channel++) {
+            premultiplied[channel] += source.pixels[sourceIndex + channel] * a * weight;
+          }
+        }
+      }
+      data[i + 3] = Math.round(alpha * 255 / (scale * scale));
+      if (alpha) {
+        for (let channel = 0; channel < 3; channel++) {
+          data[i + channel] = Math.round(premultiplied[channel] / alpha);
+        }
+      }
     }
   }
   return data;
@@ -178,27 +192,11 @@ function encodeIco(entries) {
   return Buffer.concat([header, dir, ...entries.map((e) => e.png)]);
 }
 
-/* ---------------- SVG 母版 ---------------- */
-function toSvg() {
-  const parts = SHAPES.map((s) => s.type === 'circle'
-    ? `  <circle cx="${s.cx}" cy="${s.cy}" r="${s.r}" fill="${INK}"/>`
-    : `  <rect x="${s.x}" y="${s.y}" width="${s.w}" height="${s.h}" rx="${s.r}" fill="${INK}"/>`);
-  return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${SIZE} ${SIZE}" width="${SIZE}" height="${SIZE}" role="img" aria-label="lit explorer">
-  <title>lit explorer</title>
-  <rect width="${SIZE}" height="${SIZE}" rx="${BG_RADIUS}" fill="${BG}"/>
-${parts.join('\n')}
-</svg>
-`;
-}
-
 /* ---------------- 输出 ---------------- */
 const SIZES = [16, 20, 24, 32, 40, 48, 64, 128, 256];
 
 mkdirSync(path.join(root, 'assets'), { recursive: true });
 mkdirSync(path.join(root, 'build', 'icons'), { recursive: true });
-
-writeFileSync(path.join(root, 'assets', 'icon.svg'), toSvg(), 'utf8');
-console.log('[icon] assets/icon.svg');
 
 const entries = [];
 for (const size of SIZES) {
