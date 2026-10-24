@@ -7,8 +7,15 @@
   /** 链接协议白名单：相对地址与锚点放行，有协议头的只认 http(s) / mailto */
   function safeHref(url) {
     const u = String(url).trim();
+    // 浏览器解析地址时会忽略制表符 / 换行；带控制字符的一律不给链接
+    if (/[\u0000-\u001f\u007f]/.test(u)) return false;
     if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(u)) return true;
     return /^(https?|mailto):/i.test(u);
+  }
+
+  /** 行内代码的文本：引号也要转义，万一它落到属性上下文里也逃不出去 */
+  function escCode(s) {
+    return esc(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
   function inline(s) {
@@ -17,7 +24,8 @@
     s = esc(s);
     // 地址跟着正文一起转义过（& < > 已安全）；协议判断不受转义影响，
     // 剩下的唯一危险字符是引号——转义成 %22 后就不可能逃出 href 属性。
-    s = s.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (m, text, url) => {
+    // 地址里不允许出现行内代码占位符：否则回填 <code> 时会落到属性中间。
+    s = s.replace(/\[([^\]]+)\]\(([^)\s\u0000]+)\)/g, (m, text, url) => {
       if (!safeHref(url)) return m;
       const href = url.replace(/"/g, '%22').replace(/'/g, '%27');
       return '<a href="' + href + '" target="_blank" rel="noopener">' + text + '</a>';
@@ -25,7 +33,7 @@
     s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
     s = s.replace(/(^|[^*\w])\*([^*\n]+)\*/g, '$1<em>$2</em>');
     s = s.replace(/~~([^~]+)~~/g, '<del>$1</del>');
-    s = s.replace(/\u0000(\d+)\u0000/g, (m, i) => '<code>' + esc(codes[+i]) + '</code>');
+    s = s.replace(/\u0000(\d+)\u0000/g, (m, i) => '<code>' + escCode(codes[+i]) + '</code>');
     return s;
   }
 

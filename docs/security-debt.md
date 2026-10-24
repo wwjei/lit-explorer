@@ -47,3 +47,13 @@
 - pptx-preview 开始用 uuid 的 v3 / v5 / v6；
 - `scripts/audit-report.mjs` 让 CI 在「进产物的包出现 high / critical」时失败——但
   **moderate 不会被它拦下**，可达性得人判断，所以这条要留着。
+
+---
+
+## 2026-10-24 补记：Electron 已计入「随包分发」
+
+`audit-report.mjs` 之前只把 esbuild 的输入当「会进安装包」，Electron 虽由
+electron-builder 原样分发，却一直落在「仅构建期」里。现在 `electron` 被显式计入
+shipped 集合；补上之后立刻露出 GHSA-jr5w-w6x2-84p9（影响 44.0.0-alpha.1 – 44.9.0，
+high），已把依赖从 44.9.0 升到 44.9.3（`package.json` 与 `package-lock.json` 同步），
+`npm run audit` 恢复 0 退出。上面 D1 的三条 moderate 与可达性结论不变。

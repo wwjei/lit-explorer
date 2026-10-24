@@ -25,6 +25,31 @@ const LICENSE_FILES = [
   'LICENCE', 'COPYING', 'COPYING.md', 'license'
 ];
 
+/** 许可正文之外还要一并分发的声明：Apache-2.0 的 NOTICE、以及 licenses/ 下的子组件许可 */
+const NOTICE_FILES = ['NOTICE', 'NOTICE.md', 'NOTICE.txt', 'NOTICE.markdown'];
+
+/**
+ * 有些包把第三方代码的许可放在 licenses/ 下（如 ECharts 的 licenses/LICENSE-d3），
+ * 根目录的 LICENSE 只是一份索引，漏掉这些等于漏发实际使用的代码的许可。
+ */
+async function collectExtras(dir) {
+  const extras = [];
+  for (const file of NOTICE_FILES) {
+    const text = await fs.readFile(path.join(dir, file), 'utf8').catch(() => null);
+    if (text) extras.push({ file: file, text: text });
+  }
+  const licDir = path.join(dir, 'licenses');
+  const entries = await fs.readdir(licDir, { recursive: true }).catch(() => []);
+  for (const rel of entries.sort()) {
+    const abs = path.join(licDir, rel);
+    const st = await fs.stat(abs).catch(() => null);
+    if (!st || !st.isFile()) continue;
+    const text = await fs.readFile(abs, 'utf8').catch(() => null);
+    if (text) extras.push({ file: 'licenses/' + String(rel).replace(/\\/g, '/'), text: text });
+  }
+  return extras;
+}
+
 const meta = await fs.readFile(metaPath, 'utf8').catch(() => null);
 if (!meta) {
   console.error('[notices] 找不到 ' + path.relative(root, metaPath) + '，先跑 npm run build');
@@ -64,7 +89,8 @@ for (const name of [...names].sort()) {
     version: info.version,
     license,
     homepage: (info.repository && info.repository.url) || info.homepage || '',
-    text
+    text,
+    extras: await collectExtras(dir)
   });
 }
 
@@ -93,11 +119,16 @@ for (const p of pkgs) {
   } else {
     lines.push('> 该包没有随包提供许可原文，以上许可类型取自其 package.json。', '');
   }
+  for (const extra of p.extras || []) {
+    lines.push('### ' + extra.file, '', '```text', extra.text.trimEnd(), '```', '');
+  }
 }
 
 await fs.mkdir(path.dirname(outFile), { recursive: true });
 await fs.writeFile(outFile, lines.join('\n'));
 console.log('[notices] ' + pkgs.length + ' 个包 → ' + path.relative(root, outFile).replace(/\\/g, '/'));
 for (const p of pkgs) {
-  console.log('  ' + p.name + '@' + p.version + '  ' + p.license + (p.text ? '' : '  （无原文）'));
+  const extras = (p.extras || []).map((e) => e.file).join(', ');
+  console.log('  ' + p.name + '@' + p.version + '  ' + p.license
+    + (p.text ? '' : '  （无原文）') + (extras ? '  另附 ' + extras : ''));
 }

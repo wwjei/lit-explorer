@@ -40,8 +40,9 @@ CI 里的 `npm ci` 是最后一道校验。Electron 的大版本升级被显式�
 ## 漏洞扫描要分两堆看
 
 `npm run audit`（`scripts/audit-report.mjs`）读 `vendor/meta.json`，把 `npm audit` 的结果
-按「会不会进安装包」分开：被 esbuild 打进 `src/renderer/vendor/` 的包跟着安装包分发，
-electron-builder / electron / esbuild 那一系只在构建机上跑。
+按「会不会进安装包」分开：被 esbuild 打进 `src/renderer/vendor/` 的包跟着安装包分发；
+**Electron 也算进这一堆**——它的 JS 包不经过 esbuild，但运行时二进制由 electron-builder
+原样随包分发；electron-builder / esbuild 那一系才只在构建机上跑。
 
 **退出码只由「会进安装包」且 high / critical 的项决定。** moderate 与「仅构建期」一律只
 报告——它们常常没有可用的修复（上游把范围钉死了，比如 pptx-preview 钉的 `echarts ^5.5.1`
@@ -50,3 +51,7 @@ electron-builder / electron / esbuild 那一系只在构建机上跑。
 它只回答「这个包进不进产物」，**不回答「这段代码在我们这里跑不跑得到」**，后者要人看。
 当前那三条进产物的 moderate 漏洞的可达性结论（都够不着）与复查触发条件，记在
 [docs/security-debt.md](../security-debt.md)。
+
+想验证分类逻辑而不改网络状态时，可以把一份 `npm audit --json` 的结果放进文件，用
+`AUDIT_JSON=<文件> node scripts/audit-report.mjs` 跑；Electron 的 high / critical 必须
+让退出码变成 1（这条在 2026-10-24 的审查里补上）。

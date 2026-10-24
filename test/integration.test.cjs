@@ -12,7 +12,10 @@
  *   C3     高亮 Worker 并发初始化不丢语言
  *   C4     重新读取时晚到的旧响应不能覆盖新内容
  *   F1     预览内查找（命中、切到不支持查找的列时自动关、固定时跟过去）
+ *   F2     代码块异步高亮后查找命中不丢
  *   P1     图片列（连续预览列出同目录图片、缩放档位、切到非图片时退出）
+ *   P2     晚到的旧图片请求不污染缩放状态
+ *   S6     并发切换工作区只留一个授权根
  *
  * 跑法：npm run test:integration                        全跑
  *       npm run test:integration -- --only=C4           只跑一段
@@ -60,8 +63,9 @@ function loadMainModule() {
   const ctx = {
     require: (n) => (n === 'electron' ? Object.assign({}, electron, { app: fakeApp, ipcMain: recorder })
       : n === './fs-api' ? fsApi
-        : n === './store' ? { load: async () => ({}), patch: async () => ({}) }
-          : require(n)),
+        : n === './state-sanitize' ? require(path.join(ROOT, 'src/main/state-sanitize.js'))
+          : n === './store' ? { load: async () => ({}), patch: async () => ({}) }
+            : require(n)),
     process: process,
     __dirname: path.join(ROOT, 'src/main'),
     URL, Response, console, setTimeout, clearTimeout
@@ -69,6 +73,8 @@ function loadMainModule() {
   vm.runInNewContext(fs.readFileSync(path.join(ROOT, 'src/main/main.js'), 'utf8'), ctx, { filename: 'main.js' });
   ctx.registerIpc();
   ctx.handlers = recorder.handlers;
+  /** 测试用假窗口：openWorkspace 会调 setTitle / webContents.send */
+  ctx.setWindow = (w) => { ctx.__testWin = w; vm.runInContext('win = __testWin;', ctx); };
   return ctx;
 }
 
@@ -133,13 +139,14 @@ function stubRead(fn) {
   ipcMain.handle('fs:read', fn);
 }
 
-/** 一份带 HTML altChunk 与 javascript: 超链接的 docx */
+/** 一份带 HTML altChunk、javascript: 与「java<TAB>script:」超链接的 docx */
 async function maliciousDocx() {
   const zip = new JSZip();
   zip.file('[Content_Types].xml', '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="xml" ContentType="application/xml"/><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="html" ContentType="text/html"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>');
   zip.file('_rels/.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>');
-  zip.file('word/document.xml', '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p><w:r><w:t>BODY_TEXT</w:t></w:r></w:p><w:hyperlink r:id="rIdLink"><w:r><w:t>LINK</w:t></w:r></w:hyperlink><w:altChunk r:id="rIdChunk"/><w:sectPr/></w:body></w:document>');
-  zip.file('word/_rels/document.xml.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdChunk" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/aFChunk" Target="chunk.html"/><Relationship Id="rIdLink" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="javascript:window.__auditHref=1" TargetMode="External"/></Relationships>');
+  zip.file('word/document.xml', '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body><w:p><w:r><w:t>BODY_TEXT</w:t></w:r></w:p><w:hyperlink r:id="rIdLink"><w:r><w:t>LINK</w:t></w:r></w:hyperlink><w:hyperlink r:id="rIdLinkTab"><w:r><w:t>TABLINK</w:t></w:r></w:hyperlink><w:altChunk r:id="rIdChunk"/><w:sectPr/></w:body></w:document>');
+  // &#9; 是 XML 字符引用：解析后属性值里是真正的制表符，浏览器会忽略它再识别协议
+  zip.file('word/_rels/document.xml.rels', '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdChunk" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/aFChunk" Target="chunk.html"/><Relationship Id="rIdLink" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="javascript:window.__auditHref=1" TargetMode="External"/><Relationship Id="rIdLinkTab" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="java&#9;script:window.__auditTab=1" TargetMode="External"/></Relationships>');
   zip.file('word/chunk.html', '<script>parent.__auditDocx=typeof(parent.pv.openRoot)</script>');
   return zip.generateAsync({ type: 'nodebuffer' });
 }
@@ -163,16 +170,21 @@ async function main() {
       try { await PV.docpreview.renderDocx(new Uint8Array(${JSON.stringify([...bytes])}), host); }
       catch(e){ err=String(e&&e.message||e); }
       await new Promise(r=>setTimeout(r,${DELAY.parse}));
-      const link=host.querySelector('a');
+      const links=[...host.querySelectorAll('a')];
+      const link=links[0]||null;
+      const tab=links.find(a=>/TABLINK/.test(a.textContent))||null;
       if(link) link.click();
+      if(tab) tab.click();
       return {
         err: err,
         executed: typeof window.__auditDocx,
         hrefExecuted: typeof window.__auditHref,
+        tabExecuted: typeof window.__auditTab,
         iframes: host.querySelectorAll('iframe').length,
         srcdoc: host.querySelector('iframe') ? host.querySelector('iframe').getAttribute('srcdoc') : null,
         bodyText: /BODY_TEXT/.test(host.textContent),
-        linkHref: link ? String(link.getAttribute('href') || '') : ''
+        linkHref: link ? String(link.getAttribute('href') || '') : '',
+        tabHref: tab ? String(tab.getAttribute('href') || '') : null
       };
     })()`);
     eq('渲染不报错', s1.err, null);
@@ -182,6 +194,9 @@ async function main() {
     ok('正常正文照常渲染', s1.bodyText);
     ok('超链接没有危险协议', !/^javascript:/i.test(s1.linkHref), s1.linkHref);
     eq('超链接的脚本没有执行', s1.hrefExecuted, 'undefined');
+    ok('制表符混淆的协议同样被清掉',
+      !s1.tabHref || !/^java\tscript:/i.test(s1.tabHref), s1.tabHref);
+    eq('制表符混淆的脚本没有执行', s1.tabExecuted, 'undefined');
   });
 
   await run('S4', '渲染进程不能自行扩大授权根', async () => {
@@ -359,6 +374,47 @@ async function main() {
     eq('固定列里的命中重新落上', f1.pinHits, 2);
   });
 
+  await run('F2', '代码块异步高亮不吞掉查找命中', async () => {
+    const f = await prepare();
+    const runPage = await renderer();
+    stubList(f.ws, ['fence.md']);
+    // 用一个本套件还没加载过的语言 + 较长的代码块，让分词晚于查找落点
+    const filler = Array.from({ length: 5000 }, (_, i) => 'local v' + i + ' = f(' + i + ') + ' + i).join('\n');
+    const doc = 'ZEBRA outside\n\n```lua\n-- ZEBRA inside\n' + filler + '\n```\n';
+    stubRead(() => ({ text: doc, size: doc.length }));
+    createdWin.webContents.send('workspace:opened', f.ws);
+    await sleep(200);
+    const f2 = await runPage(`(async()=>{
+      const wait=(ms)=>new Promise(r=>setTimeout(r,ms));
+      const pane=()=>document.querySelector('.pane:not(.is-pinned)');
+      const bar=()=>document.querySelector('.find-bar:not([hidden])');
+      [...document.querySelectorAll('.row')].find(e=>e.textContent.includes('fence.md')).click();
+      await wait(50);
+      document.dispatchEvent(new KeyboardEvent('keydown',
+        {key:'f',ctrlKey:true,bubbles:true,cancelable:true}));
+      await wait(40);
+      const input=bar().querySelector('.find-input');
+      input.value='ZEBRA'; input.dispatchEvent(new Event('input',{bubbles:true}));
+      await wait(40);
+      const before=pane().querySelectorAll('mark.find-hit').length;
+      const fenceSpansBefore=!!pane().querySelector('.md-code span');
+      await wait(1800);
+      return {
+        before: before,
+        fenceSpansBefore: fenceSpansBefore,
+        after: pane().querySelectorAll('mark.find-hit').length,
+        inFence: pane().querySelectorAll('.md-code mark.find-hit').length,
+        count: bar().querySelector('.find-count').textContent,
+        highlighted: !!pane().querySelector('.md-code span')
+      };
+    })()`);
+    ok('查找先于高亮落点', f2.before >= 1 && !f2.fenceSpansBefore, f2);
+    ok('代码块最终被高亮', f2.highlighted, f2);
+    eq('高亮替换后命中没有丢', f2.after, f2.before);
+    ok('代码块里的命中还在', f2.inFence >= 1, f2);
+    eq('计数与命中一致', f2.count, '1/' + f2.after);
+  });
+
   await run('P1', '图片列：连续预览、缩放、切走自动退出', async () => {
     const f = await prepare();
     const runPage = await renderer();
@@ -402,6 +458,64 @@ async function main() {
     eq('连续预览只标出当前那一张', p1.current, 1);
     eq('放大一档显示 100%', p1.zoom, '100%');
     ok('切到非图片时退出连续预览', p1.seqExited && p1.switchedToText, p1);
+  });
+
+  await run('P2', '晚到的旧图片请求不污染缩放状态', async () => {
+    const f = await prepare();
+    const runPage = await renderer();
+    stubList(f.ws, ['x.svg', 'y.svg']);
+    const svg = (w, h, fill) => 'data:image/svg+xml,' + encodeURIComponent(
+      '<svg xmlns="http://www.w3.org/2000/svg" width="' + w + '" height="' + h + '">'
+      + '<rect width="' + w + '" height="' + h + '" fill="' + fill + '"/></svg>');
+    const urlX = svg(40, 30, '#369');
+    const urlY = svg(80, 60, '#c33');
+    ipcMain.removeHandler('fs:preview-url');
+    ipcMain.handle('fs:preview-url', async (_e, p) => {
+      const name = path.basename(String(p));
+      if (name === 'x.svg') await sleep(600);
+      return { url: name === 'x.svg' ? urlX : urlY };
+    });
+    createdWin.webContents.send('workspace:opened', f.ws);
+    await sleep(200);
+    const p2 = await runPage(`(async()=>{
+      const wait=(ms)=>new Promise(r=>setTimeout(r,ms));
+      const pane=()=>document.querySelector('.pane:not(.is-pinned)');
+      const clickRow=(n)=>[...document.querySelectorAll('.row')].find(e=>e.textContent.includes(n)).click();
+      clickRow('x.svg');
+      await wait(50);
+      clickRow('y.svg');
+      await wait(1200);
+      pane().querySelector('[data-act="zoom-reset"]').click();
+      await wait(80);
+      pane().querySelector('button[data-act="zoom-in"]').click();
+      await wait(200);
+      const img=pane().querySelector('.img-wrap img');
+      return {
+        alt: img ? img.alt : null,
+        width: img ? img.style.width : null,
+        imgs: pane().querySelectorAll('.img-wrap img').length
+      };
+    })()`);
+    eq('正文显示的是后选中的图片', p2.alt, 'y.svg');
+    eq('只保留一张图片元素', p2.imgs, 1);
+    eq('缩放作用在可见图片上（80px 宽）', p2.width, '80px');
+  });
+
+  await run('S6', '并发切换工作区只留一个授权根', async () => {
+    await prepare();
+    const a = freshDir('switch-a');
+    const b = freshDir('switch-b');
+    fsApi.offerRoot(a);
+    fsApi.offerRoot(b);
+    mainCtx.setWindow({ setTitle() {}, webContents: { send() {} } });
+    const open = mainCtx.handlers['workspace:open'];
+    const [ra, rb] = await Promise.all([open(null, a), open(null, b)]);
+    const roots = fsApi.allowedRootList();
+    eq('只保留一个授权根', roots.length, 1);
+    eq('先发起的那次被后一次取代', ra && ra.error, 'SUPERSEDED');
+    ok('留下的是后发起的目录',
+      roots.length === 1 && roots[0].toLowerCase() === path.resolve(b).toLowerCase(),
+      { roots: roots, rb: rb });
   });
 
   if (createdWin) createdWin.destroy();

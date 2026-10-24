@@ -9,6 +9,7 @@ const fsp = require('node:fs/promises');
 
 const fsApi = require('./fs-api');
 const store = require('./store');
+const stateSanitize = require('./state-sanitize');
 
 const DEV_ROOT = path.join(__dirname, '..', '..');
 const DEV = process.argv.includes('--dev');
@@ -102,7 +103,9 @@ function registerPreviewProtocol() {
  * ------------------------------------------------------------------ */
 async function createWindow() {
   const state = await store.load();
-  const bounds = state.window && state.window.width ? state.window : null;
+  // 只取窗口几何字段：state.window 不能整份摊进 BrowserWindow 参数，
+  // 否则 webPreferences（sandbox / contextIsolation / nodeIntegration）可被持久化覆盖
+  const bounds = stateSanitize.windowBounds(state.window);
 
   // 主进程给过渲染进程的目录：命令行指定、上次的、最近打开过的。
   // 渲染进程只能从这些里挑着打开（见 workspace:open 的处理）。
@@ -213,7 +216,11 @@ async function captureAndQuit() {
 /* ------------------------------------------------------------------ *
  * 工作区
  * ------------------------------------------------------------------ */
+/** 每次切换工作区递增；后发起的切换获胜，先发起的不许再登记授权根 */
+let workspaceSeq = 0;
+
 async function openWorkspace(dir, options = {}) {
+  const seq = ++workspaceSeq;
   const abs = path.resolve(dir);
   const st = await fsp.stat(abs).catch(() => null);
   if (!st || !st.isDirectory()) {
@@ -229,10 +236,12 @@ async function openWorkspace(dir, options = {}) {
 
   // 登记并统一使用真实路径：用户可能挑了一个符号链接 / junction，
   // 后续所有路径校验都在真实路径上做，界面里也用同一份地址。
-  // 先清掉上一个工作区的授权根——读权限只跟当前打开的这个工作区走，
-  // 否则在 A 里读过的目录，切到 B 之后仍然可读。
+  // 先异步解析，再同步「清空 + 登记」：两次切换重叠时，先发起的那次若在
+  // 后一次清空之后才登记，就会留下两个授权根（A 已切走却仍然可读）。
+  const root = await fsApi.resolveReal(abs);
+  if (seq !== workspaceSeq) return { error: 'SUPERSEDED' };
   fsApi.resetAllowedRoots();
-  const root = (await fsApi.allowRoot(abs)) || abs;
+  fsApi.allowResolvedRoot(root);
   // 打开过的目录也算「给过渲染进程」：它之后可以再打开一次
   fsApi.offerRoot(root);
   const state = await store.load();
@@ -363,7 +372,9 @@ function registerIpc() {
   });
 
   ipcMain.handle('app:get-state', () => store.load());
-  ipcMain.handle('app:set-state', (_e, changes) => store.patch(changes || {}));
+  // 渲染进程只能改界面偏好；window / lastRoot / recentRoots 由主进程自己维护
+  ipcMain.handle('app:set-state', (_e, changes) =>
+    store.patch(stateSanitize.sanitizePatch(changes || {}, fsApi.isOfferedRoot)));
 
   ipcMain.handle('ui:context-menu', (_e, payload) => showContextMenu(payload));
   ipcMain.handle('ui:app-menu', () => showAppMenu());

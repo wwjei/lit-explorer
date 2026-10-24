@@ -3,8 +3,9 @@
  *
  * 为什么需要分开看：这个项目所有依赖都在 devDependencies，但其中一部分会被 esbuild
  * 打进 `src/renderer/vendor/`（shiki、docx-preview、pptx-preview 及其依赖树），
- * 跟着安装包一起分发；另一部分（electron-builder、electron、esbuild）只在构建机上跑。
- * 一条 `npm audit` 的原始列表把这两类混在一起，看了没法决定要不要紧张。
+ * 跟着安装包一起分发；另一部分（electron-builder、esbuild）只在构建机上跑。
+ * Electron 比较特殊：它的 JS 包不经过 esbuild，但运行时代码与二进制由 electron-builder
+ * 原样随安装包分发，所以也必须算进「会进安装包」这一堆。
  *
  * 判断依据是 `npm run build` 留下的 `src/renderer/vendor/meta.json`——「这次真正打进了
  * 哪些文件」的清单，所以它反映的是实际产物，不是 package.json 里的声明。
@@ -42,25 +43,33 @@ for (const input of meta.inputs) {
   const m = input.replace(/\\/g, '/').match(/^node_modules\/((?:@[^/]+\/)?[^/]+)\//);
   if (m) bundled.add(m[1]);
 }
+// Electron 不经过 esbuild，但它是随安装包分发的运行时本体（electron-builder 打包）
+bundled.add('electron');
 
 let report;
-try {
-  // npm audit 有漏洞时退出码非零，输出仍然有效。
-  // 整条命令当一个字符串交给 shell：传参数数组 + shell:true 会触发 DEP0190。
-  const out = execFileSync('npm audit --json', {
-    cwd: root,
-    encoding: 'utf8',
-    maxBuffer: 32 * 1024 * 1024,
-    shell: true
-  });
-  report = JSON.parse(out);
-} catch (err) {
-  const text = err.stdout || '';
+const injected = process.env.AUDIT_JSON;
+if (injected) {
+  // 测试 / 复现用：跳过 npm audit，直接读一份结果
+  report = JSON.parse(fs.readFileSync(path.resolve(injected), 'utf8'));
+} else {
   try {
-    report = JSON.parse(text);
-  } catch {
-    console.warn('[audit] 拿不到结果（多半是连不上 registry），本次跳过：' + String(err.message).split('\n')[0]);
-    process.exit(0);
+    // npm audit 有漏洞时退出码非零，输出仍然有效。
+    // 整条命令当一个字符串交给 shell：传参数数组 + shell:true 会触发 DEP0190。
+    const out = execFileSync('npm audit --json', {
+      cwd: root,
+      encoding: 'utf8',
+      maxBuffer: 32 * 1024 * 1024,
+      shell: true
+    });
+    report = JSON.parse(out);
+  } catch (err) {
+    const text = err.stdout || '';
+    try {
+      report = JSON.parse(text);
+    } catch {
+      console.warn('[audit] 拿不到结果（多半是连不上 registry），本次跳过：' + String(err.message).split('\n')[0]);
+      process.exit(0);
+    }
   }
 }
 

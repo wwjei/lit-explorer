@@ -233,9 +233,11 @@
     for (const parent of parents) parent.normalize();
   }
 
-  function applyFind() {
+  function applyFind(keepIndex) {
     const f = findState;
     if (!f) return;
+    // 文本被外部重写（比如代码高亮完成）时可以保留当前命中序号，避免视图跳回第一条
+    const prev = keepIndex && f.index >= 0 ? f.index : -1;
     clearMarks(f.pane.body);
     f.hits = [];
     f.index = -1;
@@ -244,7 +246,10 @@
       const res = markMatches(f.pane.body, f.query);
       f.hits = res.hits;
       f.capped = res.capped;
-      if (f.hits.length) { f.index = 0; focusFindHit(); }
+      if (f.hits.length) {
+        f.index = prev >= 0 ? Math.min(prev, f.hits.length - 1) : 0;
+        focusFindHit();
+      }
     }
     updateFindBar();
   }
@@ -268,12 +273,17 @@
     updateFindBar();
   }
 
-  /** 正文重渲染之后重新落高亮；已经不满足查找条件就直接关掉查找条 */
-  function refresh() {
+  /** 正文重渲染之后重新落高亮；keepIndex=true 时保留当前命中序号 */
+  function refresh(keepIndex) {
     const f = findState;
     if (!f) return;
     if (f.pane.el.hidden || !canFind(f.pane)) { close(); return; }
-    applyFind();
+    applyFind(keepIndex);
+  }
+
+  /** 只有这块正文正在被查找时才刷新（代码高亮完成时用） */
+  function refreshIn(root) {
+    if (findState && root && findState.pane.body.contains(root)) refresh(true);
   }
 
   window.PV = window.PV || {};
@@ -289,6 +299,7 @@
     revalidate: revalidate,
     afterRender: afterRender,
     carryFrom: carryFrom,
-    refresh: refresh
+    refresh: refresh,
+    refreshIn: refreshIn
   };
 })();

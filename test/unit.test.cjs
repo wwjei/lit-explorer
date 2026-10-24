@@ -7,6 +7,7 @@
  *   S3  工作区路径边界：assertAllowed 按真实路径比较
  *   S4  渲染进程不能自行扩大授权根：offerRoot / isOfferedRoot
  *   S5  切换工作区后旧工作区不再可读：resetAllowedRoots
+ *   S6  渲染进程提交的设置：字段白名单、窗口几何、项目路径校验
  *
  * 跑法：npm run test:unit                     全跑
  *       npm run test:unit -- --only=S2        只跑一段
@@ -16,7 +17,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
-const { ROOT, run, ok, eq, done, freshDir, linkDir } = require('./helpers.cjs');
+const { ROOT, run, ok, eq, eqJson, done, freshDir, linkDir } = require('./helpers.cjs');
 
 /**
  * 在沙箱里加载渲染进程的 IIFE 模块。
@@ -71,6 +72,13 @@ function loadRenderer() {
     ok('链接文字里的行内样式仍然生效',
       toHtml('[**粗** 和 `码`](https://x.example)').indexOf('<code>码</code>') >= 0);
     ok('占位符不漏进输出', !/[\u0000\u0001]/.test(rich + injected));
+
+    // 行内代码占位符不能落进 href：否则回填 <code> 时会把代码里的引号带进属性
+    const codeInUrl = toHtml('[x](http://a`"onclick="window.__x=1//`)');
+    ok('地址里含行内代码时不生成链接', codeInUrl.indexOf('<a ') < 0, codeInUrl);
+    ok('代码里的引号被转义成实体', codeInUrl.indexOf('&quot;onclick=') >= 0, codeInUrl);
+    ok('协议名里夹控制字符不生成链接',
+      toHtml('[x](java\u0001script:1)').indexOf('<a ') < 0);
   });
 
   await run('S3', '工作区路径边界', async () => {
@@ -149,6 +157,45 @@ function loadRenderer() {
     await fsApi.allowRoot(second);
     eq('切换后新工作区可读', await read(path.join(second, 'b.txt')), 'SECOND');
     eq('切换后旧工作区不再可读', await read(path.join(first, 'a.txt')), 'EACCES_ROOT');
+  });
+
+  await run('S6', '渲染进程提交的设置：字段白名单与路径校验', () => {
+    const san = require(path.join(ROOT, 'src/main/state-sanitize.js'));
+
+    const bounds = san.windowBounds({
+      width: 1200, height: 800, x: 10, y: -20,
+      webPreferences: { sandbox: false, nodeIntegration: true }
+    });
+    eqJson('窗口参数只保留几何字段', bounds, { width: 1200, height: 800, x: 10, y: -20 });
+    eq('宽高不可用时返回 null', san.windowBounds({ webPreferences: { sandbox: false } }), null);
+    eq('离谱的宽高被拒绝', san.windowBounds({ width: 10, height: 10 }), null);
+
+    const offered = new Set(['C:\\ok']);
+    const patch = san.sanitizePatch({
+      theme: 'dark',
+      previewOpen: false,
+      previewWidth: 99999,
+      leftSplitRatio: 5,
+      window: { width: 1200, height: 800, webPreferences: { sandbox: false } },
+      lastRoot: 'C:\\Windows',
+      recentRoots: ['C:\\Windows'],
+      projects: [
+        { path: 'C:\\ok', name: 'ok', icon: { type: 'glyph', id: 'code' } },
+        { path: 'C:\\Windows', name: 'bad' },
+        { path: 'C:\\ok', icon: { type: 'image', data: 'data:text/html,<script>' } }
+      ]
+    }, (p) => offered.has(p));
+
+    eq('不接收 window', patch.window, undefined);
+    eq('不接收 lastRoot', patch.lastRoot, undefined);
+    eq('不接收 recentRoots', patch.recentRoots, undefined);
+    eq('普通偏好照常保存', patch.theme, 'dark');
+    eq('previewWidth 有上限', patch.previewWidth, 10000);
+    eq('leftSplitRatio 有范围', patch.leftSplitRatio, 0.92);
+    eq('只保留主进程给过的项目', patch.projects.length, 2);
+    eq('未授权的项目路径被丢弃',
+      patch.projects.some((p) => p.path === 'C:\\Windows'), false);
+    eq('非图片 data URL 的图标被丢弃', patch.projects[1].icon, null);
   });
 
   done();

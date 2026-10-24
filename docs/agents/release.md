@@ -53,6 +53,13 @@ tag 名里带连字符（`-alpha` / `-beta`）会被自动标记为预发布。*
 「隐式发布」，并因缺少 `GH_TOKEN` 报错退出——包其实已经构建成功，失败只发生在最后一步。
 发布统一交给 workflow 里的 action-gh-release。
 
+## Release 正文
+
+`softprops/action-gh-release@v3` 里装文字的是 `body`（或 `body_path`），不是
+`append_body`——后者是布尔开关，表示「追加到已有 Release 正文」。开启
+`generate_release_notes` 时，`body` 会**前置**在自动生成的说明之前，所以不需要为了保留
+自动说明而改用它；把多行说明写到 `append_body` 上会让正文丢失。
+
 ## 签名与自动更新
 
 都还没做，原因和选项记在 [further_notes.md](../../further_notes.md) 的 N4 / N5。
