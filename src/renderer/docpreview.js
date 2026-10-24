@@ -34,6 +34,9 @@ function sanitizeDocDom(root) {
 /** 有协议头的地址只放行固定几种；相对地址（锚点、图片相对路径）原样保留 */
 function safeDocUrl(name, value) {
   const url = String(value || '').trim();
+  // 浏览器解析地址时会忽略制表符 / 换行，所以 "java\tscript:" 仍会被当成脚本协议。
+  // 合法的本地相对路径与 http(s) 地址都不需要控制字符，带 C0 控制符的直接拒绝。
+  if (/[\u0000-\u001f\u007f]/.test(url)) return false;
   if (!/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(url)) return true;
   if (name === 'href') return /^(https?:|mailto:)/i.test(url);
   return /^(https?:|data:image\/|blob:)/i.test(url);

@@ -477,6 +477,8 @@
     if (state.root && PV.projects.samePath(path, state.root)) return;
     const res = await pv.openRoot(path);
     if (res && res.error) {
+      // 后一次切换已经开始了：这次被取消是正常现象，不用打扰用户
+      if (res.error === 'SUPERSEDED') return;
       toast(res.error === 'NOT_OFFERED' ? '无法打开该项目：不在可访问范围内' : '无法打开该项目');
     }
   }
@@ -1017,7 +1019,7 @@
     if (!known && PV.projects.isFull()) { PV.projects.warnFull(); return; }
     const res = await pv.openRoot(dir);
     // 主进程只接受它自己给过的目录；真被拒了要说一声，别让按钮看起来没反应
-    if (res && res.error) toast('打不开示例项目：' + res.error);
+    if (res && res.error && res.error !== 'SUPERSEDED') toast('打不开示例项目：' + res.error);
   });
 
   /* 搜索 */

@@ -370,6 +370,7 @@
     }, { passive: false });
   }
 
+  /** 只造 <img> 并挂好缩放回调；是否进 pane.images 由调用方在正文落地后再决定 */
   function newImage(pane, node, url, lazy) {
     const img = document.createElement('img');
     img.src = url;
@@ -378,16 +379,17 @@
     if (lazy) img.loading = 'lazy';
     // 图片可能已经跟着内容搬到了别的窗格，缩放要落在它现在那一列上
     img.addEventListener('load', () => applyZoom(PV.pane.paneOf(img) || pane));
-    pane.images.push(img);
     return img;
   }
 
   function renderImageView(pane, node, url, task) {
-    pane.images = [];
     const wrap = document.createElement('div');
     wrap.className = 'img-wrap';
-    wrap.appendChild(newImage(pane, node, url, false));
+    const img = newImage(pane, node, url, false);
+    wrap.appendChild(img);
+    // 晚到的旧请求不能改 pane.images：那会让缩放落到一张已经不在 DOM 里的图上
     if (!task.replace(wrap)) return;
+    pane.images = [img];
     applyZoom(pane);
     bindZoomWheel(pane, wrap);
   }
@@ -421,7 +423,7 @@
     const urls = await Promise.all(shown.map((e) => pv.previewUrl(e.path)));
     if (task.stale) return;
 
-    pane.images = [];
+    const imgs = [];
     const box = document.createElement('div');
     box.className = 'imgseq';
     for (let i = 0; i < shown.length; i++) {
@@ -429,7 +431,9 @@
       fig.className = 'imgseq-item' + (shown[i].path === node.path ? ' is-current' : '');
       fig.dataset.path = shown[i].path;
       if (urls[i] && urls[i].url) {
-        fig.appendChild(newImage(pane, shown[i], urls[i].url, i > 0));
+        const img = newImage(pane, shown[i], urls[i].url, i > 0);
+        imgs.push(img);
+        fig.appendChild(img);
       } else {
         const bad = document.createElement('div');
         bad.className = 'imgseq-cap';
@@ -451,6 +455,7 @@
       box.appendChild(note);
     }
     if (!task.replace(box)) return;
+    pane.images = imgs;
     applyZoom(pane);
     bindZoomWheel(pane, box);
     box.scrollTop = 0;

@@ -432,6 +432,7 @@
   async function highlightFences(rootEl) {
     if (!rootEl) return;
     const blocks = Array.from(rootEl.querySelectorAll('pre[data-lang]'));
+    let changed = false;
     for (const pre of blocks) {
       const lang = langFor('x.' + pre.dataset.lang);
       if (!lang) continue;
@@ -444,10 +445,14 @@
         pre.innerHTML = '<code>' + res.tokens
           .map((line) => line.map(tokenHtml).join(''))
           .join('\n') + '</code>';
+        changed = true;
       } catch (err) {
         /* 升级失败就保留已转义的纯文本 */
       }
     }
+    // 代码块是整块替换的：查找落在里面的 <mark> 会跟着消失，但计数还指着旧节点。
+    // 高亮收尾时让同一窗格的查找重新落一次（保留当前命中序号）。
+    if (changed && window.PV && PV.find && PV.find.refreshIn) PV.find.refreshIn(rootEl);
   }
 
   window.PV = window.PV || {};

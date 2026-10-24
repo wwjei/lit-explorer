@@ -172,6 +172,15 @@ async function allowRoot(dir) {
   return real;
 }
 
+/**
+ * 登记一个已经解析成真实路径的根（同步）。
+ * 给「先异步解析、再原子地清空 + 登记」的调用方用，避免两次切换交错时各自留下一个根。
+ */
+function allowResolvedRoot(real) {
+  if (real) allowedRoots.add(real);
+  return real;
+}
+
 function allowedRootList() {
   return Array.from(allowedRoots);
 }
@@ -369,6 +378,8 @@ async function statPath(target) {
 
 module.exports = {
   allowRoot,
+  allowResolvedRoot,
+  resolveReal: realPath,
   allowedRootList,
   resetAllowedRoots,
   offerRoot,

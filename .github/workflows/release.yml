@@ -53,7 +53,9 @@ jobs:
           # tag 里带连字符视为预发布（如 v0.0.1-alpha）
           prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
-          append_body: |
+          # generate_release_notes 开启时，body 会放在自动生成的说明前面；
+          # append_body 是布尔开关（追加到已有 Release 正文），不能拿来装这段文字
+          body: |
             ### 校验下载
 
             本构建未配置代码签名，Windows SmartScreen 会提示「未知发布者」。下载后可以核对
