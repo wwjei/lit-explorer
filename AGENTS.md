@@ -14,7 +14,7 @@ lit explorer：Electron 写的本地项目文件浏览器（多栏目录导航 +
 | 你的场景 | 读这个 |
 | --- | --- |
 | 增删依赖，或在 `dependencies` / `devDependencies` 之间挪包 | [docs/agents/dependencies.md](docs/agents/dependencies.md) |
-| 改 `src/renderer/` 下的界面代码（含 pane / preview-body / find / app 的分层）、动构建脚本或图标 | [docs/agents/build.md](docs/agents/build.md) |
+| 改 `src/renderer/` 下的界面代码（含 pane / preview-body / find / projects / app 的分层）、动构建脚本或图标 | [docs/agents/build.md](docs/agents/build.md) |
 | 加文件系统能力，改 preload / IPC / 自定义协议 | [docs/agents/security.md](docs/agents/security.md) |
 | 改版本号、打 tag、发 Release | [docs/agents/release.md](docs/agents/release.md) |
 | 跑测试、写界面探针、装包验证改动 | [docs/agents/verify.md](docs/agents/verify.md) |

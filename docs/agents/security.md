@@ -17,6 +17,8 @@
   `offerRoot` / `isOfferedRoot`），新增「打开某个目录」的入口时，路径要先由主进程
   提供（示例项目、最近打开、已打开过的）或者来自 `dialog`，不要直接把渲染进程传来的
   路径交给 `allowRoot`；
+- 项目图标图片也只从 `dialog` 选：主进程用 `nativeImage` 读入、缩到 64px 后以 data URL
+  交给渲染进程，不把原始路径暴露出去，也不接受渲染进程传来的任意图片路径；
 - 预览 HTML 走 `pv://` 协议（`standard + secure + corsEnabled`），每次请求都要过
   `assertAllowed()`，不要图省事换成 `file://`；
 - 整份读取（如给 docx / pptx 用的 `fs:read-bytes`）要有体积上限，超限直接拒绝而非部分读取。

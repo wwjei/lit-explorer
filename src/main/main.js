@@ -3,7 +3,7 @@
 // 大目录批量 stat 会密集使用线程池，提前放大以免成为瓶颈
 process.env.UV_THREADPOOL_SIZE = process.env.UV_THREADPOOL_SIZE || '16';
 
-const { app, BrowserWindow, Menu, dialog, ipcMain, shell, clipboard, protocol } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, shell, clipboard, protocol, nativeImage } = require('electron');
 const path = require('node:path');
 const fsp = require('node:fs/promises');
 
@@ -109,6 +109,8 @@ async function createWindow() {
   fsApi.offerRoot(OPEN_ARG);
   fsApi.offerRoot(state.lastRoot);
   for (const recent of state.recentRoots || []) fsApi.offerRoot(recent);
+  // 项目快捷切换里的项目也要登记：它们可能已经不在 recentRoots 的 8 个名额里
+  for (const p of state.projects || []) if (p && p.path) fsApi.offerRoot(p.path);
 
   win = new BrowserWindow(Object.assign(
     {
@@ -261,6 +263,31 @@ function registerIpc() {
   ipcMain.handle('workspace:open', async (_e, dir) => {
     if (!fsApi.isOfferedRoot(dir)) return { error: 'NOT_OFFERED' };
     return openWorkspace(dir);
+  });
+
+  // 项目图标：用户挑一张图片，主进程缩到 64px 再交出去。
+  // 渲染进程拿到的只是 data URL，不能借这个口子读任意文件。
+  ipcMain.handle('projects:pick-icon', async () => {
+    const res = await dialog.showOpenDialog(win, {
+      title: '选择项目图标',
+      properties: ['openFile'],
+      filters: [{ name: '图片', extensions: ['png', 'jpg', 'jpeg', 'webp', 'gif', 'ico', 'bmp'] }]
+    });
+    if (res.canceled || !res.filePaths.length) return { canceled: true };
+    try {
+      const img = nativeImage.createFromPath(res.filePaths[0]);
+      if (img.isEmpty()) return { error: 'BAD_IMAGE' };
+      const size = img.getSize();
+      const scale = 64 / Math.max(size.width || 1, size.height || 1);
+      const resized = img.resize({
+        width: Math.max(1, Math.round(size.width * scale)),
+        height: Math.max(1, Math.round(size.height * scale)),
+        quality: 'best'
+      });
+      return { dataUrl: resized.toDataURL() };
+    } catch (err) {
+      return { error: err.message };
+    }
   });
 
   ipcMain.handle('fs:list', async (_e, dir) => {
@@ -438,6 +465,18 @@ async function showAppMenu() {
     { type: 'separator' },
     { label: '重新扫描目录', accelerator: 'F5', click: () => win.webContents.send('app:rescan') },
     { label: '聚焦搜索框', accelerator: 'Ctrl+F', click: () => win.webContents.send('app:focus-search') },
+    {
+      // 原来状态栏那排按键说明，收进菜单里当图例；不是可执行命令
+      label: '快捷键',
+      submenu: [
+        { label: '↑ / ↓　选择', enabled: false },
+        { label: '→　进入目录', enabled: false },
+        { label: '←　返回上级', enabled: false },
+        { label: '⏎　打开文件', enabled: false },
+        { label: 'Ctrl+F　预览内查找', enabled: false },
+        { label: '双击　用默认程序打开', enabled: false }
+      ]
+    },
     { type: 'separator' },
     { label: '显示 / 隐藏预览面板', accelerator: 'Ctrl+B', click: () => win.webContents.send('app:toggle-preview') },
     { label: '切换明暗主题', accelerator: 'Ctrl+Shift+L', click: toggleThemeFromMain },

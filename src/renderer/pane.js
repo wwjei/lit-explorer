@@ -19,7 +19,7 @@
  * 引用，与加载顺序无关。
  *
  * 加载顺序：icons.js → highlight.js → markdown.js → vendor/docpreview.js →
- *           pane.js → preview-body.js → find.js → app.js。
+ *           pane.js → preview-body.js → find.js → projects.js → app.js。
  */
 (function () {
   'use strict';
