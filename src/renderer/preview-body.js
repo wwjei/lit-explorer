@@ -32,7 +32,9 @@
     root: function () { return ''; },
     previewPrefs: function () { return { docx: true, pptx: true }; },
     itemsInDir: function () { return null; },
-    toast: function () {}
+    toast: function () {},
+    /** 正文真的落地后上报显示版本（路径 / size / mtime），变更监测拿它当基线 */
+    loaded: function () {}
   };
 
   /** 路径 -> { size, mtime }，由主进程异步补发 */
@@ -148,7 +150,9 @@
       // 失败卡片也要先看这次渲染是不是已经被取代：用户可能已经切走了，
       // 这时候写进去会盖掉新文件的预览
       task.write(fallbackCard(node, '预览失败：' + ((err && err.message) || err)));
+      return;
     }
+    noteLoaded(pane, node, { size: res.size }, task);
   }
 
   /* ============================ 头部与内容身份 ============================ */
@@ -209,7 +213,9 @@
       + '<button class="iconbtn pinbtn' + (pane.pinned ? ' is-on' : '') + '" data-act="pin" title="'
       + (pane.pinned ? '取消固定' : '固定此预览') + '" aria-label="固定预览">'
       + icon(pane.pinned ? 'pinFilled' : 'pin', '', 15) + '</button>'
-      + '<button class="iconbtn" data-act="reload" title="重新读取">' + icon('refresh', '', 15) + '</button>'
+      + '<button class="iconbtn reloadbtn' + (pane.changed ? ' is-changed' : '')
+      + '" data-act="reload" title="' + (pane.changed ? '文件已在磁盘上变化，点击重新读取' : '重新读取')
+      + '">' + icon('refresh', '', 15) + '</button>'
       + '<button class="iconbtn" data-act="close" title="' + (pane.pinned ? '关闭此预览列' : '收起预览') + '">'
       + icon('close', '', 15) + '</button>'
       + '</div></div>';
@@ -228,6 +234,15 @@
 
   /* ============================ 正文分派 ============================ */
 
+  /**
+   * 正文真的落地了才记版本基线。晚到的旧读取（同一文件被重新读取取代）
+   * 不应该把基线拉回旧值，否则下一次轮询会误报「有变化」。
+   */
+  function noteLoaded(pane, node, info, task) {
+    if (task && task.stale) return;
+    hooks.loaded(pane, node, info || null);
+  }
+
   async function renderPaneBody(pane, node, mode, key, task) {
     // node 为 null：临时预览列被清空（换工作区），正文回到「未选择文件」
     if (!node) { task.write(emptyState()); return; }
@@ -237,6 +252,8 @@
       task.write(loadingState());
       const res = await pv.previewUrl(node.path);
       if (!res.url) { task.write(fallbackCard(node, '无法生成预览地址')); return; }
+      // 这几类不走 fs:read，拿不到读取时的 size / mtime，交给外部补一次 stat
+      noteLoaded(pane, node, null, task);
       if (node.kind === 'html') { task.write(browserChrome(node, res.url)); return; }
       if (node.kind === 'pdf') { task.write(pdfFrame(node, res.url)); return; }
       if (pane.continuous) { await renderImageSeq(pane, node, task); return; }
@@ -269,12 +286,14 @@
     if (node.kind === 'md' && mode === 'preview') {
       if (!task.write(noticeHtml + '<div class="prose-wrap"><article class="prose">'
         + mdToHtml(res.text) + '</article></div>')) return;
+      noteLoaded(pane, node, { size: res.size, mtime: res.mtime }, task);
       PV.highlight.highlightFences(pane.body.querySelector('.prose'));
       return;
     }
 
     // 其余一律走代码视图：分词在 Worker 里做，主线程只渲染可见窗口
     if (!task.write(noticeHtml)) return;
+    noteLoaded(pane, node, { size: res.size, mtime: res.mtime }, task);
     pane.view = PV.highlight.mount(pane.body, {
       text: res.text,
       size: res.size,

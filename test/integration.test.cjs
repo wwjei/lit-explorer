@@ -102,6 +102,9 @@ function renderer() {
   if (!winPromise) {
     winPromise = (async () => {
       ipcMain.handle('app:get-state', () => ({}));
+      ipcMain.handle('app:set-state', () => ({}));
+      // 预览变更监测每 5 s 会 stat 一次当前预览；测试里没有真实文件，固定返回同一版本
+      ipcMain.handle('fs:stat', () => ({ size: 0, mtime: 0 }));
       ipcMain.handle('window:is-maximized', () => false);
       createdWin = new BrowserWindow({
         show: false,
