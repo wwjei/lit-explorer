@@ -16,6 +16,8 @@ const DEFAULTS = {
   lastRoot: '',
   window: null,
   recentRoots: [],
+  // 项目快捷切换：[{ path, name, icon, nav }]，最多 5 个
+  projects: [],
   // 是否隐藏以 . 开头的文件/文件夹（按工作区无关的全局偏好）
   hideDot: false,
   // 快速访问：{ [小写化的工作区根目录]: [{ path, name, isDir, kind }] }

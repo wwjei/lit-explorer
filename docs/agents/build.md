@@ -24,18 +24,19 @@ README 与界面直接使用它。`scripts/build-icons.mjs` 自带 PNG 解码、
 
 ```
 icons.js → highlight.js → markdown.js → vendor/docpreview.js
-         → pane.js → preview-body.js → find.js → app.js
+         → pane.js → preview-body.js → find.js → projects.js → app.js
 ```
 
 **加载顺序是契约**：后加载的文件可以在函数体里引用前面的（`PV.pane` / `PV.body` /
-`PV.find`），反过来只在运行时引用、不在加载时引用。
+`PV.find` / `PV.projects`），反过来只在运行时引用、不在加载时引用。
 
 | 文件 | 管什么 |
 | --- | --- |
 | `pane.js`（`PV.pane`） | 预览窗格作为一个单元的全部事情：内容身份 `bodyKey`、渲染任务身份 `reqId` / `pending`、创建与销毁、固定时的正文迁移、每列的宽度与排列 |
 | `preview-body.js`（`PV.body`） | 正文与头部**画成什么样**：按类型分派（Markdown / 代码视图 / 图片与连续预览 / HTML 迷你浏览器 / PDF / docx / pptx）、头部副标题与元信息、缩放档位 |
 | `find.js`（`PV.find`） | 预览内查找：查找条、命中标记、在命中之间跳转 |
-| `app.js` | 目录导航（多栏、虚拟滚动、快速访问）、键盘 / 指针 / 主进程事件接线，以及把上面三个模块接起来 |
+| `projects.js`（`PV.projects`） | 项目切换条：最多 5 个项目、图标目录与图标选择、每项目浏览位置的持久化；打开 / 切换由 `app.js` 通过 `PV.projects.init()` 注入 |
+| `app.js` | 目录导航（多栏、虚拟滚动、快速访问）、键盘 / 指针 / 主进程事件接线，以及把上面几个模块接起来 |
 
 分层是为了把「异步任务与界面归属」收在一处：正文**只能通过任务对象写**
 （`task.write` / `task.replace`，见 `pane.js` 的 `beginTask`），晚到的旧任务写不动，
@@ -46,6 +47,10 @@ icons.js → highlight.js → markdown.js → vendor/docpreview.js
 `PV.body.head / render / key` 三个口子装到窗格上，同时把两边都需要的应用状态注入进去
 （`selection` / `mode` / `root` / `previewPrefs` / `itemsInDir` / `toast`）。窗格只决定
 「什么时候画」，`PV.body` 决定「画成什么样」，`app.js` 提供「画什么」。
+
+`PV.projects` 反过来：它自己管列表、图标与持久化，只把「切换到这个项目」「打开一个新项目」
+两个动作交回 `app.js`（`PV.projects.init({ switchTo, openNew, toast })`）。切换前的导航快照
+与切换后的逐级恢复在 `app.js` 里，因为只有它知道 `state.path` 与各栏的加载状态。
 
 动这个分层时，`test/integration.test.cjs` 的 C1 / C2 / C4 / F1 / P1 就是它的回归网。
 

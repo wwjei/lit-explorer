@@ -303,6 +303,13 @@ body.resizing{cursor:col-resize}
 .pv-name{flex:1;min-width:0}
 .pv-nm{font-size:13.5px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .pv-sub{margin-top:3px;font-size:11.5px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 标题下的路径可点：单击复制完整路径，悬停给原生提示 */
+.pv-path{
+  display:inline-block;max-width:100%;padding:0;border:0;background:none;font:inherit;color:inherit;
+  cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:bottom;
+}
+.pv-path:hover{color:var(--text-2);text-decoration:underline}
+.pv-facts{color:var(--muted)}
 .pv-actions{flex:none;margin-left:auto;display:flex;align-items:center;gap:4px}
 /* 图钉 / 刷新 / 关闭 始终吸附在窗格头部的右侧 */
 .pv-btns{display:flex;align-items:center;gap:4px;margin-left:auto}
@@ -315,12 +322,11 @@ body.resizing{cursor:col-resize}
 .pv-zoom .zoom-val{width:auto;min-width:36px;padding:0 4px;font-size:11px;
   font-variant-numeric:tabular-nums;color:var(--text-2)}
 .pv-actions .iconbtn[data-act="seq"].is-on{background:var(--sel);color:var(--accent-ink)}
-/* 窗格变窄（多列并行）时：操作按钮换到单独一行并整体靠右，同时收起三个低频按钮——
-   复制路径 / 在资源管理器中显示 / 用默认程序打开在右键菜单里都有 */
+/* 窗格变窄（多列并行）时：操作按钮换到单独一行并整体靠右，同时收起两个低频按钮——
+   在资源管理器中显示 / 用默认程序打开在右键菜单里都有 */
 @container (max-width: 400px){
   .pv-head{padding:9px 10px 8px;gap:8px}
   .pv-actions{flex:1 1 100%;margin-left:0;flex-wrap:wrap;justify-content:flex-end}
-  .pv-actions .iconbtn[data-act="copy"],
   .pv-actions .iconbtn[data-act="reveal"],
   .pv-actions .iconbtn[data-act="external"]{display:none}
 }
@@ -546,20 +552,117 @@ kbd{
 .prose del{color:var(--muted)}
 .md-table-wrap{overflow-x:auto}
 
-/* ============ 状态栏 ============ */
-.status{
-  flex:none;height:28px;display:flex;align-items:center;gap:16px;
-  padding:0 14px;border-top:1px solid var(--line);
-  background:var(--panel);color:var(--muted);font-size:11.5px;
+/* ============ 项目切换条（左栏底部） ============ */
+.proj-dock{
+  order:9;flex:none;height:44px;width:100%;
+  display:flex;align-items:center;gap:2px;padding:0 6px;
+  border-top:1px solid var(--line);background:var(--panel);
 }
-.status .path{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0;user-select:text}
-.status .hints{margin-left:auto;display:flex;align-items:center;gap:12px;flex:none}
-.status .hints span{display:flex;align-items:center;gap:4px}
-.status kbd{height:17px;min-width:17px;font-size:10px;border-bottom-width:1px}
+.proj-tile{
+  width:32px;height:32px;flex:none;border-radius:8px;
+  display:grid;place-items:center;background:transparent;
+}
+.proj-tile:hover{background:var(--hover)}
+/* 没打开的项目整组去色；悬停时恢复，方便确认要点的是哪个 */
+.proj-ic{display:grid;place-items:center;filter:grayscale(1);opacity:.8;transition:filter .15s,opacity .15s}
+.proj-tile:hover .proj-ic,
+.proj-tile.is-on .proj-ic{filter:none;opacity:1}
+.pj-glyph{display:block}
+.proj-mono{
+  display:grid;place-items:center;width:16px;height:16px;
+  font-size:10.5px;font-weight:600;line-height:1;
+}
+.proj-img{display:block;width:16px;height:16px;border-radius:4px;object-fit:cover}
+.proj-add{
+  margin-left:auto;width:32px;height:32px;flex:none;border-radius:8px;
+  display:grid;place-items:center;color:var(--muted);background:transparent;
+  transition:background .12s,color .12s;
+}
+.proj-add:hover{background:var(--hover);color:var(--text)}
+
+/* 悬停提示：浅色主题用白底细边，深色主题才用深色浮层 */
+.proj-tip{
+  position:fixed;z-index:60;max-width:312px;padding:7px 10px 8px;border-radius:9px;
+  background:var(--panel);color:var(--text);border:1px solid var(--line);
+  box-shadow:0 8px 24px -6px rgba(16,24,40,.14),0 1px 3px rgba(16,24,40,.05);
+  pointer-events:none;
+}
+.proj-tip::after{
+  content:"";position:absolute;left:var(--arrow,50%);bottom:-5px;width:9px;height:9px;
+  background:var(--panel);border-right:1px solid var(--line);border-bottom:1px solid var(--line);
+  transform:translateX(-50%) rotate(45deg);border-radius:1px;
+}
+.proj-tip b{display:block;font-size:12px;font-weight:500;margin-bottom:2px}
+.proj-tip code{display:block;font:10.5px/1.55 var(--mono);color:var(--muted);overflow-wrap:anywhere}
+[data-theme="dark"] .proj-tip{
+  background:#2c3341;border-color:rgba(255,255,255,.09);color:#fff;
+  box-shadow:0 10px 30px rgba(0,0,0,.4);
+}
+[data-theme="dark"] .proj-tip::after{background:#2c3341;border-color:rgba(255,255,255,.09)}
+[data-theme="dark"] .proj-tip code{color:#aeb8c6}
+
+.proj-warn{
+  position:fixed;z-index:60;width:226px;padding:9px 11px 10px;border-radius:10px;
+  background:#1b1f26;color:#fff;font-size:11.5px;line-height:1.55;
+  box-shadow:0 12px 32px rgba(0,0,0,.3);
+}
+.proj-warn b{display:block;font-size:12px;font-weight:500;margin-bottom:2px}
+.proj-warn span{color:#aeb8c6}
+.proj-warn::after{
+  content:"";position:absolute;right:12px;bottom:-4px;width:9px;height:9px;
+  background:#1b1f26;transform:rotate(45deg);border-radius:1px;
+}
+[data-theme="dark"] .proj-warn,[data-theme="dark"] .proj-warn::after{background:#2c3341}
+[data-theme="dark"] .proj-warn{border:1px solid rgba(255,255,255,.09)}
+
+/* ============ 项目图标选择 ============ */
+.pj-pop{
+  position:fixed;z-index:60;width:300px;padding:6px;border-radius:12px;
+  background:var(--panel);border:1px solid var(--line);
+  box-shadow:0 18px 48px -12px rgba(16,24,40,.28),0 2px 6px rgba(16,24,40,.07);
+}
+[data-theme="dark"] .pj-pop{box-shadow:0 18px 52px -12px rgba(0,0,0,.72),0 2px 6px rgba(0,0,0,.4)}
+.pj-pop.is-wide{width:322px}
+.pj-pop-h{display:flex;align-items:center;gap:9px;height:42px;padding:0 6px 0 4px;margin-bottom:2px;
+  border-bottom:1px solid var(--line-soft)}
+.pj-head-ic{flex:none;display:grid;place-items:center;width:18px;height:18px}
+.pj-meta{min-width:0;flex:1}
+.pj-meta b{display:block;font-size:12px;font-weight:500;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pj-meta span{display:block;font:9.5px/1.5 var(--mono);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pj-label{padding:7px 8px 5px;font-size:10.5px;letter-spacing:.04em;color:var(--muted)}
+.pj-grid{display:grid;grid-template-columns:repeat(8,1fr);gap:3px;padding:0 4px}
+.pj-grid.is-big{padding:4px 4px 2px}
+.pj-cell{height:30px;border-radius:7px;display:grid;place-items:center;background:transparent}
+.pj-cell:hover{background:var(--hover)}
+.pj-cell.is-on{background:var(--sel)}
+.pj-more{display:flex;align-items:center;gap:6px;width:calc(100% - 8px);height:28px;margin:4px 4px 0;
+  padding:0 7px;border-radius:7px;font-size:11.5px;color:var(--text-2);text-align:left}
+.pj-more:hover{background:var(--hover);color:var(--text)}
+.pj-more .pj-chev{margin-left:auto;color:var(--muted)}
+.pj-sep{height:1px;background:var(--line-soft);margin:4px 6px}
+.pj-item{display:flex;align-items:center;gap:8px;width:100%;height:29px;padding:0 8px;border-radius:7px;
+  font-size:12px;color:var(--text);text-align:left}
+.pj-item:hover{background:var(--hover)}
+.pj-item .pj-ic2{color:var(--muted);flex:none}
+.pj-item.is-danger{color:var(--danger)}
+.pj-item.is-danger .pj-ic2{color:currentColor}
+.pj-back{width:24px;height:24px;flex:none;border-radius:6px;display:grid;place-items:center;color:var(--text-2)}
+.pj-back:hover{background:var(--hover);color:var(--text)}
+.pj-title{font-size:11.5px;color:var(--text-2);flex:1}
+.pj-search{display:flex;align-items:center;gap:6px;height:28px;margin:8px 4px 2px;padding:0 8px;
+  border-radius:7px;background:var(--panel-2);border:1px solid var(--line)}
+.pj-search .ic{color:var(--muted);flex:none}
+.pj-search-in{flex:1;min-width:0;border:0;background:none;outline:none;color:var(--text);
+  font:inherit;font-size:11px}
+.pj-search-in::placeholder{color:var(--muted)}
+.pj-two{display:flex;gap:4px;margin:6px 4px 2px}
+.pj-two button{flex:1;height:28px;border:1px solid var(--line);border-radius:7px;background:var(--panel-2);
+  color:var(--text-2);font-size:11px;display:flex;align-items:center;justify-content:center;gap:5px}
+.pj-two button:hover{background:var(--hover);color:var(--text)}
 
 /* ============ 欢迎页 ============ */
 .welcome{
-  position:fixed;inset:52px 0 28px 0;display:grid;place-items:center;
+  position:fixed;inset:52px 0 0 0;display:grid;place-items:center;
   background:var(--bg);z-index:20;
 }
 .welcome-card{text-align:center;max-width:460px;padding:0 24px}
@@ -574,7 +677,7 @@ kbd{
 
 /* ============ 提示条 ============ */
 #toast{
-  position:fixed;left:50%;bottom:44px;transform:translate(-50%,10px);
+  position:fixed;left:50%;bottom:16px;transform:translate(-50%,10px);
   padding:9px 16px;border-radius:10px;background:#1b1f26;color:#fff;
   font-size:12.5px;box-shadow:var(--shadow-lg);
   opacity:0;pointer-events:none;transition:opacity .18s,transform .18s;
@@ -590,6 +693,5 @@ kbd{
 }
 @media (max-width:1000px){
   .search{width:170px}
-  .status .hints{display:none}
   .brand-sub{display:none}
 }

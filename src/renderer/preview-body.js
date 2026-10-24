@@ -19,7 +19,7 @@
  *   setMeta(metas)    主进程异步补发的 size / mtime
  *
  * 加载顺序：icons.js → highlight.js → markdown.js → vendor/docpreview.js →
- *           pane.js → preview-body.js → find.js → app.js。
+ *           pane.js → preview-body.js → find.js → projects.js → app.js。
  */
 (function () {
   'use strict';
@@ -166,10 +166,10 @@
   /** 窗格头部：元信息会异步补发，所以每次渲染都整块重建 */
   function paneHeadHtml(pane, node) {
     const m = meta.get(node.path);
-    const sub = [subPath(node) || node.name];
-    sub.push(String(node.kind || '').toUpperCase());
-    if (m) { sub.push(fmtSize(m.size)); sub.push(fmtTime(m.mtime)); }
-    if (pane.continuous) sub.push('连续预览');
+    const pathText = subPath(node) || node.name;
+    const facts = [String(node.kind || '').toUpperCase()];
+    if (m) { facts.push(fmtSize(m.size)); facts.push(fmtTime(m.mtime)); }
+    if (pane.continuous) facts.push('连续预览');
 
     const mode = PV.pane.modeOf(pane);
     const canSource = ['html', 'md', 'svg'].indexOf(node.kind) >= 0;
@@ -196,13 +196,14 @@
         + icon('arrowDown', '', 15) + '</button>'
       : '';
 
-    // 图钉 / 刷新 / 关闭放在最右，低频的三个排在左边
+    // 图钉 / 刷新 / 关闭放在最右，低频的排在左边；复制路径改成点标题下的路径
     return '<span class="pv-ic">' + nodeIcon(node, 17) + '</span>'
       + '<div class="pv-name"><div class="pv-nm" title="' + esc(node.name) + '">' + esc(node.name) + '</div>'
-      + '<div class="pv-sub" title="' + esc(sub.join(' · ')) + '">' + esc(sub.join(' · ')) + '</div></div>'
+      + '<div class="pv-sub"><button type="button" class="pv-path" data-act="copy-path" title="单击复制文件路径：'
+      + esc(node.path) + '">' + esc(pathText) + '</button>'
+      + '<span class="pv-facts"> · ' + esc(facts.join(' · ')) + '</span></div></div>'
       + '<div class="pv-actions">' + seg + imageBar
       + '<div class="pv-btns">'
-      + '<button class="iconbtn" data-act="copy" title="复制路径">' + icon('copy', '', 15) + '</button>'
       + '<button class="iconbtn" data-act="reveal" title="在资源管理器中显示">' + icon('reveal', '', 15) + '</button>'
       + '<button class="iconbtn" data-act="external" title="用默认程序打开">' + icon('external', '', 15) + '</button>'
       + '<button class="iconbtn pinbtn' + (pane.pinned ? ' is-on' : '') + '" data-act="pin" title="'

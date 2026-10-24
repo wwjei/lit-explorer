@@ -14,6 +14,9 @@ contextBridge.exposeInMainWorld('pv', {
   openRoot: (dir) => ipcRenderer.invoke('workspace:open', dir),
   getSampleRoot: () => ipcRenderer.invoke('workspace:sample'),
 
+  /* 项目快捷切换 */
+  pickProjectIcon: () => ipcRenderer.invoke('projects:pick-icon'),
+
   /* 文件系统（只读） */
   list: (dir) => ipcRenderer.invoke('fs:list', dir),
   read: (filePath) => ipcRenderer.invoke('fs:read', filePath),

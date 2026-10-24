@@ -38,11 +38,6 @@
         <path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20.5 4v4.5H16"/>
       </svg>
     </button>
-    <button class="iconbtn" id="btn-preview" title="显示 / 隐藏临时预览列 (Ctrl+B)，固定列不受影响" aria-label="显示或隐藏临时预览列">
-      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><path d="M14.5 4.5v15"/>
-      </svg>
-    </button>
     <button class="iconbtn" id="btn-theme" title="切换主题 (Ctrl+Shift+L)" aria-label="切换主题">
       <svg id="theme-ic" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M20 14.5A8.5 8.5 0 0 1 9.5 4a8.5 8.5 0 1 0 10.5 10.5z"/>
@@ -79,18 +74,6 @@
       <div class="panes" id="panes"></div>
     </aside>
   </div>
-
-  <footer class="status">
-    <span class="path" id="st-path"></span>
-    <span class="hints">
-      <span><kbd>↑</kbd><kbd>↓</kbd> 选择</span>
-      <span><kbd>→</kbd> 进入</span>
-      <span><kbd>←</kbd> 上级</span>
-      <span><kbd>⏎</kbd> 打开</span>
-      <span><kbd>Ctrl</kbd><kbd>F</kbd> 查找</span>
-      <span>双击 = 默认程序打开</span>
-    </span>
-  </footer>
 </div>
 
 <div class="welcome" id="welcome" hidden>
@@ -113,11 +96,12 @@
 <script src="markdown.js"></script>
 <!-- docx / pptx 预览（npm run build 生成，缺失时该类型回落到兜底卡片） -->
 <script src="vendor/docpreview.js"></script>
-<!-- 窗格（PV.pane）、正文渲染（PV.body）与预览内查找（PV.find）先就位，
-     app.js 负责导航与接线 -->
+<!-- 窗格（PV.pane）、正文渲染（PV.body）、预览内查找（PV.find）先就位，
+     项目切换条（PV.projects）再进来，app.js 负责导航与接线 -->
 <script src="pane.js"></script>
 <script src="preview-body.js"></script>
 <script src="find.js"></script>
+<script src="projects.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

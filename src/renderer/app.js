@@ -1,13 +1,14 @@
 /* 渲染进程主逻辑：目录导航 + 交互接线
  *
  * 预览窗格的生命周期与布局在 pane.js（PV.pane），正文与头部怎么画在
- * preview-body.js（PV.body），预览内查找在 find.js（PV.find）。
+ * preview-body.js（PV.body），预览内查找在 find.js（PV.find），
+ * 项目切换条与图标选择在 projects.js（PV.projects）。
  * 这个文件负责：
  *   - 多栏目录导航：加载、选中、面包屑、虚拟滚动、快速访问
- *   - 键盘、指针、顶部按钮、主进程事件，以及把上面三个模块接起来
+ *   - 键盘、指针、顶部按钮、主进程事件，以及把上面几个模块接起来
  *
  * 加载顺序：icons.js → highlight.js → markdown.js → vendor/docpreview.js →
- *           pane.js → preview-body.js → find.js → app.js。
+ *           pane.js → preview-body.js → find.js → projects.js → app.js。
  */
 (function () {
   'use strict';
@@ -30,6 +31,8 @@
 
   /** 最左栏上下两个面板各自的最小高度 */
   const SPLIT_MIN = 48;
+  /** 项目切换条的高度，与 styles.css 的 .proj-dock 一致 */
+  const PROJ_DOCK_H = 44;
 
   const state = {
     root: null,
@@ -233,7 +236,7 @@
   /* ---- 最左栏上下两个面板的高度：按比例分，比例只跟位置有关 ---- */
   /** 两个面板可分的高度：整栏扣掉栏头（30）与分隔条（7） */
   function splitAvail(colEl) {
-    return Math.max(96, colEl.clientHeight - 37);
+    return Math.max(96, colEl.clientHeight - 37 - PROJ_DOCK_H);
   }
 
   /** 把「上 : 下」比例落到两个面板上（上面的固定高度，下面的吃掉剩余空间） */
@@ -348,6 +351,9 @@
 
   /* ============================ 选择与导航 ============================ */
   async function openRoot(dir) {
+    // 先记下当前项目的浏览位置，再换工作区
+    saveNavNow();
+    navRestored = false;
     state.root = dir;
     state.rootName = dir.split(/[\\/]/).filter(Boolean).pop() || dir;
     state.path = [{ name: state.rootName, path: dir, isDir: true, kind: 'folder' }];
@@ -359,9 +365,18 @@
     PV.pane.clearPins();
     PV.find.close();
     PV.pane.resetTemp();
+    // 切换条：当前项立刻高亮；新项目有空位就加进去
+    PV.projects.setActive(dir);
+    PV.projects.noteOpened(dir);
+    const nav = PV.projects.navOf(dir);
     setWelcome(false);
     render();
     await loadColumn(0);
+    if (nav) {
+      await restoreNav(nav);
+      navRestored = true;
+    }
+    scheduleSaveNav();
   }
 
   async function selectNode(node, ci, options) {
@@ -383,6 +398,7 @@
       }
       render();
     }
+    scheduleSaveNav();
   }
 
   function goToPathIndex(i) {
@@ -396,6 +412,71 @@
       state.cols.length = i + 1;
     }
     render();
+    scheduleSaveNav();
+  }
+
+  /* ---- 每个项目记住的浏览位置：展开到哪一级、选中谁、预览还是源码 ---- */
+  let navTimer = null;
+  let navRestored = false;
+
+  function currentNav() {
+    return {
+      path: state.path.map((f) => f.path),
+      sel: state.sel ? state.sel.node.path : null,
+      mode: state.mode
+    };
+  }
+
+  function saveNavNow() {
+    if (!state.root) return;
+    clearTimeout(navTimer);
+    navTimer = null;
+    PV.projects.saveNav(state.root, currentNav());
+  }
+
+  function scheduleSaveNav() {
+    if (!state.root) return;
+    clearTimeout(navTimer);
+    navTimer = setTimeout(saveNavNow, 350);
+  }
+
+  /** 逐级恢复：从根目录开始，按保存的路径一层层进去，再选中文件与模式 */
+  async function restoreNav(nav) {
+    const levels = Array.isArray(nav && nav.path) ? nav.path : [];
+    for (let i = 1; i < levels.length; i++) {
+      const col = state.cols[i - 1];
+      if (!col || col.state !== 'ready' || !col.entries) break;
+      const node = col.entries.find((e) => e.isDir && PV.projects.samePath(e.path, levels[i]));
+      if (!node) break;
+      await selectNode(node, i - 1, { scroll: false });
+    }
+    if (nav && nav.sel) {
+      const ci = state.path.length - 1;
+      const col = state.cols[ci];
+      if (col && col.state === 'ready' && col.entries) {
+        const node = col.entries.find((e) => !e.isDir && PV.projects.samePath(e.path, nav.sel));
+        if (node) await selectNode(node, ci, { scroll: false, revealPreview: true });
+      }
+    }
+    if (nav && nav.mode === 'source') state.mode = 'source';
+    render();
+  }
+
+  /* ---- 项目切换 / 新开项目 ---- */
+  async function switchProject(path) {
+    if (!path) return;
+    if (state.root && PV.projects.samePath(path, state.root)) return;
+    const res = await pv.openRoot(path);
+    if (res && res.error) {
+      toast(res.error === 'NOT_OFFERED' ? '无法打开该项目：不在可访问范围内' : '无法打开该项目');
+    }
+  }
+
+  async function pickProjectFolder() {
+    // 满了就别先弹选择框：选完又加不进去，用户会更困惑
+    if (PV.projects.isFull()) { PV.projects.warnFull(); return; }
+    const res = await pv.pickFolder();
+    if (res && res.root) toast('已打开：' + res.root);
   }
 
   async function openWithSystem(node) {
@@ -436,16 +517,6 @@
         + esc(sel.node.name) + '</button>';
     }
     crumbsEl.innerHTML = html;
-  }
-
-  function renderStatus() {
-    if (!state.root) { $('#st-path').textContent = '未打开工作区'; return; }
-    const sel = state.sel;
-    const parts = state.path.map((f) => f.name);
-    if (sel && !sel.node.isDir) parts.push(sel.node.name);
-    const el = $('#st-path');
-    el.textContent = parts.join(' / ');
-    el.title = sel ? sel.node.path : state.root;
   }
 
   /* ============================ 渲染：栏 ============================ */
@@ -566,6 +637,12 @@
       split.className = 'panel-resize';
       split.title = '拖动调整上下面板的高度比例';
       el.appendChild(split);
+
+      // 项目切换条是左栏的最后一条，贴在窗口底部
+      const dock = document.createElement('div');
+      dock.className = 'proj-dock';
+      el.appendChild(dock);
+      PV.projects.mount(dock);
     }
 
     colsEl.appendChild(el);
@@ -656,14 +733,12 @@
   function render() {
     if (!state.root) {
       renderCrumbs();
-      renderStatus();
       PV.pane.renderPreview();
       return;
     }
     renderCrumbs();
     renderColumns();
     PV.pane.renderPreview();
-    renderStatus();
   }
 
   /* ============================ 交互 ============================ */
@@ -687,7 +762,6 @@
   /** 预览区的显示开关：窗格那边、按钮状态与持久化一起改 */
   function setPreviewVisible(on) {
     PV.pane.setPreviewOpen(on);
-    $('#btn-preview').classList.toggle('is-on', !on);
     // 预览整个收起来时，挂在上面的查找条也一起收掉
     if (!on) PV.find.close();
     pv.setState({ previewOpen: on });
@@ -831,7 +905,7 @@
       if (!node) return;
       // 临时预览列沿用全局模式，固定住的窗格各记一份
       if (pane.pinned) pane.mode = btn.dataset.mode;
-      else state.mode = btn.dataset.mode;
+      else { state.mode = btn.dataset.mode; scheduleSaveNav(); }
       PV.pane.renderPane(pane, true);
       return;
     }
@@ -847,7 +921,7 @@
       btn.classList.add('spin');
       setTimeout(() => btn.classList.remove('spin'), 520);
       PV.pane.renderPane(pane, true);
-    } else if (act === 'copy') {
+    } else if (act === 'copy-path') {
       pv.copyText(node.path).then(() => toast('已复制路径：' + node.path));
     } else if (act === 'reveal') {
       pv.reveal(node.path);
@@ -888,15 +962,11 @@
   });
 
   /* 顶部按钮 */
-  $('#btn-preview').addEventListener('click', () => togglePreview());
   $('#btn-theme').addEventListener('click', () => {
     applyTheme(state.theme === 'light' ? 'dark' : 'light');
   });
   $('#btn-rescan').addEventListener('click', () => rescan());
-  $('#btn-open').addEventListener('click', async () => {
-    const res = await pv.pickFolder();
-    if (res && res.root) toast('已打开：' + res.root);
-  });
+  $('#btn-open').addEventListener('click', () => { pickProjectFolder(); });
   $('#btn-menu').addEventListener('click', () => pv.openAppMenu());
 
   /* 自绘标题栏的窗口控制 */
@@ -919,13 +989,13 @@
   });
   $('#wc-close').addEventListener('click', () => pv.closeWindow());
   pv.onMaximized(applyMaximized);
-  $('#w-open').addEventListener('click', async () => {
-    const res = await pv.pickFolder();
-    if (res && res.root) toast('已打开：' + res.root);
-  });
+  $('#w-open').addEventListener('click', () => { pickProjectFolder(); });
   $('#w-sample').addEventListener('click', async () => {
     const dir = await pv.getSampleRoot();
     if (!dir) return;
+    // 示例项目已经在列表里时，满了也允许切过去
+    const known = PV.projects.list().some((p) => PV.projects.samePath(p.path, dir));
+    if (!known && PV.projects.isFull()) { PV.projects.warnFull(); return; }
     const res = await pv.openRoot(dir);
     // 主进程只接受它自己给过的目录；真被拒了要说一声，别让按钮看起来没反应
     if (res && res.error) toast('打不开示例项目：' + res.error);
@@ -1034,6 +1104,7 @@
         state.path = state.path.slice(0, 1);
         state.cols.length = 1;
         render();
+        scheduleSaveNav();
       }
     }
   });
@@ -1067,6 +1138,11 @@
     renderHead: PV.body.head,
     renderBody: PV.body.render,
     bodyKey: PV.body.key
+  });
+  PV.projects.init({
+    toast: toast,
+    switchTo: switchProject,
+    openNew: pickProjectFolder
   });
 
   /* ============================ 主进程事件 ============================ */
@@ -1120,7 +1196,6 @@
     state.theme = st.theme === 'dark' ? 'dark' : 'light';
     $('#theme-ic').innerHTML = state.theme === 'light' ? PV.icons.ICONS.moon : PV.icons.ICONS.sun;
     PV.pane.setPreviewOpen(st.previewOpen !== false);
-    $('#btn-preview').classList.toggle('is-on', !PV.pane.previewOpen());
     state.hideDot = !!st.hideDot;
     state.favTop = !!st.favTop;
     // 上下比例跟着位置走：默认上 2/3、下 1/3，拖动过之后一直用拖动结果
@@ -1130,10 +1205,15 @@
     state.previewDocx = st.previewDocx !== false;
     state.previewPptx = st.previewPptx !== false;
     state.favoritesByRoot = st.favorites && typeof st.favorites === 'object' ? st.favorites : {};
+    PV.projects.load(st.projects || []);
+    PV.projects.setActive(state.root || '');
     // 主进程有可能在读取设置期间就已经把工作区打开了，这时补上该工作区的快速访问项
     if (state.root) {
       state.favs = normalizeFavorites(state.favoritesByRoot[favKey(state.root)]);
+      PV.projects.noteOpened(state.root);
+      const nav = navRestored ? null : PV.projects.navOf(state.root);
       render();
+      if (nav) await restoreNav(nav);
     }
     if (st.previewWidth > 0) PV.pane.setTempWidth(st.previewWidth);
     applyMaximized(await pv.isMaximized());
