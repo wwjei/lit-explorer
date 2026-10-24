@@ -91,7 +91,9 @@
       findEl: null,
       zoom: o.zoom || 0,  // 图片缩放：0 = 适应窗口，其余是倍数
       continuous: !!o.continuous, // 连续预览：同目录图片竖着排下来
-      images: []          // 当前窗格里的 <img>，改缩放时直接落到它们身上
+      images: [],         // 当前窗格里的 <img>，改缩放时直接落到它们身上
+      changed: false,     // 磁盘上的版本和当前显示的不一样（刷新按钮高亮）
+      known: null         // 当前显示版本 { path, size, mtime }，由变更监测维护
     };
     el.dataset.pane = String(pane.id);
     panes.set(pane.id, pane);
@@ -334,6 +336,11 @@
   /** 渲染一个窗格：头部每次重建（元信息会异步补发），正文按内容 key 增量渲染 */
   function renderPane(pane, force) {
     const node = pane.node;
+    // 换文件时旧文件的「有变化」不能带到新文件头上
+    if (pane.known && (!node || pane.known.path !== node.path)) {
+      pane.changed = false;
+      pane.known = null;
+    }
     // 连续预览只对「图片 + 预览模式」有意义，切到别的文件/源码视图时自动退出
     if (pane.continuous && !(node && modeOf(pane) === 'preview' && isImageNode(node))) {
       pane.continuous = false;

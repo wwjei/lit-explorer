@@ -56,6 +56,10 @@
   let renderedColKeys = [];
   let welcomeVisible = false;
 
+  /* 工作区变更监测：已展开目录的 mtime 基线，以及「列表已经过期」的目录 */
+  const dirKnown = new Map();
+  const dirtyDirs = new Set();
+
   /* ============================ 快速访问 ============================ */
   /** 快速访问项按工作区分组；Windows 路径大小写不敏感，统一成小写作为键 */
   function favKey(dir) {
@@ -335,6 +339,8 @@
     } else {
       state.cols[ci] = { dir: folder.path, state: 'ready', version, entries: res.entries, error: null };
     }
+    // 这一栏刚从磁盘读过，之前记下的「有变化」可以收了，并重新记基线
+    noteDirLoaded(folder.path);
     render();
   }
 
@@ -365,6 +371,9 @@
     PV.pane.clearPins();
     PV.find.close();
     PV.pane.resetTemp();
+    // 换工作区后，上一个工作区的目录变更提示不再有意义
+    dirtyDirs.clear();
+    dirKnown.clear();
     // 切换条：当前项立刻高亮；新项目有空位就加进去
     PV.projects.setActive(dir);
     PV.projects.noteOpened(dir);
@@ -611,6 +620,9 @@
           + icon('toTop', '', 14) + '</button>'
         : '';
       head.innerHTML = '<b>' + esc(folder.name) + '</b>'
+        + '<button class="col-toggle rescanbtn' + (dirtyDirs.size ? ' is-changed' : '') + '"'
+        + ' data-rescan title="' + (dirtyDirs.size ? '工作区有变化，点击重新扫描' : '重新扫描 (F5)')
+        + '" aria-label="重新扫描">' + icon('refresh', '', 14) + '</button>'
         + '<button class="col-toggle' + (state.hideDot ? ' is-on' : '') + '" data-toggle-dot title="'
         + (state.hideDot ? '显示以 . 开头的文件/文件夹' : '隐藏以 . 开头的文件/文件夹') + '" aria-label="切换点文件显示">'
         + icon(state.hideDot ? 'eyeOff' : 'eye', '', 14) + '</button>'
@@ -800,6 +812,12 @@
       return;
     }
 
+    // 左栏头部：重新扫描
+    if (e.target.closest('[data-rescan]')) {
+      rescan();
+      return;
+    }
+
     // 点文件显隐开关
     if (e.target.closest('[data-toggle-dot]')) {
       state.hideDot = !state.hideDot;
@@ -918,6 +936,8 @@
     if (act === 'seq') { if (node) PV.body.toggleSeq(pane); return; }
     if (!node) return;
     if (act === 'reload') {
+      // 重新读取后基线由正文落地时上报；先清掉高亮，避免读失败时一直亮着
+      pane.changed = false;
       btn.classList.add('spin');
       setTimeout(() => btn.classList.remove('spin'), 520);
       PV.pane.renderPane(pane, true);
@@ -965,7 +985,6 @@
   $('#btn-theme').addEventListener('click', () => {
     applyTheme(state.theme === 'light' ? 'dark' : 'light');
   });
-  $('#btn-rescan').addEventListener('click', () => rescan());
   $('#btn-open').addEventListener('click', () => { pickProjectFolder(); });
   $('#btn-menu').addEventListener('click', () => pv.openAppMenu());
 
@@ -1122,6 +1141,140 @@
     colsEl.classList.toggle('is-scrolled', colsEl.scrollLeft > 0);
   }, { passive: true });
 
+  /* ============================ 磁盘变更提示 ============================ *
+   * 每 5 s 做两类 stat，都只「提示」不自动重载：
+   *   1. 可见预览：比 size / mtime，变了就点亮预览头的刷新按钮；
+   *   2. 已展开的目录：比目录 mtime，变了就点亮左栏的重新扫描按钮。
+   * 目录 mtime 只在直接子项增删/改名时变化，正好对应「列表可能过期」。
+   * 不走 fs.watch：agent 频繁写文件时事件会成串，而且 \\wsl$ / 网络盘收不到通知。
+   * ------------------------------------------------------------------------- */
+  const CHANGE_POLL_MS = 5000;
+  /** 连续这么久没回到前台就暂停扫描：窗口在后台放着时没必要每 5 秒唤醒磁盘 */
+  const FOREGROUND_IDLE_MS = 10 * 60 * 1000;
+  let changeTimer = 0;
+  let changePolling = false;
+  let lastForegroundAt = Date.now();
+
+  /** 记下某个窗格「现在显示的是哪个版本」 */
+  function noteLoaded(pane, node, info) {
+    if (!pane || !pane.node || !node || pane.node.path !== node.path) return;
+    if (info && typeof info.size === 'number' && typeof info.mtime === 'number') {
+      pane.known = { path: node.path, size: info.size, mtime: info.mtime };
+      pane.changed = false;
+      return;
+    }
+    // 图片 / HTML / PDF / 文档的读取接口不给 mtime，单独问一次
+    const path = node.path;
+    pv.stat(path).then((st) => {
+      if (!st || st.error || !pane.node || pane.node.path !== path) return;
+      pane.known = { path: path, size: st.size, mtime: st.mtime };
+      pane.changed = false;
+    }).catch(() => {});
+  }
+
+  function markChanged(pane) {
+    if (pane.changed) return;
+    pane.changed = true;
+    // 只重建头部，正文不动（内容身份没变，renderPane 会跳过正文）
+    PV.pane.renderPane(pane, false);
+  }
+
+  async function pollPane(pane) {
+    const node = pane.node;
+    if (!node || node.isDir) return;
+    let st;
+    try {
+      st = await pv.stat(node.path);
+    } catch {
+      return;   // 读不到就下一轮再试，变更监测不打扰用户
+    }
+    // 等待期间窗格可能已经换了文件或被关掉
+    if (!pane.node || pane.node.path !== node.path) return;
+    if (!st || st.error) { markChanged(pane); return; }
+    if (!pane.known || pane.known.path !== node.path) {
+      // 正文还没落地（或刚换文件），这一轮先建立基线
+      pane.known = { path: node.path, size: st.size, mtime: st.mtime };
+      return;
+    }
+    if (st.size !== pane.known.size || Math.abs(st.mtime - pane.known.mtime) > 0.5) {
+      markChanged(pane);
+    }
+  }
+
+  /** 只改按钮本身，不整块重绘（重绘会把栏内滚动位置清掉） */
+  function paintRescan() {
+    const btn = colsEl.querySelector('[data-rescan]');
+    if (!btn) return;
+    const dirty = dirtyDirs.size > 0;
+    btn.classList.toggle('is-changed', dirty);
+    btn.title = dirty ? '工作区有变化，点击重新扫描' : '重新扫描 (F5)';
+  }
+
+  /** 某个目录刚重新读过：收掉它的变更标记，并重新记 mtime 基线 */
+  function noteDirLoaded(dir) {
+    dirtyDirs.delete(dir);
+    dirKnown.delete(dir);
+    if (!dir) return;
+    pv.stat(dir).then((st) => {
+      if (!st || st.error) return;
+      if (state.path.some((f) => f.path === dir)) dirKnown.set(dir, st.mtime);
+    }).catch(() => {});
+  }
+
+  async function pollOpenDirs() {
+    if (!state.path.length) return;
+    const open = new Set(state.path.map((f) => f.path));
+    // 已经不在栏里的目录不再占着基线
+    for (const key of Array.from(dirKnown.keys())) {
+      if (!open.has(key)) dirKnown.delete(key);
+    }
+    for (const key of Array.from(dirtyDirs)) {
+      if (!open.has(key)) dirtyDirs.delete(key);
+    }
+
+    for (const dir of open) {
+      if (dirtyDirs.has(dir)) continue;
+      let st;
+      try {
+        st = await pv.stat(dir);
+      } catch {
+        continue;
+      }
+      // 目录被删掉或暂时读不到：列表肯定已经不对了
+      if (!st || st.error) { dirtyDirs.add(dir); continue; }
+      if (!dirKnown.has(dir)) { dirKnown.set(dir, st.mtime); continue; }
+      if (Math.abs(st.mtime - dirKnown.get(dir)) > 0.5) dirtyDirs.add(dir);
+    }
+    paintRescan();
+  }
+
+  async function checkForChanges() {
+    if (changePolling || document.hidden) return;
+    // 有焦点时一直算在前台；失焦后再给 10 分钟宽限，然后停到重新聚焦为止
+    if (document.hasFocus()) lastForegroundAt = Date.now();
+    else if (Date.now() - lastForegroundAt >= FOREGROUND_IDLE_MS) return;
+    changePolling = true;
+    try {
+      await Promise.all([Promise.all(PV.pane.visiblePanes().map(pollPane)), pollOpenDirs()]);
+    } finally {
+      changePolling = false;
+    }
+  }
+
+  function startChangeWatch() {
+    if (changeTimer) return;
+    changeTimer = setInterval(checkForChanges, CHANGE_POLL_MS);
+    // 窗口重新可见 / 重新获得焦点时立刻补查一次，不用等下一个 5 s
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) checkForChanges();
+    });
+    window.addEventListener('focus', () => {
+      lastForegroundAt = Date.now();
+      checkForChanges();
+    });
+    checkForChanges();
+  }
+
   /* ============================ 把模块接起来 ============================ */
   // pane.js 管窗格的生命周期与布局，preview-body.js 管正文与头部画成什么样；
   // 它们需要的应用状态都由这里提供。
@@ -1129,7 +1282,8 @@
     toast: toast,
     root: function () { return state.root; },
     previewPrefs: function () { return { docx: state.previewDocx, pptx: state.previewPptx }; },
-    itemsInDir: itemsInDir
+    itemsInDir: itemsInDir,
+    loaded: noteLoaded
   });
   PV.pane.init({
     toast: toast,
@@ -1222,5 +1376,6 @@
       setWelcome(true);
       render();
     }
+    startChangeWatch();
   })();
 })();
