@@ -196,6 +196,32 @@ function loadRenderer() {
     eq('未授权的项目路径被丢弃',
       patch.projects.some((p) => p.path === 'C:\\Windows'), false);
     eq('非图片 data URL 的图标被丢弃', patch.projects[1].icon, null);
+
+    // 网页快捷方式：只认 http(s)，且不能借网页条目把 path 写进设置
+    const webUrl = require(path.join(ROOT, 'src/main/web-url.js'));
+    eq('http(s) 地址规范化', webUrl.normalizeWebUrl(' HTTP://A.EXAMPLE '), 'http://a.example/');
+    eq('危险 / 本地 / 带凭据的地址一律拒绝',
+      ['javascript:alert(1)', 'file:///C:/secret', 'data:text/html,x', 'ms-msdt:/id',
+        'https://user:pass@a.example/', 'https://a.example/\tfoo']
+        .map(webUrl.normalizeWebUrl).join('|'), '|||||');
+
+    const list = san.sanitizeFavorites({
+      'c:\\ws': [
+        { path: 'C:\\ws\\a.md', name: 'a', isDir: false, kind: 'md' },
+        { kind: 'web', url: 'https://example.com/doc?x=1#h', name: '文档' },
+        { kind: 'web', url: 'https://example.com/doc?x=1#h', name: '重复' },
+        { kind: 'web', url: 'javascript:alert(1)', name: 'bad' },
+        { kind: 'web', url: 'https://example.com/no-name' },
+        { kind: 'web', url: 'https://example.com/no-name', path: 'C:\\Windows\\evil' }
+      ]
+    })['c:\\ws'];
+    eq('网页条目只留合法且去重的', list.length, 3);
+    eq('网页条目保留地址 / kind / 默认域名',
+      [list[1].url, list[1].kind, list[2].name].join('|'),
+      'https://example.com/doc?x=1#h|web|example.com');
+    eq('网页条目不带 path（不能借它注入路径）',
+      list.filter((f) => f.kind === 'web' && Object.prototype.hasOwnProperty.call(f, 'path')).length, 0);
+    eq('文件条目照常保留', list[0].path, 'C:\\ws\\a.md');
   });
 
   done();

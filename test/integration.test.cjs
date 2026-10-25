@@ -15,6 +15,7 @@
  *   F2     代码块异步高亮后查找命中不丢
  *   P1     图片列（连续预览列出同目录图片、缩放档位、切到非图片时退出）
  *   P2     晚到的旧图片请求不污染缩放状态
+ *   P3     拖动固定列头部换位置；拖临时预览列只提示先固定
  *   S6     并发切换工作区只留一个授权根
  *
  * 跑法：npm run test:integration                        全跑
@@ -27,7 +28,7 @@
  */
 
 const electron = require('electron');
-const { app, BrowserWindow, protocol, ipcMain, net } = electron;
+const { app, BrowserWindow, protocol, ipcMain, net, session } = electron;
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
@@ -35,6 +36,7 @@ const JSZip = require('jszip');
 const { ROOT, TMP, run, ok, eq, eqJson, done, freshDir, linkDir } = require('./helpers.cjs');
 
 const fsApi = require(path.join(ROOT, 'src/main/fs-api.js'));
+const webViews = require(path.join(ROOT, 'src/main/web-views.js'));
 app.setPath('userData', path.join(TMP, 'user-data'));
 
 /** 各用例里人为注入的延迟，集中在这里便于调整（也是整个套件耗时的大头） */
@@ -64,8 +66,15 @@ function loadMainModule() {
     require: (n) => (n === 'electron' ? Object.assign({}, electron, { app: fakeApp, ipcMain: recorder })
       : n === './fs-api' ? fsApi
         : n === './state-sanitize' ? require(path.join(ROOT, 'src/main/state-sanitize.js'))
-          : n === './store' ? { load: async () => ({}), patch: async () => ({}) }
-            : require(n)),
+          : n === './web-url' ? require(path.join(ROOT, 'src/main/web-url.js'))
+            : n === './web-views' ? {
+              attachWindow: () => {},
+              sync: () => {},
+              reload: () => false,
+              destroyAll: () => {}
+            }
+              : n === './store' ? { load: async () => ({}), patch: async () => ({}) }
+                : require(n)),
     process: process,
     __dirname: path.join(ROOT, 'src/main'),
     URL, Response, console, setTimeout, clearTimeout
@@ -112,6 +121,10 @@ function renderer() {
       // 预览变更监测每 5 s 会 stat 一次当前预览；测试里没有真实文件，固定返回同一版本
       ipcMain.handle('fs:stat', () => ({ size: 0, mtime: 0 }));
       ipcMain.handle('window:is-maximized', () => false);
+      // 网页视图的接线：渲染进程会同步调用，测试里不真的开子视图
+      ipcMain.handle('web:sync', () => ({ ok: true }));
+      ipcMain.handle('web:reload', () => ({ ok: true }));
+      ipcMain.handle('web:open-external', () => ({ ok: true }));
       createdWin = new BrowserWindow({
         show: false,
         webPreferences: {
@@ -499,6 +512,93 @@ async function main() {
     eq('正文显示的是后选中的图片', p2.alt, 'y.svg');
     eq('只保留一张图片元素', p2.imgs, 1);
     eq('缩放作用在可见图片上（80px 宽）', p2.width, '80px');
+  });
+
+  await run('P3', '拖动固定列头部换位置；拖临时预览列只提示先固定', async () => {
+    const f = await prepare();
+    const runPage = await renderer();
+    stubList(f.ws, ['alpha.md', 'beta.md', 'gamma.md']);
+    stubRead((_e, p) => ({ text: path.basename(String(p)).toUpperCase(), size: 10 }));
+    createdWin.webContents.send('workspace:opened', f.ws);
+    await sleep(200);
+    const p3 = await runPage(`(async()=>{
+      const wait=(ms)=>new Promise(r=>setTimeout(r,ms));
+      const clickRow=(n)=>[...document.querySelectorAll('.row')].find(e=>e.textContent.includes(n)).click();
+      const pin=()=>document.querySelector('.pane:not(.is-pinned) button[data-act="pin"]').click();
+      // DOM 顺序是创建顺序，视觉顺序看 flex 排出来的 left
+      const pinnedNames=()=>[...document.querySelectorAll('.pane.is-pinned')]
+        .sort((a,b)=>a.getBoundingClientRect().left-b.getBoundingClientRect().left)
+        .map(e=>e.querySelector('.pv-nm').textContent.trim());
+      const headOf=(name)=>[...document.querySelectorAll('.pane.is-pinned .pv-head')]
+        .find(h=>h.querySelector('.pv-nm').textContent.trim()===name);
+      const ev=(type,el,x,y)=>el.dispatchEvent(new PointerEvent(type,{
+        bubbles:true,cancelable:true,pointerId:7,button:0,
+        buttons:type==='pointerup'?0:1,clientX:x,clientY:y}));
+      const drag=(from,to,fx)=>{
+        const a=headOf(from).getBoundingClientRect(), b=headOf(to).getBoundingClientRect();
+        const sy=a.top+8, ty=b.top+8, x2=b.left+b.width*fx;
+        const panes=document.querySelector('#panes');
+        ev('pointerdown',headOf(from),a.left+a.width/2,sy);
+        ev('pointermove',panes,a.left+a.width/2+10,sy);   // 越过 4px 阈值，进入拖动
+        ev('pointermove',panes,x2,ty);                    // 移过目标列的中点
+        ev('pointerup',panes,x2,ty);
+        return wait(150);
+      };
+
+      clickRow('alpha.md'); await wait(350); pin(); await wait(200);
+      clickRow('beta.md'); await wait(350); pin(); await wait(200);
+      const before=pinnedNames();                         // 新固定的在左边
+      await drag('beta.md','alpha.md',0.9);
+      const after=pinnedNames();
+
+      // 临时预览列：拖动头部只提示，不动固定列
+      clickRow('gamma.md'); await wait(350);
+      const head=document.querySelector('.pane:not(.is-pinned) .pv-head');
+      const r=head.getBoundingClientRect();
+      const panes=document.querySelector('#panes');
+      ev('pointerdown',head,r.left+r.width/2,r.top+8);
+      ev('pointermove',panes,r.left+r.width/2+30,r.top+8);
+      ev('pointerup',panes,r.left+r.width/2+30,r.top+8);
+      return {before, after, tempOrder:pinnedNames(), toastText:document.querySelector('#toast').textContent};
+    })()`);
+    eqJson('新固定的列排在左边', p3.before, ['beta.md', 'alpha.md']);
+    eqJson('把左列拖到右列之后，顺序互换', p3.after, ['alpha.md', 'beta.md']);
+    eqJson('拖动临时预览列不改变固定列顺序', p3.tempOrder, ['alpha.md', 'beta.md']);
+    ok('拖动临时列时提示先固定', p3.toastText.indexOf('请先固定此栏') >= 0, p3.toastText);
+  });
+
+  await run('W1', '网页视图只接受 http(s)，移出同步列表即销毁', async () => {
+    const w = new BrowserWindow({
+      show: false,
+      width: 900,
+      height: 700,
+      webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false }
+    });
+    webViews.attachWindow(w);
+    const rect = { x: 0, y: 0, width: 400, height: 300 };
+
+    eq('网页会话没有宿主 pv:// 处理器',
+      session.fromPartition(webViews.PARTITION).protocol.isProtocolHandled('pv'), false);
+
+    webViews.sync([{ url: 'http://127.0.0.1:9/doc', visible: true, rect: rect }]);
+    eq('http 地址会创建视图', webViews.count(), 1);
+
+    webViews.sync([{ url: 'http://127.0.0.1:9/two', visible: false, rect: null }]);
+    eq('不可见的条目保留视图（预览收起不重载）', webViews.count(), 1);
+    webViews.sync([{ url: 'http://127.0.0.1:9/two', visible: true, rect: { x: 0, y: 0, width: 0, height: 0 } }]);
+    eq('可见但矩形无效时保留视图（只是不显示）', webViews.count(), 1);
+
+    const bad = ['javascript:alert(1)', 'file:///C:/secret', 'data:text/html,x',
+      'https://user:pass@a.example/', 'ms-msdt:/id'];
+    webViews.sync(bad.map((url) => ({ url: url, visible: true, rect: rect })));
+    eq('非法地址不会留下视图', webViews.count(), 0);
+
+    webViews.sync([{ url: 'http://127.0.0.1:9/two', visible: true, rect: rect }]);
+    eq('重新出现会重建视图', webViews.count(), 1);
+    webViews.sync([]);
+    eq('移出同步列表后销毁', webViews.count(), 0);
+
+    w.destroy();
   });
 
   await run('S6', '并发切换工作区只留一个授权根', async () => {

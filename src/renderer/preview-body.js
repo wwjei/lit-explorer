@@ -18,8 +18,11 @@
  *   toast(msg)        轻提示
  *   setMeta(metas)    主进程异步补发的 size / mtime
  *
+ * 网页预览（kind = 'web'）不在这里画页面：正文只放加载 / 失败卡片，真正的页面由
+ * 主进程的 WebContentsView 覆盖在窗格正文上（见 webview.js 与 main/web-views.js）。
+ *
  * 加载顺序：icons.js → highlight.js → markdown.js → vendor/docpreview.js →
- *           pane.js → preview-body.js → find.js → projects.js → app.js。
+ *           pane.js → preview-body.js → webview.js → find.js → projects.js → app.js。
  */
 (function () {
   'use strict';
@@ -167,8 +170,56 @@
     return PV.highlight.langFor(node.name);
   }
 
+  /** 网页列加载失败：视图已经藏起来，正文给一张能重试 / 外开的卡片 */
+  function webErrorCard(node) {
+    const err = node.webError || {};
+    const detail = err.code === 'RENDER_GONE'
+      ? '网页进程已退出，可以重新加载或改用浏览器打开。'
+      : '无法在应用内加载这个页面'
+        + (err.code ? '（' + err.code + '）' : '')
+        + (err.desc ? '：' + err.desc : '') + '。';
+    return '<div class="state">'
+      + '<div class="big">' + icon('globe', '', 26) + '</div>'
+      + '<h4>' + esc(node.name) + '</h4>'
+      + '<p>' + esc(detail) + '</p>'
+      + '<p class="web-fail-url">' + esc(node.url) + '</p>'
+      + '<div class="state-action">'
+      + '<button class="btn-quiet" data-act="web-reload">' + icon('refresh', '', 14)
+      + '<span>重新加载</span></button>'
+      + '<button class="btn-quiet" data-act="external">' + icon('external', '', 14)
+      + '<span>在浏览器中打开</span></button>'
+      + '</div></div>';
+  }
+
+  /**
+   * 网页列的头部：标题是用户起的名字，副标题显示当前地址（站内跳转后会更新）。
+   * 没有「在资源管理器中显示」，在浏览器中打开保留为兜底出口。
+   */
+  function webHeadHtml(pane, node) {
+    const shown = node.webCurrentUrl || node.url;
+    const facts = ['网页'];
+    if (node.webError) facts.push('加载失败');
+    return '<span class="pv-ic">' + nodeIcon(node, 17) + '</span>'
+      + '<div class="pv-name"><div class="pv-nm" title="' + esc(node.name) + '">' + esc(node.name) + '</div>'
+      + '<div class="pv-sub"><button type="button" class="pv-path" data-act="copy-path" title="单击复制链接：'
+      + esc(shown) + '">' + esc(shown) + '</button>'
+      + '<span class="pv-facts"> · ' + esc(facts.join(' · ')) + '</span></div></div>'
+      + '<div class="pv-actions"><div class="pv-btns">'
+      + '<button class="iconbtn web-ext" data-act="external" title="在浏览器中打开">'
+      + icon('external', '', 15) + '</button>'
+      + '<button class="iconbtn pinbtn' + (pane.pinned ? ' is-on' : '') + '" data-act="pin" title="'
+      + (pane.pinned ? '取消固定' : '固定此预览') + '" aria-label="固定预览">'
+      + icon(pane.pinned ? 'pinFilled' : 'pin', '', 15) + '</button>'
+      + '<button class="iconbtn reloadbtn" data-act="reload" title="重新加载">'
+      + icon('refresh', '', 15) + '</button>'
+      + '<button class="iconbtn" data-act="close" title="' + (pane.pinned ? '关闭此预览列' : '收起预览') + '">'
+      + icon('close', '', 15) + '</button>'
+      + '</div></div>';
+  }
+
   /** 窗格头部：元信息会异步补发，所以每次渲染都整块重建 */
   function paneHeadHtml(pane, node) {
+    if (node.kind === 'web') return webHeadHtml(pane, node);
     const m = meta.get(node.path);
     const pathText = subPath(node) || node.name;
     const facts = [String(node.kind || '').toUpperCase()];
@@ -226,6 +277,8 @@
    * 前后两次请求——那件事交给窗格的任务身份（reqId）。
    */
   function bodyKeyFor(pane, node, mode) {
+    // 网页的内容身份只有地址：加载失败 / 重新加载都靠强制重渲染，不靠 key 变化
+    if (node.kind === 'web') return 'web\u0001' + node.url;
     const prefs = hooks.previewPrefs();
     return [node.path, mode, pane.continuous ? 'seq' : '',
       node.kind === 'docx' && !prefs.docx ? 'docx-off' : '',
@@ -246,6 +299,13 @@
   async function renderPaneBody(pane, node, mode, key, task) {
     // node 为 null：临时预览列被清空（换工作区），正文回到「未选择文件」
     if (!node) { task.write(emptyState()); return; }
+
+    // 网页：正文只是加载 / 失败卡片，真实页面由主进程的 WebContentsView 盖在上面
+    if (node.kind === 'web') {
+      if (node.webError) { task.write(webErrorCard(node)); return; }
+      task.write(loadingState('正在打开网页…'));
+      return;
+    }
 
     // 交给协议地址直接渲染的类型：HTML 迷你浏览器 / 图片 / PDF 内置阅读器
     if (mode === 'preview' && ['html', 'image', 'svg', 'pdf'].indexOf(node.kind) >= 0) {

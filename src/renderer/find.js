@@ -10,7 +10,7 @@
  * 窗格本身的信息（哪个可见、最近操作的是谁、点在谁身上）一律问 PV.pane。
  *
  * 加载顺序：icons.js → highlight.js → markdown.js → vendor/docpreview.js →
- *           pane.js → preview-body.js → find.js → projects.js → app.js。
+ *           pane.js → preview-body.js → webview.js → find.js → projects.js → app.js。
  */
 (function () {
   'use strict';

@@ -12,7 +12,7 @@
  * 持久化直接走 pv.setState({ projects })，写入由主进程防抖。
  *
  * 加载顺序：icons.js → highlight.js → markdown.js → vendor/docpreview.js →
- *           pane.js → preview-body.js → find.js → projects.js → app.js
+ *           pane.js → preview-body.js → webview.js → find.js → projects.js → app.js
  */
 (function () {
   'use strict';
@@ -419,11 +419,14 @@
   }
 
   function closePicker() {
+    const had = !!popEl;
     if (popEl) { popEl.remove(); popEl = null; popFor = null; }
     document.removeEventListener('pointerdown', onDocPointer, true);
     document.removeEventListener('keydown', onDocKey, true);
     window.removeEventListener('resize', closePicker);
     window.removeEventListener('scroll', closePicker, true);
+    // 网页视图是原生子视图，会盖住这个浮层；关掉后让它们回来
+    if (had && window.PV && PV.web) PV.web.setOccluded(false);
   }
 
   function onDocPointer(e) {
@@ -432,7 +435,12 @@
     closePicker();
   }
   function onDocKey(e) {
-    if (e.key === 'Escape') { e.preventDefault(); closePicker(); hideTip(); }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      closePicker();
+      hideTip();
+    }
   }
 
   function openPicker(tile, p) {
@@ -450,6 +458,8 @@
     document.addEventListener('keydown', onDocKey, true);
     window.addEventListener('resize', closePicker);
     window.addEventListener('scroll', closePicker, true);
+    // 网页视图会盖住这个浮层，先藏起来；关闭时恢复
+    if (window.PV && PV.web) PV.web.setOccluded(true);
   }
 
   function setIcon(p, icon) {

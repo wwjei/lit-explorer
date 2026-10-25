@@ -10,6 +10,8 @@ const fsp = require('node:fs/promises');
 const fsApi = require('./fs-api');
 const store = require('./store');
 const stateSanitize = require('./state-sanitize');
+const webViews = require('./web-views');
+const webUrl = require('./web-url');
 
 const DEV_ROOT = path.join(__dirname, '..', '..');
 const DEV = process.argv.includes('--dev');
@@ -142,6 +144,8 @@ async function createWindow() {
   ));
 
   win.once('ready-to-show', () => win.show());
+  // 内嵌网页视图挂在窗口的 contentView 上；窗口关闭时由它自己清理
+  webViews.attachWindow(win);
   win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
 
   // 最大化状态要回传给界面，用于切换按钮图标与去掉窗口描边
@@ -371,6 +375,24 @@ function registerIpc() {
     return { ok: true };
   });
 
+  /* 内嵌网页：渲染进程只声明「要哪些地址、占哪块矩形」，视图由主进程管理 */
+  ipcMain.handle('web:sync', (_e, list) => {
+    webViews.sync(list);
+    return { ok: true };
+  });
+  ipcMain.handle('web:reload', (_e, url) => ({ ok: webViews.reload(url) }));
+  // 网页列头部 / 右键菜单的「在浏览器中打开」：这是辅助出口，不是主路径
+  ipcMain.handle('web:open-external', async (_e, raw) => {
+    const url = webUrl.normalizeWebUrl(raw);
+    if (!url) return { error: 'BAD_URL' };
+    try {
+      await shell.openExternal(url);
+      return { ok: true };
+    } catch (err) {
+      return { error: err.message };
+    }
+  });
+
   ipcMain.handle('app:get-state', () => store.load());
   // 渲染进程只能改界面偏好；window / lastRoot / recentRoots 由主进程自己维护
   ipcMain.handle('app:set-state', (_e, changes) =>
@@ -401,6 +423,32 @@ function showContextMenu(payload) {
   const target = payload && payload.path ? payload.path : null;
   const kind = payload ? payload.kind : 'empty';
   const items = [];
+
+  // 网页快捷方式不是文件路径：不能落到下面的 openPath / showItemInFolder
+  if (kind === 'web') {
+    const url = webUrl.normalizeWebUrl(payload && payload.url);
+    if (!url) return;
+    const name = typeof payload.name === 'string' && payload.name ? payload.name : url;
+    items.push({ label: '在浏览器中打开', click: () => shell.openExternal(url) });
+    items.push({ label: '复制链接', click: () => clipboard.writeText(url) });
+    items.push({
+      label: '编辑链接…',
+      click: () => win.webContents.send('app:edit-web', { url: url, name: name })
+    });
+    items.push({ type: 'separator' });
+    items.push({
+      label: '从快速访问中移除',
+      click: () => win.webContents.send('app:toggle-favorite', { url: url, name: name, kind: 'web' })
+    });
+    items.push({ type: 'separator' });
+    items.push({
+      label: '重新扫描目录',
+      accelerator: 'F5',
+      click: () => win.webContents.send('app:rescan')
+    });
+    Menu.buildFromTemplate(items).popup({ window: win });
+    return;
+  }
 
   if (target && kind === 'file') {
     items.push({ label: '用默认程序打开', click: () => shell.openPath(target) });
