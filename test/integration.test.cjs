@@ -15,6 +15,7 @@
  *   F2     代码块异步高亮后查找命中不丢
  *   P1     图片列（连续预览列出同目录图片、缩放档位、切到非图片时退出）
  *   P2     晚到的旧图片请求不污染缩放状态
+ *   P3     拖动固定列头部换位置；拖临时预览列只提示先固定
  *   S6     并发切换工作区只留一个授权根
  *
  * 跑法：npm run test:integration                        全跑
@@ -511,6 +512,59 @@ async function main() {
     eq('正文显示的是后选中的图片', p2.alt, 'y.svg');
     eq('只保留一张图片元素', p2.imgs, 1);
     eq('缩放作用在可见图片上（80px 宽）', p2.width, '80px');
+  });
+
+  await run('P3', '拖动固定列头部换位置；拖临时预览列只提示先固定', async () => {
+    const f = await prepare();
+    const runPage = await renderer();
+    stubList(f.ws, ['alpha.md', 'beta.md', 'gamma.md']);
+    stubRead((_e, p) => ({ text: path.basename(String(p)).toUpperCase(), size: 10 }));
+    createdWin.webContents.send('workspace:opened', f.ws);
+    await sleep(200);
+    const p3 = await runPage(`(async()=>{
+      const wait=(ms)=>new Promise(r=>setTimeout(r,ms));
+      const clickRow=(n)=>[...document.querySelectorAll('.row')].find(e=>e.textContent.includes(n)).click();
+      const pin=()=>document.querySelector('.pane:not(.is-pinned) button[data-act="pin"]').click();
+      // DOM 顺序是创建顺序，视觉顺序看 flex 排出来的 left
+      const pinnedNames=()=>[...document.querySelectorAll('.pane.is-pinned')]
+        .sort((a,b)=>a.getBoundingClientRect().left-b.getBoundingClientRect().left)
+        .map(e=>e.querySelector('.pv-nm').textContent.trim());
+      const headOf=(name)=>[...document.querySelectorAll('.pane.is-pinned .pv-head')]
+        .find(h=>h.querySelector('.pv-nm').textContent.trim()===name);
+      const ev=(type,el,x,y)=>el.dispatchEvent(new PointerEvent(type,{
+        bubbles:true,cancelable:true,pointerId:7,button:0,
+        buttons:type==='pointerup'?0:1,clientX:x,clientY:y}));
+      const drag=(from,to,fx)=>{
+        const a=headOf(from).getBoundingClientRect(), b=headOf(to).getBoundingClientRect();
+        const sy=a.top+8, ty=b.top+8, x2=b.left+b.width*fx;
+        const panes=document.querySelector('#panes');
+        ev('pointerdown',headOf(from),a.left+a.width/2,sy);
+        ev('pointermove',panes,a.left+a.width/2+10,sy);   // 越过 4px 阈值，进入拖动
+        ev('pointermove',panes,x2,ty);                    // 移过目标列的中点
+        ev('pointerup',panes,x2,ty);
+        return wait(150);
+      };
+
+      clickRow('alpha.md'); await wait(350); pin(); await wait(200);
+      clickRow('beta.md'); await wait(350); pin(); await wait(200);
+      const before=pinnedNames();                         // 新固定的在左边
+      await drag('beta.md','alpha.md',0.9);
+      const after=pinnedNames();
+
+      // 临时预览列：拖动头部只提示，不动固定列
+      clickRow('gamma.md'); await wait(350);
+      const head=document.querySelector('.pane:not(.is-pinned) .pv-head');
+      const r=head.getBoundingClientRect();
+      const panes=document.querySelector('#panes');
+      ev('pointerdown',head,r.left+r.width/2,r.top+8);
+      ev('pointermove',panes,r.left+r.width/2+30,r.top+8);
+      ev('pointerup',panes,r.left+r.width/2+30,r.top+8);
+      return {before, after, tempOrder:pinnedNames(), toastText:document.querySelector('#toast').textContent};
+    })()`);
+    eqJson('新固定的列排在左边', p3.before, ['beta.md', 'alpha.md']);
+    eqJson('把左列拖到右列之后，顺序互换', p3.after, ['alpha.md', 'beta.md']);
+    eqJson('拖动临时预览列不改变固定列顺序', p3.tempOrder, ['alpha.md', 'beta.md']);
+    ok('拖动临时列时提示先固定', p3.toastText.indexOf('请先固定此栏') >= 0, p3.toastText);
   });
 
   await run('W1', '网页视图只接受 http(s)，移出同步列表即销毁', async () => {

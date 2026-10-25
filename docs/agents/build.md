@@ -32,7 +32,7 @@ icons.js → highlight.js → markdown.js → vendor/docpreview.js
 
 | 文件 | 管什么 |
 | --- | --- |
-| `pane.js`（`PV.pane`） | 预览窗格作为一个单元的全部事情：内容身份 `bodyKey`、渲染任务身份 `reqId` / `pending`、创建与销毁、固定时的正文迁移、每列的宽度与排列 |
+| `pane.js`（`PV.pane`） | 预览窗格作为一个单元的全部事情：内容身份 `bodyKey`、渲染任务身份 `reqId` / `pending`、创建与销毁、固定时的正文迁移、每列的宽度与排列、按住头部拖动重排固定列 |
 | `preview-body.js`（`PV.body`） | 正文与头部**画成什么样**：按类型分派（Markdown / 代码视图 / 图片与连续预览 / HTML 迷你浏览器 / PDF / docx / pptx / 网页）、头部副标题与元信息、缩放档位 |
 | `webview.js`（`PV.web`） | 内嵌网页的几何同步：把每个网页预览列当前该占的矩形声明给主进程（`web:sync`），用 rAF 合并拖动与缩放；弹层打开时先 `setOccluded(true)` 把原生视图藏起来 |
 | `find.js`（`PV.find`） | 预览内查找：查找条、命中标记、在命中之间跳转 |
@@ -57,7 +57,7 @@ icons.js → highlight.js → markdown.js → vendor/docpreview.js
 `WebContentsView`，`src/main/web-url.js` 是两个进程共用的地址白名单。`PV.web` 只负责
 「按现在的布局，每个网页列该占哪块矩形」，不直接碰主进程的视图对象。
 
-动这个分层时，`test/integration.test.cjs` 的 C1 / C2 / C4 / F1 / P1 / W1 就是它的回归网。
+动这个分层时，`test/integration.test.cjs` 的 C1 / C2 / C4 / F1 / P1 / P3 / W1 就是它的回归网。
 
 ## 打包内容
 

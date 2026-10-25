@@ -303,8 +303,21 @@ body.resizing{cursor:col-resize}
 .pv-head{
   flex:none;display:flex;align-items:flex-start;flex-wrap:wrap;gap:10px;
   padding:12px 12px 10px 14px;border-bottom:1px solid var(--line-soft);
+  position:relative;cursor:grab;user-select:none;
 }
 .pv-head:empty{display:none}
+.pv-head button{cursor:pointer}
+/* 按住头部拖动固定列：拖动中标题变淡，目标缝隙画一条强调色竖线 */
+.pane.is-moving .pv-head{opacity:.55;cursor:grabbing}
+body.pane-moving{cursor:grabbing}
+body.pane-moving .pv-head{cursor:grabbing}
+.pv-head.drop-before::before,
+.pv-head.drop-after::before{
+  content:"";position:absolute;top:0;bottom:0;width:3px;z-index:2;
+  background:var(--accent);border-radius:2px;
+}
+.pv-head.drop-before::before{left:0}
+.pv-head.drop-after::before{right:0}
 .pv-ic{margin-top:2px}
 .pv-name{flex:1;min-width:0}
 .pv-nm{font-size:13.5px;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
