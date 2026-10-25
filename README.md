@@ -54,6 +54,7 @@ ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ node node_modules/electr
 | PDF 预览 | 交给 Chromium 内置 PDF 阅读器，缩放 / 翻页 / 下载 / 打印都在预览面板里 |
 | 代码查看 | Shiki 有状态分词 + 行号，跨行注释/模板字符串整段正确着色；大文件按阶梯降级 |
 | 图片查看 | SVG/PNG/JPG 等等比显示，透明区棋盘格；默认适应窗口，预览头可用 `− [适应/150%] +` 或 `Ctrl+滚轮` 缩放（25%–800%），放大后横竖都能滚 |
+| SVG 编辑 | 预览头的铅笔进入编辑模式：单击选中、拖动移动（矩形连同框内文字一起走），矩形有八个缩放手柄；双击文字单行改字，`Delete` 删除（矩形连同框内文字），`Ctrl+Z` / `Ctrl+Shift+Z` 撤销重做；编辑条可调显示比例（适应 / 50%–300%）。**改动自动写回原文件**，带版本冲突检测；含脚本等不安全内容或非 UTF-8 编码的 SVG 只读显示，不编辑也不保存 |
 | 连续预览 | 图片预览头右侧的向下箭头：把同目录里排在当前图片后面的图片竖着排下来，向下滚动即看下一张，每张的紧下方标注「第几张 / 共几张」与文件名（说明贴着它上面那张图，不会看成下一张的标题）；懒加载，一次最多 300 张 |
 | 大目录 | 单栏超过 120 项自动切换虚拟滚动，数千项也不卡 |
 | 搜索 | 按名称过滤当前已展开的各栏，显示「命中 / 总数」 |
@@ -114,7 +115,7 @@ project_viewer/
 │   ├── build-checksums.mjs    # 生成发布产物的 SHA256SUMS.txt
 │   └── audit-report.mjs       # 漏洞扫描，按「进不进安装包」分开看
 ├── src/
-│   ├── main/                  # 主进程：唯一的系统访问入口，只读
+│   ├── main/                  # 主进程：唯一的系统访问入口（读 + 受限的 SVG 保存）
 │   │   ├── main.js            # 无边框窗口、IPC、pv:// 协议、菜单
 │   │   ├── fs-api.js          # 文件系统访问层（带路径授权校验）
 │   │   ├── store.js           # 界面偏好持久化（userData/state.json）
@@ -125,6 +126,7 @@ project_viewer/
 │       ├── app.js             # 编排：导航、快捷键、事件接线
 │       ├── pane.js            # 分栏与列：虚拟滚动、固定列、列宽
 │       ├── preview-body.js    # 预览正文：各类型的渲染与降级
+│       ├── svgedit.js         # SVG 轻量编辑：选择、拖动、矩形缩放、改字、撤销、自动保存
 │       ├── find.js            # 预览内查找
 │       ├── projects.js        # 项目切换条、图标选择与每个项目的浏览位置
 │       ├── icons.js           # 图标与文件类型映射
@@ -137,8 +139,9 @@ project_viewer/
 └── sample-project/            # 示例工作区
 ```
 
-`src/renderer/` 的四层是有意的分工：`app.js` 只做编排，`pane.js` 管分栏与列的生命周期，
-`preview-body.js` 管「这个东西怎么渲染」，`find.js` 管查找。加功能前先看清该落在哪一层。
+`src/renderer/` 的分层是有意的分工：`app.js` 只做编排，`pane.js` 管分栏与列的生命周期，
+`preview-body.js` 管「这个东西怎么渲染」，`svgedit.js` 管 SVG 编辑这一条独立的交互线，
+`find.js` 管查找。加功能前先看清该落在哪一层。
 
 ### 构建
 
@@ -165,8 +168,9 @@ npm run build     # 生成 src/renderer/vendor/（高亮 Worker 按需 chunk + d
 ### 安全模型
 
 渲染进程没有 Node 能力：`contextIsolation: true`、`nodeIntegration: false`、`sandbox: true`，
-只能调用 preload 暴露的白名单方法。主进程是唯一的系统访问入口，且**只提供读操作**——
-没有重命名、删除、移动、执行任意命令的接口。
+只能调用 preload 暴露的白名单方法。主进程是唯一的系统访问入口，默认只读；唯一的写操作是
+**保存 SVG 编辑结果**：只能覆盖当前工作区内已存在的 `.svg`，调用方要带上读取时的 size / mtime
+（磁盘上已经变了就拒绝），先写同目录临时文件再原子替换。没有重命名、删除、移动、执行任意命令的接口。
 
 所有路径都要通过 `assertAllowed()`：只能访问已登记为工作区的根目录内部。它比较的是
 `realpath` 之后的真实路径——工作区里指向外部的 junction / 符号链接同样越不过去。实测：
@@ -176,11 +180,16 @@ pv.read('C:\Windows\win.ini')            → EACCES_ROOT
 pv.openPath('...\calc.exe')              → EACCES_ROOT（不会真的启动）
 pv.read('<root>/../../package.json')     → EACCES_ROOT（目录穿越被拦下）
 pv.read('<root>/linked/marker.txt')      → EACCES_ROOT（junction 指向外部）
+pv.writeSvg('<root>/note.txt', ...)      → ENOT_SVG（只允许 .svg）
+pv.writeSvg('<root>/fig.svg', 旧版本)     → CONFLICT（磁盘上已经变了，不覆盖）
 ```
 
 预览内容一律按不可信处理：docx 的 altChunk 不渲染，文档渲染完会清掉脚本类节点、
 行内事件属性与危险协议；Markdown 链接只放行 `http(s)` / `mailto` / 相对地址，
-地址里的引号会被转义，事件处理器注入不进去。
+地址里的引号会被转义，事件处理器注入不进去。SVG 进入编辑模式前同样会摘掉脚本、
+`foreignObject`、SMIL、事件属性、`javascript:` / 危险 `data:` 链接，以及 `file:` / 相对
+资源引用（内联后的基准是宿主页面，解析会错位）；一旦摘掉了东西就把这个文件标成只读，
+避免一次保存把文件里原本的脚本悄悄删掉。
 
 可读范围只有**当前打开的那一个工作区**：切换工作区时会清掉上一个的授权，
 在 A 里读过的目录不会因为切到 B 而继续可读。

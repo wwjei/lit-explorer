@@ -8,7 +8,7 @@
  *   - 键盘、指针、顶部按钮、主进程事件，以及把上面几个模块接起来
  *
  * 加载顺序：icons.js → highlight.js → markdown.js → vendor/docpreview.js →
- *           pane.js → preview-body.js → find.js → projects.js → app.js。
+ *           pane.js → preview-body.js → svgedit.js → find.js → projects.js → app.js。
  */
 (function () {
   'use strict';
@@ -936,6 +936,15 @@
     if (act === 'zoom-out') { if (node) PV.body.stepZoom(pane, -1); return; }
     if (act === 'zoom-reset') { if (node) PV.body.setZoom(pane, 0); return; }
     if (act === 'seq') { if (node) PV.body.toggleSeq(pane); return; }
+    if (act === 'svg-edit') {
+      if (!node || node.kind !== 'svg') return;
+      pane.svgEdit = !pane.svgEdit;
+      pane.svgEditPath = pane.svgEdit ? node.path : '';
+      // 编辑模式接管正文，连续预览让位
+      if (pane.svgEdit) pane.continuous = false;
+      PV.pane.renderPane(pane, true);
+      return;
+    }
     if (!node) return;
     if (act === 'reload') {
       // 重新读取后基线由正文落地时上报；先清掉高亮，避免读失败时一直亮着
