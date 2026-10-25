@@ -31,6 +31,11 @@ contextBridge.exposeInMainWorld('pv', {
   openContextMenu: (payload) => ipcRenderer.invoke('ui:context-menu', payload),
   openAppMenu: () => ipcRenderer.invoke('ui:app-menu'),
 
+  /* 内嵌网页：提交需要的地址与矩形，视图由主进程创建 / 销毁 */
+  webSync: (list) => ipcRenderer.invoke('web:sync', list),
+  webReload: (url) => ipcRenderer.invoke('web:reload', url),
+  openExternalUrl: (url) => ipcRenderer.invoke('web:open-external', url),
+
   /* 自绘标题栏的窗口控制 */
   minimize: () => ipcRenderer.invoke('window:minimize'),
   toggleMaximize: () => ipcRenderer.invoke('window:toggle-maximize'),
@@ -51,5 +56,7 @@ contextBridge.exposeInMainWorld('pv', {
   onRescan: (cb) => ipcRenderer.on('app:rescan', () => cb()),
   onFocusSearch: (cb) => ipcRenderer.on('app:focus-search', () => cb()),
   onToggleFavorite: (cb) => ipcRenderer.on('app:toggle-favorite', (_e, node) => cb(node)),
+  onEditWeb: (cb) => ipcRenderer.on('app:edit-web', (_e, payload) => cb(payload)),
+  onWebState: (cb) => ipcRenderer.on('web:state', (_e, payload) => cb(payload)),
   onPreviewPrefs: (cb) => ipcRenderer.on('app:preview-prefs', (_e, prefs) => cb(prefs))
 });

@@ -27,7 +27,7 @@
  */
 
 const electron = require('electron');
-const { app, BrowserWindow, protocol, ipcMain, net } = electron;
+const { app, BrowserWindow, protocol, ipcMain, net, session } = electron;
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
@@ -35,6 +35,7 @@ const JSZip = require('jszip');
 const { ROOT, TMP, run, ok, eq, eqJson, done, freshDir, linkDir } = require('./helpers.cjs');
 
 const fsApi = require(path.join(ROOT, 'src/main/fs-api.js'));
+const webViews = require(path.join(ROOT, 'src/main/web-views.js'));
 app.setPath('userData', path.join(TMP, 'user-data'));
 
 /** 各用例里人为注入的延迟，集中在这里便于调整（也是整个套件耗时的大头） */
@@ -64,8 +65,15 @@ function loadMainModule() {
     require: (n) => (n === 'electron' ? Object.assign({}, electron, { app: fakeApp, ipcMain: recorder })
       : n === './fs-api' ? fsApi
         : n === './state-sanitize' ? require(path.join(ROOT, 'src/main/state-sanitize.js'))
-          : n === './store' ? { load: async () => ({}), patch: async () => ({}) }
-            : require(n)),
+          : n === './web-url' ? require(path.join(ROOT, 'src/main/web-url.js'))
+            : n === './web-views' ? {
+              attachWindow: () => {},
+              sync: () => {},
+              reload: () => false,
+              destroyAll: () => {}
+            }
+              : n === './store' ? { load: async () => ({}), patch: async () => ({}) }
+                : require(n)),
     process: process,
     __dirname: path.join(ROOT, 'src/main'),
     URL, Response, console, setTimeout, clearTimeout
@@ -112,6 +120,10 @@ function renderer() {
       // 预览变更监测每 5 s 会 stat 一次当前预览；测试里没有真实文件，固定返回同一版本
       ipcMain.handle('fs:stat', () => ({ size: 0, mtime: 0 }));
       ipcMain.handle('window:is-maximized', () => false);
+      // 网页视图的接线：渲染进程会同步调用，测试里不真的开子视图
+      ipcMain.handle('web:sync', () => ({ ok: true }));
+      ipcMain.handle('web:reload', () => ({ ok: true }));
+      ipcMain.handle('web:open-external', () => ({ ok: true }));
       createdWin = new BrowserWindow({
         show: false,
         webPreferences: {
@@ -499,6 +511,40 @@ async function main() {
     eq('正文显示的是后选中的图片', p2.alt, 'y.svg');
     eq('只保留一张图片元素', p2.imgs, 1);
     eq('缩放作用在可见图片上（80px 宽）', p2.width, '80px');
+  });
+
+  await run('W1', '网页视图只接受 http(s)，移出同步列表即销毁', async () => {
+    const w = new BrowserWindow({
+      show: false,
+      width: 900,
+      height: 700,
+      webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false }
+    });
+    webViews.attachWindow(w);
+    const rect = { x: 0, y: 0, width: 400, height: 300 };
+
+    eq('网页会话没有宿主 pv:// 处理器',
+      session.fromPartition(webViews.PARTITION).protocol.isProtocolHandled('pv'), false);
+
+    webViews.sync([{ url: 'http://127.0.0.1:9/doc', visible: true, rect: rect }]);
+    eq('http 地址会创建视图', webViews.count(), 1);
+
+    webViews.sync([{ url: 'http://127.0.0.1:9/two', visible: false, rect: null }]);
+    eq('不可见的条目保留视图（预览收起不重载）', webViews.count(), 1);
+    webViews.sync([{ url: 'http://127.0.0.1:9/two', visible: true, rect: { x: 0, y: 0, width: 0, height: 0 } }]);
+    eq('可见但矩形无效时保留视图（只是不显示）', webViews.count(), 1);
+
+    const bad = ['javascript:alert(1)', 'file:///C:/secret', 'data:text/html,x',
+      'https://user:pass@a.example/', 'ms-msdt:/id'];
+    webViews.sync(bad.map((url) => ({ url: url, visible: true, rect: rect })));
+    eq('非法地址不会留下视图', webViews.count(), 0);
+
+    webViews.sync([{ url: 'http://127.0.0.1:9/two', visible: true, rect: rect }]);
+    eq('重新出现会重建视图', webViews.count(), 1);
+    webViews.sync([]);
+    eq('移出同步列表后销毁', webViews.count(), 0);
+
+    w.destroy();
   });
 
   await run('S6', '并发切换工作区只留一个授权根', async () => {

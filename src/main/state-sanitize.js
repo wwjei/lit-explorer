@@ -12,6 +12,8 @@
  * 所以窗口参数只收几何字段、项目路径必须是主进程给过的目录，其余字段逐个校验。
  */
 
+const webUrl = require('./web-url');
+
 const MAX_PROJECTS = 5;
 const MAX_ICON_CHARS = 512 * 1024;
 const MAX_NAV_LEVELS = 16;
@@ -95,15 +97,29 @@ function sanitizeFavorites(value) {
   for (const key of keys) {
     const list = value[key];
     if (typeof key !== 'string' || key.length > MAX_PATH_CHARS || !Array.isArray(list)) continue;
+    const seenWeb = new Set();
     out[key] = list.slice(0, MAX_FAV_ITEMS).map((raw) => {
       if (!raw || typeof raw !== 'object') return null;
+      const kind = shortText(raw.kind, 24) || 'txt';
+      if (kind === 'web') {
+        // 网页条目只认 http(s)，且不写 path：任何按路径分派的代码都不会误用它
+        const url = webUrl.normalizeWebUrl(raw.url);
+        if (!url || seenWeb.has(url)) return null;
+        seenWeb.add(url);
+        return {
+          url: url,
+          name: shortText(raw.name, 120) || webUrl.webHost(url) || url,
+          isDir: false,
+          kind: 'web'
+        };
+      }
       const p = typeof raw.path === 'string' ? raw.path.slice(0, MAX_PATH_CHARS) : '';
       if (!p) return null;
       return {
         path: p,
         name: shortText(raw.name, 255) || p.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || p,
         isDir: !!raw.isDir,
-        kind: shortText(raw.kind, 24) || 'txt'
+        kind: kind
       };
     }).filter(Boolean);
   }

@@ -19,7 +19,7 @@
  * 引用，与加载顺序无关。
  *
  * 加载顺序：icons.js → highlight.js → markdown.js → vendor/docpreview.js →
- *           pane.js → preview-body.js → find.js → projects.js → app.js。
+ *           pane.js → preview-body.js → webview.js → find.js → projects.js → app.js。
  */
 (function () {
   'use strict';
@@ -40,6 +40,7 @@
    *   renderHead(pane, node)  头部 HTML
    *   renderBody(...)         正文渲染，返回 Promise（见 renderPane 的调用处）
    *   bodyKey(pane,node,mode) 内容身份
+   *   afterLayout()           布局变了：网页视图的矩形要跟着重算（webview.js）
    */
   const hooks = {
     toast: function () {},
@@ -47,7 +48,8 @@
     selection: function () { return null; },
     renderHead: function () { return ''; },
     renderBody: function () { return null; },
-    bodyKey: function () { return ''; }
+    bodyKey: function () { return ''; },
+    afterLayout: function () {}
   };
 
   /** 临时预览列是否显示（固定列不受它影响） */
@@ -373,7 +375,10 @@
     // 关掉临时预览列不影响固定列：整块预览区只在「一列都没有」时才收起
     const list = visiblePanes();
     previewEl.hidden = list.length === 0;
-    if (!list.length) return;
+    if (!list.length) {
+      hooks.afterLayout();
+      return;
+    }
 
     for (const pane of allPanes()) pane.el.hidden = list.indexOf(pane) < 0;
     syncPaneOrder(list);
@@ -384,6 +389,8 @@
     for (let i = 0; i < list.length; i++) renderPane(list[i], force);
     // 临时预览列被收起来（内容已经在固定列里）时，挂在它上面的查找条一并收掉
     PV.find.revalidate();
+    // 头部高度、列宽、显隐都定了，网页视图的矩形现在才准
+    hooks.afterLayout();
   }
 
   /* ============================ 固定与迁移 ============================ */
@@ -565,6 +572,7 @@
       mainFloor = left >= auto ? 0 : left;
     }
     applyPaneWidths();
+    hooks.afterLayout();
   });
   panesEl.addEventListener('pointerup', () => {
     if (!paneDrag) return;
@@ -587,7 +595,7 @@
     /* 渲染与布局 */
     renderPreview: renderPreview,
     renderPane: renderPane,
-    relayout: function () { fitPaneWidths(); applyPaneWidths(); },
+    relayout: function () { fitPaneWidths(); applyPaneWidths(); hooks.afterLayout(); },
 
     /* 显示开关（预览区整体是否显示） */
     previewOpen: function () { return previewOpen; },
@@ -609,6 +617,7 @@
 
     /* 查询 */
     paneOf: paneOf,
+    allPanes: allPanes,
     modeOf: modeOf,
     visiblePanes: visiblePanes,
     isImageNode: isImageNode,
