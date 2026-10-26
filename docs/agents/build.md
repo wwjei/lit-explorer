@@ -23,7 +23,8 @@ README 与界面直接使用它。`scripts/build-icons.mjs` 自带 PNG 解码、
 上挂东西，由 `index.html` 按固定顺序 `<script>` 加载，没有模块系统：
 
 ```
-icons.js → highlight.js → markdown.js → vendor/docpreview.js
+src/shared/contracts.js（主进程 require，渲染进程先加载）
+paths.js → icons.js → highlight.js → markdown.js → vendor/docpreview.js
          → pane.js → preview-body.js → webview.js → svgedit.js → find.js → projects.js → app.js
 ```
 
@@ -32,6 +33,8 @@ icons.js → highlight.js → markdown.js → vendor/docpreview.js
 
 | 文件 | 管什么 |
 | --- | --- |
+| `src/shared/contracts.js` | 两个进程必须一致的数量上限与可固定类型白名单。主进程 `require`，渲染进程由 `index.html` 先加载成 `PV.contracts`；两边读同一份，避免上限 / 类型名单各写一遍后漂移 |
+| `paths.js`（`PV.paths`） | 界面层的路径比较与展示：Windows 大小写不敏感、`\` 与 `/` 等价、相对工作区根的各段与副标题。主进程 `fs-api.js` 的真实路径校验是另一件事，不要合并 |
 | `pane.js`（`PV.pane`） | 预览窗格作为一个单元的全部事情：内容身份 `bodyKey`、渲染任务身份 `reqId` / `pending`、创建与销毁、固定 / 分屏时的正文迁移、列模型（一列 1–2 个窗格，列宽与上下比例）、抓手换位 / 下 1/3 分屏 / 临时列右拖自动固定 |
 | `preview-body.js`（`PV.body`） | 正文与头部**画成什么样**：按类型分派（Markdown / 代码视图 / 图片与连续预览 / HTML 迷你浏览器 / PDF / docx / pptx / 网页 / SVG 编辑）、头部副标题与元信息、缩放档位 |
 | `webview.js`（`PV.web`） | 内嵌网页的几何同步：把每个网页预览列当前该占的矩形声明给主进程（`web:sync`），用 rAF 合并拖动与缩放；弹层打开时先 `setOccluded(true)`、拖动列 / 分隔条 / 窗格时先 `setDragHidden(true)` 把原生视图藏起来（松手后按新矩形回来） |

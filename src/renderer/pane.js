@@ -20,8 +20,9 @@
  * 会通知 PV.find（closeIfOn / revalidate / afterRender / carryFrom）——都是在函数体里
  * 引用，与加载顺序无关。
  *
- * 加载顺序：icons.js → highlight.js → markdown.js → vendor/docpreview.js →
- *           pane.js → preview-body.js → webview.js → svgedit.js → find.js → projects.js → app.js。
+ * 加载顺序：shared/contracts.js → paths.js → icons.js → highlight.js → markdown.js →
+ *           vendor/docpreview.js → pane.js → preview-body.js → webview.js → svgedit.js →
+ *           find.js → projects.js → app.js。
  */
 (function () {
   'use strict';
@@ -31,14 +32,14 @@
   const previewEl = $('#preview');
 
   /** 最多固定几列预览（每列最多两个窗格，所以固定窗格最多 MAX_PINS * 2 个） */
-  const MAX_PINS = 3;
-  const MAX_PANES_PER_COL = 2;
+  const MAX_PINS = PV.contracts.MAX_PINS;
+  const MAX_PANES_PER_COL = PV.contracts.MAX_PANES_PER_COL;
   const PANE_MIN = 240;        // 单列的最小宽度（分屏的两个窗格共享这一列宽）
   const MAIN_HARD_MIN = 260;   // 栏区的绝对下限（约一栏宽），手动拖动也不越过
   const SPLIT_MIN = 0.2;       // 上下分屏时上面那一格的最小占比
   const SPLIT_MAX = 0.8;
   /** 允许从设置里恢复的预览类型；web 单独处理，不能靠 path 当文件读 */
-  const PANE_KINDS = new Set(['html', 'md', 'docx', 'pptx', 'pdf', 'js', 'json', 'css', 'svg', 'image', 'txt']);
+  const PANE_KINDS = new Set(PV.contracts.PINNED_KINDS);
 
   /**
    * app.js 注入的接口：本文件只管「什么时候」，画成什么样由它们决定。
@@ -266,13 +267,18 @@
     tempPane.node = null;
     // 让还在读 / 解析的旧任务回来后写不进已清空的临时列
     if (tempPane.pending > 0) tempPane.reqId++;
-    tempPane.bodyKey = '';
     tempPane.svgEdit = false;
     tempPane.svgEditPath = '';
-    dropPaneView(tempPane);
-    tempPane.images = [];
-    tempPane.body.className = 'pv-body is-empty';
-    tempPane.body.innerHTML = '';
+    clearPaneBody(tempPane);
+  }
+
+  /** 清掉窗格的正文与内容身份；调用方负责先作废还在跑的渲染任务 */
+  function clearPaneBody(pane) {
+    dropPaneView(pane);
+    pane.bodyKey = '';
+    pane.images = [];
+    pane.body.className = 'pv-body is-empty';
+    pane.body.innerHTML = '';
   }
 
   /**
@@ -288,11 +294,7 @@
     // 让挂起的旧渲染回来后写不进隐藏的临时列（否则会留下隐藏的编辑器 / ResizeObserver）
     if (tempPane.pending > 0) tempPane.reqId++;
     if (tempPane.bodyKey !== '' || tempPane.view || tempPane.body.firstChild) {
-      dropPaneView(tempPane);
-      tempPane.bodyKey = '';
-      tempPane.images = [];
-      tempPane.body.className = 'pv-body is-empty';
-      tempPane.body.innerHTML = '';
+      clearPaneBody(tempPane);
     }
   }
 
@@ -328,7 +330,7 @@
   function isPinnedPath(path) {
     for (const col of pins) {
       for (const pane of col.panes) {
-        if (pane.node && pane.node.path === path) return true;
+        if (pane.node && PV.paths.same(pane.node.path, path)) return true;
       }
     }
     return false;
@@ -642,11 +644,7 @@
     if (wasEditing) {
       tempPane.svgEdit = false;
       tempPane.svgEditPath = '';
-      dropPaneView(tempPane);
-      tempPane.bodyKey = '';
-      tempPane.body.className = 'pv-body is-empty';
-      tempPane.body.innerHTML = '';
-      tempPane.images = [];
+      clearPaneBody(tempPane);
     }
     // 正在看的那一屏整块搬过去；还在读的时候返回 null，让新窗格自己重渲染
     const keep = wasEditing ? null : adoptPaneBody(pane, tempPane);
@@ -757,7 +755,7 @@
     }
     const filePath = typeof saved.path === 'string' ? saved.path : '';
     if (!filePath || !hooks.allowPinnedPath(filePath)) return null;
-    const name = saved.name || filePath.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || filePath;
+    const name = saved.name || PV.paths.baseName(filePath) || filePath;
     const kind = PANE_KINDS.has(saved.kind) ? saved.kind : 'txt';
     return { path: filePath, name: name, isDir: false, kind: kind };
   }
@@ -804,26 +802,19 @@
 
   const PANE_SCROLLERS = ['.prose-wrap', '.cv-scroll', '.imgseq', '.img-wrap', '.docview', '.pdfview'];
 
-  /** 窗格里的滚动容器，不管它现在能不能滚（图片列的高度要等图片解码完才准） */
-  function paneScrollHost(pane) {
+  /** 窗格里的滚动容器；mustScroll=true 时只算当前真能滚的那个 */
+  function paneScrollHost(pane, mustScroll) {
     for (const sel of PANE_SCROLLERS) {
       const el = pane.body.querySelector(sel);
-      if (el) return el;
-    }
-    return null;
-  }
-
-  function paneScroller(pane) {
-    for (const sel of PANE_SCROLLERS) {
-      const el = pane.body.querySelector(sel);
-      if (el && el.scrollHeight > el.clientHeight + 2) return el;
+      if (!el) continue;
+      if (!mustScroll || el.scrollHeight > el.clientHeight + 2) return el;
     }
     return null;
   }
 
   /** 返回是否真的滚了：焦点在预览里但这一列没得滚时，按键就到此为止 */
   function scrollPaneBy(pane, dir) {
-    const el = paneScroller(pane);
+    const el = paneScrollHost(pane, true);
     if (!el) return false;
     const step = Math.max(72, Math.round(el.clientHeight * 0.15));
     el.scrollTop += dir * step;

@@ -12,6 +12,7 @@ const store = require('./store');
 const stateSanitize = require('./state-sanitize');
 const webViews = require('./web-views');
 const webUrl = require('./web-url');
+const contracts = require('../shared/contracts');
 
 const DEV_ROOT = path.join(__dirname, '..', '..');
 const DEV = process.argv.includes('--dev');
@@ -81,13 +82,18 @@ function toPreviewUrl(filePath) {
  * 每个候选都过 assertAllowed()：越界（含 junction / 符号链接）一律拒绝。
  * ------------------------------------------------------------------ */
 const IMG_SRC_MAX = 2048;
-const IMG_MAX_PER_DOC = 100;
+const IMG_MAX_PER_DOC = contracts.MAX_MD_IMAGES;
 const IMG_MAX_BYTES = 32 * 1024 * 1024;
 
 function codedError(code) {
   const err = new Error(code);
   err.code = code;
   return err;
+}
+
+/** 图片 / HTML / PDF 的预览地址都带文件版本，保存后重新渲染才能拿到新内容 */
+function previewVersion(st) {
+  return '?v=' + Math.round(st.mtimeMs) + '-' + st.size;
 }
 
 /** 去掉 <> 包裹、片段与查询串并解码；控制字符 / 协议头 / UNC 一律判无效 */
@@ -124,7 +130,7 @@ async function resolveImageTargets(mdPath, srcs) {
       const kind = fsApi.kindFor(real);
       if (kind !== 'image' && kind !== 'svg') throw codedError('ENOT_IMAGE');
       // 与 fs:preview-url 一样带文件版本：改了图再刷新要拿到新内容
-      return { src: src, url: toPreviewUrl(real) + '?v=' + Math.round(st.mtimeMs) + '-' + st.size };
+      return { src: src, url: toPreviewUrl(real) + previewVersion(st) };
     } catch (err) {
       return { src: src, error: (err && err.code) || 'EIMG' };
     }
@@ -318,14 +324,7 @@ async function openWorkspace(dir, options = {}) {
 function registerIpc() {
   ipcMain.handle('workspace:sample', () => fsApi.offerRoot(assetPath('sample-project')));
 
-  ipcMain.handle('workspace:pick', async () => {
-    const res = await dialog.showOpenDialog(win, {
-      title: '选择项目目录',
-      properties: ['openDirectory']
-    });
-    if (res.canceled || !res.filePaths.length) return { canceled: true };
-    return openWorkspace(res.filePaths[0]);
-  });
+  ipcMain.handle('workspace:pick', () => pickFolderAndOpen());
 
   // 只接受主进程给过的目录（示例项目、最近打开、上次的工作区、已打开过的）。
   // 渲染进程不能凭自己拼的路径把任意现存目录登记成新的授权根——授权决策留在主进程。
@@ -415,7 +414,7 @@ function registerIpc() {
       let version = '';
       try {
         const st = await fsp.stat(abs);
-        version = '?v=' + Math.round(st.mtimeMs) + '-' + st.size;
+        version = previewVersion(st);
       } catch { /* 取不到版本就用不带查询串的地址，能不能读交给协议判断 */ }
       return { url: toPreviewUrl(abs) + version };
     } catch (err) {
@@ -572,12 +571,14 @@ function showContextMenu(payload) {
  * 不用原生菜单栏（Windows 上那一行「文件 编辑 视图 帮助」太占地方也不好看），
  * 入口收敛到标题栏的 ⋯ 按钮、右键菜单和快捷键里。
  * ------------------------------------------------------------------ */
-async function pickAndOpen() {
+/** 选择并打开一个工作区：按钮（workspace:pick）与菜单的 Ctrl+O 共用 */
+async function pickFolderAndOpen() {
   const res = await dialog.showOpenDialog(win, {
     title: '选择项目目录',
     properties: ['openDirectory']
   });
-  if (!res.canceled && res.filePaths.length) await openWorkspace(res.filePaths[0]);
+  if (res.canceled || !res.filePaths.length) return { canceled: true };
+  return openWorkspace(res.filePaths[0]);
 }
 
 async function toggleThemeFromMain() {
@@ -602,7 +603,7 @@ async function togglePreviewPref(key) {
 async function showAppMenu() {
   const state = await store.load();
   const items = [
-    { label: '打开文件夹…', accelerator: 'Ctrl+O', click: pickAndOpen },
+    { label: '打开文件夹…', accelerator: 'Ctrl+O', click: pickFolderAndOpen },
     { label: '打开示例项目', click: () => openWorkspace(assetPath('sample-project')) },
     { type: 'separator' },
     { label: '重新扫描目录', accelerator: 'F5', click: () => win.webContents.send('app:rescan') },

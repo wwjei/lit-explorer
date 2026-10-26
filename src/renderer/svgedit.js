@@ -17,9 +17,9 @@
  * 保存是自动的：拖动 / 缩放松手、文字提交、删除、撤销各写一次。写入按顺序排队，
  * 每次带上读取时的 size / mtime；磁盘上已经变了就停在「保存冲突」，不覆盖别人的修改。
  *
- * 加载顺序：icons.js → highlight.js → markdown.js → vendor/docpreview.js →
- *           pane.js → preview-body.js → webview.js → svgedit.js → find.js →
- *           projects.js → app.js。
+ * 加载顺序：shared/contracts.js → paths.js → icons.js → highlight.js → markdown.js →
+ *           vendor/docpreview.js → pane.js → preview-body.js → webview.js → svgedit.js →
+ *           find.js → projects.js → app.js。
  */
 (function () {
   'use strict';
@@ -35,9 +35,7 @@
   const HANDLES = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
   const DATA_IMAGE = /^data:image\/(?:png|jpe?g|gif|webp|avif|bmp);base64,/i;
 
-  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-  })[c]);
+  const esc = PV.highlight.escapeAttr;
 
   /** 保留两位小数，避免 transform 里出现一长串浮点尾巴 */
   function fmt(n) {

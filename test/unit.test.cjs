@@ -8,6 +8,7 @@
  *   S4  渲染进程不能自行扩大授权根：offerRoot / isOfferedRoot
  *   S5  切换工作区后旧工作区不再可读：resetAllowedRoots
  *   S6  渲染进程提交的设置：字段白名单、窗口几何、项目路径校验
+ *   S7  界面层路径比较：分隔符等价、大小写、相对根各段与排序
  *
  * 跑法：npm run test:unit                     全跑
  *       npm run test:unit -- --only=S2        只跑一段
@@ -22,13 +23,16 @@ const { ROOT, run, ok, eq, eqJson, done, freshDir, linkDir } = require('./helper
 /**
  * 在沙箱里加载渲染进程的 IIFE 模块。
  * 它们只通过 window.PV 互相引用，沙箱里让 window 指向自己即可，
- * 不用把宿主进程的全局变量弄脏。
+ * 不用把宿主进程的全局变量弄脏。共享契约要按 index.html 的顺序先加载。
  */
 function loadRenderer() {
-  const sandbox = {};
+  const sandbox = { pv: { platform: process.platform } };
   sandbox.window = sandbox;
   vm.createContext(sandbox);
-  for (const file of ['highlight.js', 'markdown.js']) {
+  vm.runInContext(
+    fs.readFileSync(path.join(ROOT, 'src/shared/contracts.js'), 'utf8'),
+    sandbox, { filename: 'contracts.js' });
+  for (const file of ['paths.js', 'highlight.js', 'markdown.js']) {
     const code = fs.readFileSync(path.join(ROOT, 'src/renderer', file), 'utf8');
     vm.runInContext(code, sandbox, { filename: file });
   }
@@ -38,6 +42,10 @@ function loadRenderer() {
 (async () => {
   await run('S2', 'Markdown 链接与转义', () => {
     const toHtml = loadRenderer().PV.markdown.toHtml;
+
+    eq('属性转义同时处理单双引号',
+      loadRenderer().PV.highlight.escapeAttr('<a b="c" \'d\'>'),
+      '&lt;a b=&quot;c&quot; &#39;d&#39;&gt;');
 
     const injected = toHtml('[click](#"onclick="window.__x=1)');
     ok('引号逃不出 href 属性（没有 on* 属性）', !/\son[a-z]+\s*=/i.test(injected), injected);
@@ -310,6 +318,23 @@ function loadRenderer() {
     eq('只有非法网页的布局整份丢弃',
       san.sanitizeNav({ layout: { pins: [{ panes: [{ kind: 'web', url: 'javascript:alert(1)' }] }] } }).layout,
       undefined);
+  });
+
+  await run('S7', '界面层路径比较与排序', () => {
+    const p = loadRenderer().PV.paths;
+
+    eq('反斜杠与斜杠等价', p.same('C:\\ws\\a.md', 'C:/ws/a.md'), true);
+    eq('Windows 上大小写不敏感、其它平台区分大小写',
+      p.same('C:\\WS\\A.MD', 'c:/ws/a.md'), process.platform === 'win32');
+    eq('前缀相同的兄弟目录不在根内', p.within('C:\\ws', 'C:\\ws-evil\\x'), false);
+    eq('根自身算在根内', p.within('C:\\ws', 'C:/ws'), true);
+    eqJson('相对根的各段', p.partsUnder('C:\\ws', 'C:/ws/docs/a.md'), ['docs', 'a.md']);
+    eq('根自身没有段', p.partsUnder('C:\\ws', 'C:\\ws\\').length, 0);
+    eq('界外返回 null', p.partsUnder('C:\\ws', 'D:\\other\\a.md'), null);
+    eq('副标题保留原分隔符', p.relUnder('C:\\ws', 'C:\\ws\\docs\\a.md'), 'docs\\a.md');
+    eq('baseName 去掉末尾分隔符', p.baseName('C:\\ws\\a.md\\'), 'a.md');
+    eq('目录排在文件前', p.compareNodes({ name: 'z', isDir: true }, { name: 'a', isDir: false }) < 0, true);
+    eq('数字按数值排序', p.compareNodes({ name: 'a10', isDir: false }, { name: 'a2', isDir: false }) > 0, true);
   });
 
   done();

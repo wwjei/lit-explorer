@@ -121,14 +121,15 @@ function loadMainModule() {
       : n === './fs-api' ? fsApi
         : n === './state-sanitize' ? require(path.join(ROOT, 'src/main/state-sanitize.js'))
           : n === './web-url' ? require(path.join(ROOT, 'src/main/web-url.js'))
-            : n === './web-views' ? {
-              attachWindow: () => {},
-              sync: () => {},
-              reload: () => false,
-              destroyAll: () => {}
-            }
-              : n === './store' ? { load: async () => ({}), patch: async () => ({}) }
-                : require(n)),
+            : n === '../shared/contracts' ? require(path.join(ROOT, 'src/shared/contracts.js'))
+              : n === './web-views' ? {
+                attachWindow: () => {},
+                sync: () => {},
+                reload: () => false,
+                destroyAll: () => {}
+              }
+                : n === './store' ? { load: async () => ({}), patch: async () => ({}) }
+                  : require(n)),
     process: process,
     __dirname: path.join(ROOT, 'src/main'),
     URL, Response, console, setTimeout, clearTimeout

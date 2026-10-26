@@ -3,6 +3,7 @@
   'use strict';
 
   const esc = PV.highlight.escapeHtml;
+  const escAttr = PV.highlight.escapeAttr;
 
   /** 有协议头吗？单字母是 Windows 盘符（C:\...），不算协议 */
   function hasScheme(u) {
@@ -32,11 +33,6 @@
     if (hasScheme(u)) return /^https?:/i.test(u) ? u : '';
     if (u.startsWith('//')) return 'https:' + u;
     return u;
-  }
-
-  /** 属性上下文：escapeHtml 不管引号，这里补上 */
-  function escAttr(s) {
-    return esc(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
   /** 图片语法：![alt](地址 "标题")；地址可以用 <> 包住含空格的路径 */
@@ -226,7 +222,7 @@
   }
 
   /** 一次最多解析多少张本地图片，避免一份文档把 IPC 与磁盘读打满 */
-  const MAX_IMAGES = 100;
+  const MAX_IMAGES = PV.contracts.MAX_MD_IMAGES;
 
   /**
    * 正文里出现的本地图片地址（去重、跳过围栏代码块），供主进程批量解析成 pv://。

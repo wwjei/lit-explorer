@@ -22,8 +22,9 @@
  * 网页预览（kind = 'web'）不在这里画页面：正文只放加载 / 失败卡片，真正的页面由
  * 主进程的 WebContentsView 覆盖在窗格正文上（见 webview.js 与 main/web-views.js）。
  *
- * 加载顺序：icons.js → highlight.js → markdown.js → vendor/docpreview.js →
- *           pane.js → preview-body.js → webview.js → svgedit.js → find.js → projects.js → app.js。
+ * 加载顺序：shared/contracts.js → paths.js → icons.js → highlight.js → markdown.js →
+ *           vendor/docpreview.js → pane.js → preview-body.js → webview.js → svgedit.js →
+ *           find.js → projects.js → app.js。
  */
 (function () {
   'use strict';
@@ -65,10 +66,7 @@
   function subPath(node) {
     const root = hooks.root();
     if (!root || !node) return '';
-    const base = root.replace(/[\\/]+$/, '');
-    const abs = node.path;
-    const rel = abs.toLowerCase().startsWith(base.toLowerCase()) ? abs.slice(base.length) : abs;
-    return rel.replace(/^[\\/]+/, '');
+    return PV.paths.relUnder(root, node.path);
   }
 
   /* ============================ 状态卡片与外壳 ============================ */
@@ -513,9 +511,7 @@
     if (!entries) {
       const res = await pv.list(dir);
       entries = res && res.entries ? res.entries.slice() : [];
-      entries.sort((a, b) => (a.isDir !== b.isDir)
-        ? (a.isDir ? -1 : 1)
-        : a.name.localeCompare(b.name, 'zh-Hans-CN', { numeric: true }));
+      entries.sort(PV.paths.compareNodes);
     }
     return entries.filter(PV.pane.isImageNode);
   }

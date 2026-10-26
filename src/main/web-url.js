@@ -3,15 +3,16 @@
 /**
  * 网页快捷方式的地址校验。
  *
- * 渲染进程与主进程共用这一份规则：渲染进程用它做表单的即时反馈，主进程用它做
- * 唯一可信的判定（持久化白名单与 web:sync 都过这里）。只放行 http(s)：
+ * 渲染进程的表单校验在 app.js 里有一份等价实现（进程边界，无法 require 本文件）；
+ * 改这里的白名单时两边一起改。主进程这份是唯一可信的判定：持久化白名单与
+ * web:sync 都过这里。只放行 http(s)：
  *   - file: 能读本机文件；
  *   - javascript: / data: 是脚本入口；
  *   - ms-msdt: 这类自定义协议会拉起本机程序。
  * 地址里带账号密码的一律拒绝，避免把凭据写进 state.json。
  */
 
-const MAX_URL_CHARS = 2048;
+const { MAX_URL_CHARS } = require('../shared/contracts');
 
 /** 返回规范化后的地址；不可用返回空字符串 */
 function normalizeWebUrl(raw) {

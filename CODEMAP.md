@@ -12,9 +12,11 @@
 - `src/main/main.js`：主进程。`createWindow()`、`registerPreviewProtocol()`（`pv://`）、
   `registerIpc()`、`openWorkspace()`、`showContextMenu()`、`showAppMenu()`。
 - `src/main/preload.js`：`contextBridge` 只暴露 `pv.*`；渲染进程所有读写都从这里过。
+- `src/shared/contracts.js`：主进程与渲染进程共用的数量上限与可固定类型白名单
+  （`MAX_PINS`、`MAX_PROJECTS`、`MAX_FAV_ITEMS`、`MAX_URL_CHARS`、`PINNED_KINDS`…）。
 - `src/renderer/index.html` → `app.js`：界面编排。模块是 IIFE + `window.PV`，加载顺序是契约：
-  `icons → highlight → markdown → vendor/docpreview → pane → preview-body → webview →
-  svgedit → find → projects → app`。
+  `shared/contracts → paths → icons → highlight → markdown → vendor/docpreview → pane →
+  preview-body → webview → svgedit → find → projects → app`。
 - `src/renderer/vendor/`、`build/icons/`、`build/notices/` 是生成物，不手改。
 
 ## 2. 按任务找入口
@@ -25,6 +27,8 @@
 | 打开工作区、路径授权边界 | `main.js`、`src/main/fs-api.js` | `openWorkspace()`、`offerRoot()`、`allowRoot()`、`assertAllowed()`、`isInsideAnyRoot()` | `EACCES_ROOT`、`NOT_OFFERED`、`workspace:open`、`workspace:opened` |
 | 文件列表、多栏导航、虚拟滚动 | `src/renderer/app.js` | `loadColumn()`、`buildColumn()`、`renderColumns()`、`renderColumnWindow()`、`selectNode()`、`itemsOf()`、`restoreNav()` | `state.path`、`state.cols`、`nav`、`revealPreview`、`.col-list`、`.row`、`ensureVisible` |
 | 预览区布局、宽度、固定列、分屏、项目布局快照 | `src/renderer/pane.js`、`src/renderer/styles.css` | `createColumn()`、`layoutColumn()`、`renderPreview()`、`pinCurrent()`、`makePinPaneFromTemp()`、`applySplit()`、`applyInsert()`、`dropInfo()`、`paneBudget()`、`unpinPane()`、`layoutSnapshot()`、`restoreLayout()` | `bodyKey`、`reqId`、`pending`、`MAX_PINS`、`MAX_PANES_PER_COL`、`nav.layout`、`mainFloor`、`.pane-col`、`.pane-stack`、`.pane-split`、`.pv-grip` |
+| 路径比较 / 相对工作区的显示路径 | `src/renderer/paths.js` | `same()`、`within()`、`partsUnder()`、`relUnder()`、`compareNodes()`、`baseName()` | `PV.paths` |
+| 跨进程上限与可固定类型 | `src/shared/contracts.js` | `MAX_PINS`、`MAX_PANES_PER_COL`、`MAX_PROJECTS`、`MAX_FAV_ITEMS`、`MAX_URL_CHARS`、`MAX_MD_IMAGES`、`PINNED_KINDS` | `PV.contracts` |
 | 预览正文按类型分派、头部按钮 | `src/renderer/preview-body.js` | `renderPaneBody()`、`bodyKeyFor()`、`paneHeadHtml()`、`webHeadHtml()`、`noteLoaded()` | `PV.body`、`pane.mode`、`pane.svgEdit`、`loadingState`、`fallbackCard` |
 | Markdown 渲染、链接与图片白名单 | `src/renderer/markdown.js` | `toHtml()`、`imageSources()`、`safeHref()`、`safeImgSrc()` | `javascript:`、`markdown`、`inline()`、`md-img-missing` |
 | 代码高亮、降级与 Worker | `src/renderer/highlight.js`、`src/renderer/highlight/` | `mount()`、`plan()`、`tokenize()`、`tokenHtml()`、`highlightFences()` | `PV.highlight`、`shiki`、`cacheGet`、`getWorker` |

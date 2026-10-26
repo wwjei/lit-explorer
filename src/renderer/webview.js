@@ -10,8 +10,9 @@
  *   每次 renderPreview、列宽拖动、窗口缩放 / 最大化、预览收起、窗口失焦。
  * 用 requestAnimationFrame 合并，拖动分界线时不会每像素一次 IPC。
  *
- * 加载顺序：icons.js → highlight.js → markdown.js → vendor/docpreview.js →
- *           pane.js → preview-body.js → webview.js → find.js → projects.js → app.js。
+ * 加载顺序：shared/contracts.js → paths.js → icons.js → highlight.js → markdown.js →
+ *           vendor/docpreview.js → pane.js → preview-body.js → webview.js → svgedit.js →
+ *           find.js → projects.js → app.js。
  */
 (function () {
   'use strict';

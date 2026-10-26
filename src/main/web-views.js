@@ -253,25 +253,22 @@ function create(url) {
     rec.loaded = true;
     rec.failed = false;
     rec.crashed = false;
-    send({ url: url, status: 'loaded', currentUrl: wc.getURL(), title: wc.getTitle() });
+    send({ url: url, status: 'loaded', currentUrl: wc.getURL() });
     apply(rec);
   });
-  wc.on('did-fail-load', (_event, code, desc, failedUrl, isMainFrame) => {
+  wc.on('did-fail-load', (_event, code, desc, _failedUrl, isMainFrame) => {
     // -3 是「被新的导航取消」，属于正常现象
     if (!isMainFrame || code === -3) return;
     rec.loaded = false;
     rec.failed = true;
     apply(rec);
-    send({ url: url, status: 'error', code: code, desc: desc, failedUrl: failedUrl });
+    send({ url: url, status: 'error', code: code, desc: desc });
   });
   wc.on('did-navigate', (_event, target) => {
-    send({ url: url, status: 'navigated', currentUrl: target, title: wc.getTitle() });
+    send({ url: url, status: 'navigated', currentUrl: target });
   });
   wc.on('did-navigate-in-page', (_event, target) => {
-    send({ url: url, status: 'navigated', currentUrl: target, title: wc.getTitle() });
-  });
-  wc.on('page-title-updated', (_event, title) => {
-    send({ url: url, status: 'title', title: title });
+    send({ url: url, status: 'navigated', currentUrl: target });
   });
   wc.on('render-process-gone', (_event, details) => {
     rec.loaded = false;

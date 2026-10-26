@@ -13,18 +13,19 @@
  */
 
 const webUrl = require('./web-url');
+const {
+  MAX_PROJECTS,
+  MAX_FAV_ITEMS,
+  MAX_PINS,
+  MAX_PANES_PER_COL,
+  PINNED_KINDS: PINNED_KIND_LIST
+} = require('../shared/contracts');
 
-const MAX_PROJECTS = 5;
 const MAX_ICON_CHARS = 512 * 1024;
 const MAX_NAV_LEVELS = 16;
 const MAX_PATH_CHARS = 4096;
 const MAX_FAV_KEYS = 200;
-const MAX_FAV_ITEMS = 500;
-const MAX_LAYOUT_PINS = 3;
-const MAX_LAYOUT_PANES = 2;
-/** 与渲染进程 pane.js 的 PANE_KINDS 保持一致；web 单独按 URL 校验 */
-const PINNED_KINDS = new Set(['html', 'md', 'docx', 'pptx', 'pdf', 'js', 'json', 'css',
-  'svg', 'image', 'txt']);
+const PINNED_KINDS = new Set(PINNED_KIND_LIST);
 
 function isFiniteNumber(v) {
   return typeof v === 'number' && Number.isFinite(v);
@@ -110,12 +111,12 @@ function sanitizeLayout(layout) {
   const pins = [];
   const cols = Array.isArray(layout.pins) ? layout.pins : [];
   for (const raw of cols) {
-    if (pins.length >= MAX_LAYOUT_PINS) break;
+    if (pins.length >= MAX_PINS) break;
     if (!raw || typeof raw !== 'object') continue;
     const panes = [];
     const saved = Array.isArray(raw.panes) ? raw.panes : [];
     for (const p of saved) {
-      if (panes.length >= MAX_LAYOUT_PANES) break;
+      if (panes.length >= MAX_PANES_PER_COL) break;
       const one = sanitizePinnedPane(p);
       if (one) panes.push(one);
     }

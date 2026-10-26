@@ -11,13 +11,14 @@
  *
  * 持久化直接走 pv.setState({ projects })，写入由主进程防抖。
  *
- * 加载顺序：icons.js → highlight.js → markdown.js → vendor/docpreview.js →
- *           pane.js → preview-body.js → webview.js → svgedit.js → find.js → projects.js → app.js
+ * 加载顺序：shared/contracts.js → paths.js → icons.js → highlight.js → markdown.js →
+ *           vendor/docpreview.js → pane.js → preview-body.js → webview.js → svgedit.js →
+ *           find.js → projects.js → app.js
  */
 (function () {
   'use strict';
 
-  const MAX = 5;
+  const MAX = PV.contracts.MAX_PROJECTS;
 
   /* ------------------------------------------------------------------ *
    * 图标目录：只表达项目类型，不放 pin / 文件夹 / 收藏 / 分支这类操作型图标。
@@ -92,8 +93,7 @@
 
   const MONO_COLORS = ['#9a7f6b', '#7f91a8', '#7f9a8b', '#a48a6f', '#8a97b0', '#7f9a94', '#8f8a9e', '#96809a'];
 
-  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const esc = PV.highlight.escapeAttr;
 
   /* ------------------------------------------------------------------ *
    * 状态
@@ -119,18 +119,8 @@
     toast: function () {}
   };
 
-  function normPath(p) {
-    return String(p || '').replace(/\\/g, '/').replace(/\/+$/, '');
-  }
-  function samePath(a, b) {
-    const x = normPath(a);
-    const y = normPath(b);
-    return pv.platform === 'win32' ? x.toLowerCase() === y.toLowerCase() : x === y;
-  }
-  function baseName(p) {
-    const s = String(p || '').replace(/[\\/]+$/, '');
-    return s.split(/[\\/]/).pop() || s;
-  }
+  const samePath = PV.paths.same;
+  const baseName = PV.paths.baseName;
   function isActive(p) { return activePath ? samePath(p, activePath) : false; }
   function find(path) { return projects.find((p) => samePath(p.path, path)) || null; }
   function isFull() { return projects.length >= MAX; }
@@ -208,7 +198,7 @@
         nav: p.nav && typeof p.nav === 'object' ? p.nav : null
       }))
       .filter((p) => {
-        const k = normPath(p.path).toLowerCase();
+        const k = PV.paths.key(p.path);
         if (seen.has(k)) return false;
         seen.add(k);
         return true;
