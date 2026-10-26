@@ -13,8 +13,7 @@
   [FEATURES.md](FEATURES.md)。
 - 每条写清：现象、影响、怎么修（没查清就写「先查清什么」）、为什么现在不做。
 - 修完直接删掉整条，别在这里维护「已完成」列表。
-- **这不是需求池。** 想做的功能进 [further_notes.md](further_notes.md)，
-  已排期的进 [FEATURES.md](FEATURES.md) 第 8 节。
+- **这不是需求池。** 想做的功能进 [further_notes.md](further_notes.md)。
 
 ---
 

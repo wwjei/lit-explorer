@@ -5,11 +5,11 @@ lit explorer：Electron 写的本地项目文件浏览器（多栏目录导航 +
 **先找入口**：[CODEMAP.md](CODEMAP.md) 按业务组件列出文件、关键方法与可搜索关键字，
 比从头翻源码快；改业务组件、关键方法、IPC / DOM 约定时同步维护它。
 
-未做的事分四个池子，别混：想做的功能与要拍板的决策在
+未做的事分三个池子，别混：想做的功能与要拍板的决策在
 [further_notes.md](further_notes.md)；小 bug 与顺手清理在 [PENDING.md](PENDING.md)
 （**发版前必须清空**）；已知但无可行修法的依赖 / 安全问题在
-[docs/security-debt.md](docs/security-debt.md)；已排期与明确不做的都在
-[FEATURES.md](FEATURES.md)（第 8 节 / 第 2 节）。产品行为定义在
+[docs/security-debt.md](docs/security-debt.md)。明确不做的在
+[FEATURES.md](FEATURES.md) 第 2 节。产品行为定义在
 [FEATURES.md](FEATURES.md)，用法在 [README.md](README.md)。
 
 ## 按场景读
@@ -43,6 +43,6 @@ lit explorer：Electron 写的本地项目文件浏览器（多栏目录导航 +
    已经默认这么做），也不要结束你自己没起的进程。
 7. 加依赖之后要重跑 `npm run notices`（`predist` 里已经串上），否则随包分发的第三方
    许可声明会漏掉新引入的包。
-8. **同一件事只放一个池子。** 功能进 further_notes，小问题进 PENDING，依赖债进
-   security-debt，排期进 FEATURES 第 8 节——两边都写一遍，改了一边忘了另一边，
-   下一个会话就会照着过期的那份做事。
+8. **同一件事只放一个池子。** 功能与要拍板的事进 further_notes，小问题进 PENDING，
+   依赖债进 security-debt——两边都写一遍，改了一边忘了另一边，下一个会话就会照着
+   过期的那份做事。

@@ -16,7 +16,6 @@
 | 小 bug、瑕疵、顺手清理 | [PENDING.md](PENDING.md)——**发版前必须清空** |
 | 已知但没有可行修法的依赖 / 安全问题 | [docs/security-debt.md](docs/security-debt.md) |
 | 已经做出来的行为 | [FEATURES.md](FEATURES.md) |
-| **已排进版本规划的功能** | [FEATURES.md](FEATURES.md) 第 8 节 |
 | 明确不做的（非目标） | [FEATURES.md](FEATURES.md) 第 2 节 |
 | 操作手册 | [docs/agents/](docs/agents/) |
 | 一次性调试记录 | 留在提交信息里 |
@@ -67,6 +66,4 @@
 
 ## 待排期（方案已就绪）
 
-**（暂无）** 方案已经调研清楚、只差优先级的功能放这里。目前没有——已经在
-[FEATURES.md](FEATURES.md) 第 8 节的版本规划里的，不进这个池子，它的方案文档由那一行
-自己指过去。
+**（暂无）** 方案已经调研清楚、只差优先级的功能放这里；细节放 docs/design/。

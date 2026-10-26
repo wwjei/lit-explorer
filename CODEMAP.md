@@ -89,7 +89,7 @@
 
 | 文档 | 用途 |
 | --- | --- |
-| [FEATURES.md](FEATURES.md) | 产品行为、验收项、版本规划 |
+| [FEATURES.md](FEATURES.md) | 产品行为、明确的非目标 |
 | [README.md](README.md) | 用户用法与已知限制 |
 | [AGENTS.md](AGENTS.md) | 施工红线、按场景读的索引 |
 | [docs/agents/build.md](docs/agents/build.md) | renderer 分层、构建、加载顺序 |

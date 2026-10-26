@@ -63,7 +63,7 @@ ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ node node_modules/electr
 | 点文件开关 | 根目录栏头部的眼睛图标可隐藏/显示以 `.` 开头的文件与文件夹 |
 | 界面 | 明暗主题、预览列拖拽调宽与收起（收起的是临时预览列，固定列不受影响；单击文件自动重新展开）、最左栏两个面板的上下互换与比例拖动、窗口位置与设置自动记忆 |
 
-完整的**产品行为定义**（含验收标准与版本规划）见 [FEATURES.md](FEATURES.md)；
+完整的**产品行为定义**见 [FEATURES.md](FEATURES.md)；
 代码高亮的选型、渲染管线与降级阈值见 [docs/highlighting.md](docs/highlighting.md)。
 
 ## 快捷键
@@ -96,7 +96,7 @@ ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ node node_modules/electr
 ```
 project_viewer/
 ├── README.md / README.en.md   # 用法（中文 / 英文简版）
-├── FEATURES.md                # 产品行为定义、版本规划、明确的非目标
+├── FEATURES.md                # 产品行为定义、明确的非目标
 ├── CONTRIBUTING.md            # 参与开发（含几条红线）
 ├── SECURITY.md                # 安全策略与报告渠道
 ├── AGENTS.md                  # 文档索引：什么场景读哪份
