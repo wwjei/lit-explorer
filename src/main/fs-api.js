@@ -1,9 +1,12 @@
 'use strict';
 
 /**
- * 文件系统访问层：只做读操作，不提供任何写入/删除能力。
+ * 文件系统访问层：读操作 + 一个收得很窄的 SVG 编辑保存入口。
  * 所有对外路径都会先经过 assertAllowed() 校验，比较的是「真实路径」——
  * 指向工作区之外的符号链接 / junction 也越不过这条边界。
+ *
+ * 唯一的写能力是 writeSvgFile：只能覆盖已授权工作区内、已经存在的 `.svg`，
+ * 调用方要带上读取时的 size / mtime（磁盘上变了就拒绝），先写临时文件再 rename。
  */
 
 const fsp = require('node:fs/promises');
@@ -25,6 +28,9 @@ const MAX_TEXT_BYTES = 5 * 1024 * 1024;
 
 /** docx/pptx 要整份交给渲染进程解析，超过这个大小就不内嵌预览（IPC 也要拷贝一份） */
 const MAX_DOC_BYTES = 25 * 1024 * 1024;
+
+/** SVG 编辑保存上限（按 UTF-8 字节算）：序列化后的文本不该比这更大 */
+const MAX_SVG_WRITE_BYTES = 20 * 1024 * 1024;
 
 /** 判二进制时检查的头部长度 */
 const SNIFF_BYTES = 8192;
@@ -336,10 +342,11 @@ async function readFileForPreview(filePath) {
   let text = buf.toString('utf8');
   // UTF-8 解码出现替换字符时，尝试用系统常见的 GBK 兜底（中文 Windows 场景）
   let lossy = false;
+  let encoding = 'utf8';
   if (text.includes('\uFFFD')) {
     try {
       const gbk = new TextDecoder('gbk').decode(buf);
-      if (!gbk.includes('\uFFFD')) text = gbk;
+      if (!gbk.includes('\uFFFD')) { text = gbk; encoding = 'gbk'; }
       else lossy = true;
     } catch {
       lossy = true;
@@ -352,6 +359,7 @@ async function readFileForPreview(filePath) {
     mtime: st.mtimeMs,
     truncated: size > readLen,
     lossy,
+    encoding,
     path: abs
   };
 }
@@ -376,6 +384,61 @@ async function statPath(target) {
   return { path: abs, size: st.size, mtime: st.mtimeMs, isDir: st.isDirectory() };
 }
 
+/**
+ * 保存 SVG 编辑结果。这是应用里唯一的写文件入口，边界刻意收得很窄：
+ *   - 真实路径必须在当前授权根内（与读走同一条 assertAllowed）；
+ *   - 只能覆盖已经存在的 `.svg` 普通文件；
+ *   - 调用方带来读取时的 size / mtime，磁盘上已经变了就回 CONFLICT，
+ *     避免把别人的修改（例如 agent 重新导出）盖掉；
+ *   - 先写同目录临时文件再 rename，中途失败不会留下半个文件。
+ * 返回 `{ ok, path, size, mtime }` 或 `{ error: 'CONFLICT', size, mtime }`；
+ * 其余失败抛错，由 IPC 层转成 `{ error, message }`。
+ */
+async function writeSvgFile(filePath, content, expected) {
+  const abs = await assertAllowed(filePath);
+  if (path.extname(abs).toLowerCase() !== '.svg') {
+    const err = new Error('只允许保存 SVG：' + abs);
+    err.code = 'ENOT_SVG';
+    throw err;
+  }
+  if (typeof content !== 'string') {
+    const err = new Error('保存内容必须是字符串');
+    err.code = 'EBAD_CONTENT';
+    throw err;
+  }
+  if (Buffer.byteLength(content, 'utf8') > MAX_SVG_WRITE_BYTES) {
+    const err = new Error('SVG 超过保存上限');
+    err.code = 'ETOO_LARGE';
+    throw err;
+  }
+  const st = await fsp.stat(abs);
+  if (!st.isFile()) {
+    const err = new Error('只能保存到普通文件');
+    err.code = 'ENOT_FILE';
+    throw err;
+  }
+  // 没有版本基线就不允许写：漏传的调用方会静默盖掉别人的修改
+  if (!expected || !Number.isFinite(expected.size) || !Number.isFinite(expected.mtime)) {
+    const err = new Error('缺少保存前的版本基线');
+    err.code = 'EBAD_BASELINE';
+    throw err;
+  }
+  if (st.size !== expected.size || Math.abs(st.mtimeMs - expected.mtime) > 0.5) {
+    return { error: 'CONFLICT', size: st.size, mtime: st.mtimeMs };
+  }
+  const tmp = path.join(path.dirname(abs),
+    '.' + path.basename(abs) + '.' + process.pid + '-' + Date.now() + '.tmp');
+  try {
+    await fsp.writeFile(tmp, content, 'utf8');
+    await fsp.rename(tmp, abs);
+  } catch (err) {
+    await fsp.unlink(tmp).catch(() => {});
+    throw err;
+  }
+  const after = await fsp.stat(abs);
+  return { ok: true, path: abs, size: after.size, mtime: after.mtimeMs };
+}
+
 module.exports = {
   allowRoot,
   allowResolvedRoot,
@@ -393,6 +456,8 @@ module.exports = {
   statPath,
   readFileForPreview,
   readFileBytes,
+  writeSvgFile,
   MAX_TEXT_BYTES,
-  MAX_DOC_BYTES
+  MAX_DOC_BYTES,
+  MAX_SVG_WRITE_BYTES
 };

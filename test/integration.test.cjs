@@ -16,6 +16,10 @@
  *   P1     图片列（连续预览列出同目录图片、缩放档位、切到非图片时退出）
  *   P2     晚到的旧图片请求不污染缩放状态
  *   P3     拖动固定列头部换位置；拖临时预览列只提示先固定
+ *   E1     SVG 编辑：改字、拖动、矩形缩放、删除（连框内文字）、撤销与自动保存
+ *   E2     SVG 保存边界：只写工作区内已存在的 .svg，版本冲突不覆盖
+ *   E3     含脚本 / 事件属性 / javascript: 链接的 SVG 只读显示，不执行也不保存
+ *   W1     网页视图只接受 http(s)，移出同步列表即销毁
  *   S6     并发切换工作区只留一个授权根
  *
  * 跑法：npm run test:integration                        全跑
@@ -121,6 +125,8 @@ function renderer() {
       // 预览变更监测每 5 s 会 stat 一次当前预览；测试里没有真实文件，固定返回同一版本
       ipcMain.handle('fs:stat', () => ({ size: 0, mtime: 0 }));
       ipcMain.handle('window:is-maximized', () => false);
+      // SVG 编辑保存默认返回成功；E1 会换成能记录内容的桩
+      ipcMain.handle('fs:write-svg', () => ({ ok: true, size: 0, mtime: 0 }));
       // 网页视图的接线：渲染进程会同步调用，测试里不真的开子视图
       ipcMain.handle('web:sync', () => ({ ok: true }));
       ipcMain.handle('web:reload', () => ({ ok: true }));
@@ -512,6 +518,235 @@ async function main() {
     eq('正文显示的是后选中的图片', p2.alt, 'y.svg');
     eq('只保留一张图片元素', p2.imgs, 1);
     eq('缩放作用在可见图片上（80px 宽）', p2.width, '80px');
+  });
+
+  await run('E1', 'SVG 编辑：改字、拖动、缩放、删除与撤销都写回', async () => {
+    const f = await prepare();
+    const runPage = await renderer();
+    const svgPath = path.join(f.ws, 'fig.svg');
+    const source = '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200" viewBox="0 0 400 200">'
+      + '<rect id="bg" width="400" height="200" fill="#fff"/>'
+      + '<rect id="box" x="40" y="40" width="120" height="60" fill="#eef"/>'
+      + '<text x="100" y="70" text-anchor="middle" font-size="16" fill="#111">Alpha</text>'
+      + '<rect id="gone" x="240" y="40" width="80" height="60" fill="#fee"/>'
+      + '<text x="280" y="70" text-anchor="middle" font-size="16" fill="#111">Beta</text>'
+      + '</svg>';
+    stubList(f.ws, ['fig.svg']);
+    stubRead(() => ({ text: source, size: source.length, mtime: 1 }));
+    ipcMain.removeHandler('fs:preview-url');
+    ipcMain.handle('fs:preview-url', () => ({ url: 'data:image/svg+xml,%3Csvg%2F%3E' }));
+    const writes = [];
+    ipcMain.removeHandler('fs:write-svg');
+    ipcMain.handle('fs:write-svg', (_e, p, content, expected) => {
+      writes.push({ path: p, content: content, expected: expected });
+      return { ok: true, size: content.length, mtime: 1000 + writes.length };
+    });
+    createdWin.webContents.send('workspace:opened', f.ws);
+    await sleep(200);
+    const e1 = await runPage(`(async()=>{
+      const wait=(ms)=>new Promise(r=>setTimeout(r,ms));
+      const pe=(type,el,x,y)=>el.dispatchEvent(new PointerEvent(type,{
+        bubbles:true,cancelable:true,pointerId:9,button:0,
+        buttons:type==='pointerup'?0:1,clientX:x,clientY:y}));
+      const click=async(el)=>{const r=el.getBoundingClientRect();
+        const x=r.left+r.width/2,y=r.top+r.height/2;
+        pe('pointerdown',el,x,y); pe('pointerup',window,x,y); await wait(60);};
+      const key=async(el,k,extra)=>{el.dispatchEvent(new KeyboardEvent('keydown',
+        Object.assign({key:k,bubbles:true,cancelable:true},extra||{}))); await wait(60);};
+      const pane=()=>document.querySelector('.pane:not(.is-pinned)');
+      const root=()=>pane().querySelector('.svg-stage svg');
+
+      [...document.querySelectorAll('.row')].find(e=>e.textContent.includes('fig.svg')).click();
+      await wait(500);
+      pane().querySelector('[data-act="svg-edit"]').click();
+      await wait(600);
+      const mounted=!!root();
+
+      // 双击改字
+      const alpha=[...root().querySelectorAll('text')].find(t=>t.textContent==='Alpha');
+      alpha.dispatchEvent(new MouseEvent('dblclick',{bubbles:true,cancelable:true}));
+      await wait(100);
+      const input=pane().querySelector('.svg-textinput');
+      const inputShown=!!input;
+      if(input){ input.value='Alpha2';
+        input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true})); }
+      await wait(300);
+
+      // 拖动矩形：框里的文字跟着走
+      let box=root().querySelector('#box');
+      await click(box);
+      let br=box.getBoundingClientRect();
+      pe('pointerdown',box,br.left+br.width/2,br.top+br.height/2);
+      pe('pointermove',window,br.left+br.width/2+30,br.top+br.height/2+20);
+      pe('pointerup',window,br.left+br.width/2+30,br.top+br.height/2+20);
+      await wait(350);
+      const movedBox=(box.getAttribute('transform')||'').indexOf('translate')>=0;
+      const movedText=([...root().querySelectorAll('text')]
+        .find(t=>t.textContent==='Alpha2').getAttribute('transform')||'').indexOf('translate')>=0;
+
+      // 缩放矩形：拖右下角
+      box=root().querySelector('#box');
+      await click(box);
+      const w0=Number(box.getAttribute('width'));
+      const grip=pane().querySelector('.svg-grip[data-h="se"]');
+      const g=grip.getBoundingClientRect();
+      pe('pointerdown',grip,g.left+g.width/2,g.top+g.height/2);
+      pe('pointermove',window,g.left+g.width/2+50,g.top+g.height/2+30);
+      pe('pointerup',window,g.left+g.width/2+50,g.top+g.height/2+30);
+      await wait(350);
+      const w1=Number(root().querySelector('#box').getAttribute('width'));
+
+      // 删除矩形：框里的文字一起删；Ctrl+Z 一起回来
+      await click(root().querySelector('#gone'));
+      await key(pane().querySelector('.svg-edit'),'Delete');
+      await wait(350);
+      const afterDelete={
+        rect:!!root().querySelector('#gone'),
+        beta:!![...root().querySelectorAll('text')].find(t=>t.textContent==='Beta')
+      };
+      await key(pane().querySelector('.svg-edit'),'z',{ctrlKey:true});
+      await wait(350);
+      const afterUndo={
+        rect:!!root().querySelector('#gone'),
+        beta:!![...root().querySelectorAll('text')].find(t=>t.textContent==='Beta')
+      };
+
+      return {mounted,inputShown,labels:[...root().querySelectorAll('text')].map(t=>t.textContent),
+        movedBox,movedText,w0,w1,afterDelete,afterUndo,
+        status:pane().querySelector('.svg-status').textContent};
+    })()`);
+    ok('SVG 以可编辑 DOM 挂载', e1.mounted, e1);
+    ok('双击文字出现输入框', e1.inputShown, e1);
+    ok('文字改完落在 DOM 里', e1.labels.indexOf('Alpha2') >= 0, e1.labels);
+    ok('拖矩形时框里的文字一起移动', e1.movedBox && e1.movedText, e1);
+    ok('拖右下角能放大矩形', e1.w1 > e1.w0, { w0: e1.w0, w1: e1.w1 });
+    ok('删除矩形时框里的文字一起删掉',
+      !e1.afterDelete.rect && !e1.afterDelete.beta, e1.afterDelete);
+    ok('撤销后矩形与文字一起回来',
+      e1.afterUndo.rect && e1.afterUndo.beta, e1.afterUndo);
+    eq('最后一次保存成功', e1.status, '已保存');
+    ok('改动确实走了保存通道', writes.length >= 4, writes.length);
+    ok('只写当前这个 SVG', writes.every((w) => w.path === svgPath), writes.map((w) => w.path));
+    ok('第一次保存带上读取时的版本',
+      writes[0] && writes[0].expected && writes[0].expected.mtime === 1,
+      writes[0] && writes[0].expected);
+    const last = writes[writes.length - 1] || { content: '' };
+    ok('写回的内容包含改后的文字', last.content.indexOf('Alpha2') >= 0, last.content.slice(0, 120));
+    ok('撤销后的内容包含被恢复的矩形与文字',
+      last.content.indexOf('id="gone"') >= 0 && last.content.indexOf('Beta') >= 0,
+      last.content.slice(0, 160));
+  });
+
+  await run('E2', 'SVG 保存边界：只写工作区内已存在的 .svg', async () => {
+    const f = await prepare();
+    // 前面的用例可能切换过工作区、清掉过授权根；这里直接测写入口，先显式恢复
+    await fsApi.allowRoot(f.ws);
+    const svgPath = path.join(f.ws, 'edit.svg');
+    fs.writeFileSync(svgPath, '<svg xmlns="http://www.w3.org/2000/svg"/>');
+    const before = fs.statSync(svgPath);
+    const saved = await fsApi.writeSvgFile(svgPath,
+      '<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>',
+      { size: before.size, mtime: before.mtimeMs });
+    ok('工作区内的 SVG 可以保存', saved && saved.ok, saved);
+    ok('内容已落盘', fs.readFileSync(svgPath, 'utf8').indexOf('<rect') >= 0);
+
+    const txt = path.join(f.ws, 'note.txt');
+    fs.writeFileSync(txt, 'x');
+    let code = null;
+    try { await fsApi.writeSvgFile(txt, 'x', null); } catch (err) { code = err.code; }
+    eq('非 .svg 被拒绝', code, 'ENOT_SVG');
+
+    const outside = path.join(f.outside, 'outside.svg');
+    fs.writeFileSync(outside, '<svg/>');
+    code = null;
+    try { await fsApi.writeSvgFile(outside, 'x', null); } catch (err) { code = err.code; }
+    eq('工作区外的文件被拒绝', code, 'EACCES_ROOT');
+
+    const conflict = await fsApi.writeSvgFile(svgPath, '<svg/>', { size: 1, mtime: 1 });
+    eq('磁盘版本不一致时返回 CONFLICT', conflict && conflict.error, 'CONFLICT');
+    ok('冲突时不改文件', fs.readFileSync(svgPath, 'utf8').indexOf('<rect') >= 0);
+
+    const st = fs.statSync(svgPath);
+    const again = await fsApi.writeSvgFile(svgPath,
+      '<svg xmlns="http://www.w3.org/2000/svg"><circle/></svg>',
+      { size: st.size, mtime: st.mtimeMs });
+    ok('用保存后的新版本可以继续保存', again && again.ok, again);
+
+    // GBK 编码的文件读出来时要带上编码标记，编辑器据此拒绝保存（否则会写成 UTF-8）
+    const gbkPath = path.join(f.ws, 'gbk.svg');
+    fs.writeFileSync(gbkPath, Buffer.from([0xD6, 0xD0, 0xCE, 0xC4]));
+    const gbk = await fsApi.readFileForPreview(gbkPath);
+    eq('GBK 文件会带出编码信息', gbk.encoding, 'gbk');
+    eq('GBK 文本按中文解码', gbk.text, '中文');
+  });
+
+  await run('E3', '含脚本的 SVG 只读显示，不执行也不保存', async () => {
+    const f = await prepare();
+    const runPage = await renderer();
+    const source = '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"'
+      + ' onload="window.__svgEditPwned=1">'
+      + '<script>window.__svgEditPwned=2</script>'
+      + '<style>@import url(file:///C:/secret.css);</style>'
+      + '<a href="javascript:window.__svgEditPwned=3">'
+      + '<rect id="r" x="10" y="10" width="40" height="30" fill="url(file:///C:/secret.svg#p)"/></a>'
+      + '<image href="relative.png" width="5" height="5"/>'
+      + '</svg>';
+    stubList(f.ws, ['risky.svg']);
+    stubRead(() => ({ text: source, size: source.length, mtime: 1 }));
+    ipcMain.removeHandler('fs:preview-url');
+    ipcMain.handle('fs:preview-url', () => ({ url: 'data:image/svg+xml,%3Csvg%2F%3E' }));
+    const writes = [];
+    ipcMain.removeHandler('fs:write-svg');
+    ipcMain.handle('fs:write-svg', (_e, p, content) => {
+      writes.push({ path: p, content: content });
+      return { ok: true, size: content.length, mtime: 2 };
+    });
+    createdWin.webContents.send('workspace:opened', f.ws);
+    await sleep(200);
+    const e3 = await runPage(`(async()=>{
+      const wait=(ms)=>new Promise(r=>setTimeout(r,ms));
+      const pane=()=>document.querySelector('.pane:not(.is-pinned)');
+      [...document.querySelectorAll('.row')].find(e=>e.textContent.includes('risky.svg')).click();
+      await wait(500);
+      pane().querySelector('[data-act="svg-edit"]').click();
+      await wait(600);
+      const root=pane().querySelector('.svg-stage svg');
+      const rect=root && root.querySelector('#r');
+      const r=rect && rect.getBoundingClientRect();
+      if (rect) {
+        rect.dispatchEvent(new PointerEvent('pointerdown',{bubbles:true,cancelable:true,
+          pointerId:3,button:0,buttons:1,clientX:r.left+5,clientY:r.top+5}));
+        rect.dispatchEvent(new PointerEvent('pointerup',{bubbles:true,cancelable:true,
+          pointerId:3,button:0,buttons:0,clientX:r.left+5,clientY:r.top+5}));
+      }
+      pane().querySelector('.svg-edit').dispatchEvent(new KeyboardEvent('keydown',
+        {key:'Delete',bubbles:true,cancelable:true}));
+      await wait(300);
+      return {
+        mounted: !!root,
+        risky: !!pane().querySelector('.svg-edit.is-risky'),
+        status: pane().querySelector('.svg-status').textContent,
+        script: !!(root && root.querySelector('script')),
+        onload: root ? root.getAttribute('onload') : 'NO_ROOT',
+        href: root && root.querySelector('a') ? root.querySelector('a').getAttribute('href') : null,
+        fill: root && root.querySelector('#r') ? root.querySelector('#r').getAttribute('fill') : 'NO_RECT',
+        imgHref: root && root.querySelector('image') ? root.querySelector('image').getAttribute('href') : 'NO_IMAGE',
+        style: !!(root && root.querySelector('style')),
+        rectStill: !!(root && root.querySelector('#r')),
+        pwned: window.__svgEditPwned
+      };
+    })()`);
+    ok('编辑器仍然挂载（只读显示）', e3.mounted, e3);
+    ok('标成只读模式', e3.risky && e3.status === '只读', e3);
+    ok('脚本元素已被摘掉', !e3.script, e3);
+    eq('事件属性已被摘掉', e3.onload, null);
+    eq('javascript: 链接已被摘掉', e3.href, null);
+    eq('表现属性里的外部 url() 被摘掉', e3.fill, null);
+    eq('相对资源引用被摘掉', e3.imgHref, null);
+    ok('@import 的 <style> 整块被摘掉', !e3.style, e3);
+    ok('只读模式下 Delete 不删形状', e3.rectStill, e3);
+    ok('脚本没有执行', e3.pwned === undefined || e3.pwned === null, e3.pwned);
+    eq('只读模式不会写文件', writes.length, 0);
   });
 
   await run('P3', '拖动固定列头部换位置；拖临时预览列只提示先固定', async () => {

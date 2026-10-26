@@ -4,7 +4,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 /**
  * 渲染进程只能通过这里暴露的白名单方法访问系统能力。
- * 没有暴露任何写入、删除、执行任意命令的接口。
+ * 写能力只有一个：SVG 编辑保存（主进程还会再校验路径、扩展名与文件版本）。
  */
 contextBridge.exposeInMainWorld('pv', {
   platform: process.platform,
@@ -17,12 +17,14 @@ contextBridge.exposeInMainWorld('pv', {
   /* 项目快捷切换 */
   pickProjectIcon: () => ipcRenderer.invoke('projects:pick-icon'),
 
-  /* 文件系统（只读） */
+  /* 文件系统（读，以及 SVG 编辑保存） */
   list: (dir) => ipcRenderer.invoke('fs:list', dir),
   read: (filePath) => ipcRenderer.invoke('fs:read', filePath),
   readBytes: (filePath) => ipcRenderer.invoke('fs:read-bytes', filePath),
   stat: (target) => ipcRenderer.invoke('fs:stat', target),
   previewUrl: (filePath) => ipcRenderer.invoke('fs:preview-url', filePath),
+  writeSvg: (filePath, content, expected) =>
+    ipcRenderer.invoke('fs:write-svg', filePath, content, expected),
 
   /* 系统集成 */
   openPath: (filePath) => ipcRenderer.invoke('shell:open', filePath),

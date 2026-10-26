@@ -8,6 +8,7 @@
  * 分派的类型：
  *   Markdown → 手写渲染器（markdown.js），源码视图走代码视图
  *   HTML / PDF / 图片 / SVG → 交给 pv:// 协议地址，直接由 iframe 或 <img> 渲染
+ *   SVG 编辑模式 → 交给 svgedit.js（可编辑 DOM、自动保存）
  *   docx / pptx → 整份字节读进渲染进程，交给 vendor/docpreview.js 的纯前端解析器
  *   其余 → 代码视图（分词在 Worker 里做，主线程只渲染可见窗口）
  *
@@ -22,7 +23,7 @@
  * 主进程的 WebContentsView 覆盖在窗格正文上（见 webview.js 与 main/web-views.js）。
  *
  * 加载顺序：icons.js → highlight.js → markdown.js → vendor/docpreview.js →
- *           pane.js → preview-body.js → webview.js → find.js → projects.js → app.js。
+ *           pane.js → preview-body.js → webview.js → svgedit.js → find.js → projects.js → app.js。
  */
 (function () {
   'use strict';
@@ -236,7 +237,8 @@
       : '';
 
     // 图片：− [适应/150%] + 的缩放档位，以及进入连续预览的向下箭头
-    const imageBar = (mode === 'preview' && PV.pane.isImageNode(node))
+    // （SVG 进入编辑模式后正文是可编辑 DOM，缩放 / 连续预览让位）
+    const imageBar = (mode === 'preview' && !pane.svgEdit && PV.pane.isImageNode(node))
       ? '<div class="pv-zoom">'
         + '<button data-act="zoom-out" title="缩小（也可 Ctrl+滚轮）" aria-label="缩小">'
         + icon('zoomOut', '', 13) + '</button>'
@@ -251,6 +253,13 @@
         + icon('arrowDown', '', 15) + '</button>'
       : '';
 
+    // SVG 可以进编辑模式：改文字、拖动、缩放矩形、删除形状（编辑模式会自己保存）
+    const svgBtn = (node.kind === 'svg' && mode === 'preview')
+      ? '<button class="iconbtn svgbtn' + (pane.svgEdit ? ' is-on' : '') + '" data-act="svg-edit" title="'
+        + (pane.svgEdit ? '完成编辑' : '编辑文字与形状') + '" aria-label="编辑 SVG">'
+        + icon('pencil', '', 15) + '</button>'
+      : '';
+
     // 图钉 / 刷新 / 关闭放在最右，低频的排在左边；复制路径改成点标题下的路径
     return '<span class="pv-ic">' + nodeIcon(node, 17) + '</span>'
       + '<div class="pv-name"><div class="pv-nm" title="' + esc(node.name) + '">' + esc(node.name) + '</div>'
@@ -261,6 +270,7 @@
       + '<div class="pv-btns">'
       + '<button class="iconbtn" data-act="reveal" title="在资源管理器中显示">' + icon('reveal', '', 15) + '</button>'
       + '<button class="iconbtn" data-act="external" title="用默认程序打开">' + icon('external', '', 15) + '</button>'
+      + svgBtn
       + '<button class="iconbtn pinbtn' + (pane.pinned ? ' is-on' : '') + '" data-act="pin" title="'
       + (pane.pinned ? '取消固定' : '固定此预览') + '" aria-label="固定预览">'
       + icon(pane.pinned ? 'pinFilled' : 'pin', '', 15) + '</button>'
@@ -281,6 +291,7 @@
     if (node.kind === 'web') return 'web\u0001' + node.url;
     const prefs = hooks.previewPrefs();
     return [node.path, mode, pane.continuous ? 'seq' : '',
+      node.kind === 'svg' && pane.svgEdit ? 'svg-edit' : '',
       node.kind === 'docx' && !prefs.docx ? 'docx-off' : '',
       node.kind === 'pptx' && !prefs.pptx ? 'pptx-off' : ''].join('\u0001');
   }
@@ -305,6 +316,11 @@
       if (node.webError) { task.write(webErrorCard(node)); return; }
       task.write(loadingState('正在打开网页…'));
       return;
+    }
+
+    // SVG 编辑模式：正文是可交互的 SVG DOM（解析、清洗、保存都在 svgedit.js）
+    if (mode === 'preview' && node.kind === 'svg' && pane.svgEdit) {
+      return PV.svgedit.mount(pane, node, task, { toast: hooks.toast, noteSaved: noteLoaded });
     }
 
     // 交给协议地址直接渲染的类型：HTML 迷你浏览器 / 图片 / PDF 内置阅读器

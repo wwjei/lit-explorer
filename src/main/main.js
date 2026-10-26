@@ -342,6 +342,15 @@ function registerIpc() {
     }
   });
 
+  // 唯一的写入口：只覆盖工作区内已存在的 .svg，且要带上读取时的版本
+  ipcMain.handle('fs:write-svg', async (_e, filePath, content, expected) => {
+    try {
+      return await fsApi.writeSvgFile(filePath, content, expected);
+    } catch (err) {
+      return { error: err.code || 'EWRITE', message: err.message };
+    }
+  });
+
   ipcMain.handle('fs:preview-url', async (_e, filePath) => {
     try {
       return { url: toPreviewUrl(await fsApi.assertAllowed(filePath)) };

@@ -19,7 +19,7 @@
  * 引用，与加载顺序无关。
  *
  * 加载顺序：icons.js → highlight.js → markdown.js → vendor/docpreview.js →
- *           pane.js → preview-body.js → webview.js → find.js → projects.js → app.js。
+ *           pane.js → preview-body.js → webview.js → svgedit.js → find.js → projects.js → app.js。
  */
 (function () {
   'use strict';
@@ -91,6 +91,8 @@
       pending: 0,         // 还在读/还在解析的渲染任务数，>0 说明正文是加载态空壳
       view: null,
       findEl: null,
+      svgEdit: false,     // SVG 编辑模式：正文交给 svgedit.js
+      svgEditPath: '',    // 编辑模式跟着哪个文件（换文件就退出）
       zoom: o.zoom || 0,  // 图片缩放：0 = 适应窗口，其余是倍数
       continuous: !!o.continuous, // 连续预览：同目录图片竖着排下来
       images: [],         // 当前窗格里的 <img>，改缩放时直接落到它们身上
@@ -343,6 +345,12 @@
       pane.changed = false;
       pane.known = null;
     }
+    // SVG 编辑只属于「当初进入编辑的那个文件 + 预览模式」；换文件或切源码就退出
+    if (pane.svgEdit && (!node || node.kind !== 'svg'
+      || node.path !== pane.svgEditPath || modeOf(pane) !== 'preview')) {
+      pane.svgEdit = false;
+      pane.svgEditPath = '';
+    }
     // 连续预览只对「图片 + 预览模式」有意义，切到别的文件/源码视图时自动退出
     if (pane.continuous && !(node && modeOf(pane) === 'preview' && isImageNode(node))) {
       pane.continuous = false;
@@ -411,10 +419,18 @@
       continuous: tempPane.continuous
     });
     pins.unshift(pane);
+    // 编辑模式不搬家：编辑器的 DOM 与事件属于旧的那一列，固定列按磁盘内容重新渲染。
+    // 改动本来就是自动保存的，不存在「搬过去才不丢」的问题。
+    const wasEditing = tempPane.svgEdit;
+    if (wasEditing) {
+      tempPane.svgEdit = false;
+      tempPane.svgEditPath = '';
+      tempPane.bodyKey = '';
+    }
     // 正在看的那一屏整块搬过去：连续预览滚到第几张、文档读到哪一段都原地保留
-    const keep = adoptPaneBody(pane, tempPane);
+    const keep = wasEditing ? null : adoptPaneBody(pane, tempPane);
     // 查找条长在窗格上：内容被固定到新列时，查询词与高亮一并跟过去
-    const carried = PV.find.carryFrom(tempPane, pane);
+    const carried = wasEditing ? false : PV.find.carryFrom(tempPane, pane);
     renderPreview();
     // 位置要等这一列挂进文档、有了布局之后才落得下去（搬家的元素在文档外读不到高度）
     if (keep) restorePaneTop(pane, keep);
