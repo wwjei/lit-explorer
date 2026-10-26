@@ -18,9 +18,12 @@
 
   /** 有弹层（网页表单、项目图标选择器）压住预览区时，先把所有网页视图藏起来 */
   let occluded = false;
+  /** 拖动列 / 分隔条 / 窗格时也先藏起来：原生视图会吃掉鼠标事件，拖动会断 */
+  let dragHidden = false;
   let frame = 0;
 
   function visibleInPane(pane) {
+    if (occluded || dragHidden) return false;
     if (pane.el.hidden) return false;
     const preview = document.getElementById('preview');
     if (!preview || preview.hidden) return false;
@@ -79,10 +82,17 @@
     schedule();
   }
 
+  /** 拖动期间藏网页视图（只藏不销毁）；松手后 afterLayout 会按新矩形放回来 */
+  function setDragHidden(on) {
+    dragHidden = !!on;
+    schedule();
+  }
+
   window.PV = window.PV || {};
   PV.web = {
     sync: sync,
     schedule: schedule,
-    setOccluded: setOccluded
+    setOccluded: setOccluded,
+    setDragHidden: setDragHidden
   };
 })();

@@ -281,17 +281,23 @@ body.resizing-v{cursor:row-resize}
 [data-theme="dark"] .c-web{color:#6fa8e0}
 
 body.resizing{cursor:col-resize}
+body.resizing-v{cursor:row-resize}
 
 /* ============ 预览区与窗格 ============ */
 .preview{flex:none;display:flex;min-height:0;background:var(--panel)}
 .panes{display:flex;min-height:0}
-/* 一个预览窗格：临时预览与每个固定住的预览各占一个，宽度各自独立 */
-.pane{
-  flex:none;min-width:0;min-height:0;display:flex;flex-direction:column;
-  position:relative;background:var(--panel);border-left:1px solid var(--line);
-  container-type:inline-size;
+/* 一列预览：宽度属于列，列里放 1–2 个上下排列的窗格 */
+.pane-col{
+  flex:none;min-width:0;min-height:0;display:flex;position:relative;
+  background:var(--panel);border-left:1px solid var(--line);
 }
-/* 窗格左侧边界：拖动只改这一列的宽度 */
+.pane-stack{flex:1 1 auto;min-width:0;min-height:0;display:flex;flex-direction:column}
+/* 一个预览窗格：宽度由所在的列决定，列内两格时上下分 */
+.pane{
+  flex:1 1 0;width:100%;min-width:0;min-height:0;display:flex;flex-direction:column;
+  position:relative;background:var(--panel);container-type:inline-size;
+}
+/* 列左侧边界：拖动只改这一列的宽度 */
 .pane-resize{
   position:absolute;left:-3px;top:0;bottom:0;width:7px;z-index:3;cursor:col-resize;
 }
@@ -300,17 +306,48 @@ body.resizing{cursor:col-resize}
 .pane-resize.is-drag::after{background:var(--accent)}
 /* 固定住的窗格：头部顶边加一道强调色细线，和临时预览区分开 */
 .pane.is-pinned .pv-head{box-shadow:inset 0 2px 0 var(--accent)}
+/* 上下分屏的分隔条：拖动改两格的比例 */
+.pane-split{
+  flex:none;height:6px;position:relative;z-index:3;cursor:row-resize;
+  background:var(--panel-2);border-top:1px solid var(--line);border-bottom:1px solid var(--line);
+}
+.pane-split::after{
+  content:"";position:absolute;left:50%;top:2px;width:28px;height:2px;margin-left:-14px;
+  border-radius:1px;background:var(--line);opacity:.9;
+}
+.pane-split:hover{background:var(--hover)}
+.pane-split:hover::after{background:var(--accent)}
+/* 拖到某一列下 1/3 时的落点提示：底部染色 + 目标列头部提亮（网页列也不至于看不见） */
+.split-hint{
+  display:none;position:absolute;left:0;right:0;bottom:0;height:33%;z-index:4;
+  pointer-events:none;background:color-mix(in srgb,var(--accent) 10%,transparent);
+  border-top:2px solid var(--accent);
+}
+.pane-col.is-split-target .split-hint{display:block}
+.pane-col.is-split-target > .pane-stack > .pane:first-child .pv-head{
+  background:color-mix(in srgb,var(--accent) 9%,var(--panel));
+}
 .pv-head{
   flex:none;display:flex;align-items:flex-start;flex-wrap:wrap;gap:10px;
   padding:12px 12px 10px 14px;border-bottom:1px solid var(--line-soft);
-  position:relative;cursor:grab;user-select:none;
+  position:relative;user-select:none;
 }
 .pv-head:empty{display:none}
 .pv-head button{cursor:pointer}
-/* 按住头部拖动固定列：拖动中标题变淡，目标缝隙画一条强调色竖线 */
-.pane.is-moving .pv-head{opacity:.55;cursor:grabbing}
+/* 头部左边的小抓手：只有这一小块可以拖动换位置 / 分屏，不再整条头部都是手 */
+.pv-head .pv-grip{
+  flex:none;align-self:flex-start;display:grid;place-items:center;
+  width:16px;height:24px;margin:-3px 0 0 -8px;padding:0;
+  border:0;border-radius:5px;background:none;color:var(--muted);
+  opacity:.65;cursor:grab;
+}
+.pv-head .pv-grip:hover{opacity:1;background:var(--hover);color:var(--text-2)}
+.pv-head .pv-grip:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+/* 拖动中标题变淡，目标缝隙画一条强调色竖线 */
+.pane.is-moving .pv-head{opacity:.55}
+.pane.is-moving .pv-grip{cursor:grabbing;opacity:.9}
 body.pane-moving{cursor:grabbing}
-body.pane-moving .pv-head{cursor:grabbing}
+body.pane-moving .pv-grip{cursor:grabbing}
 .pv-head.drop-before::before,
 .pv-head.drop-after::before{
   content:"";position:absolute;top:0;bottom:0;width:3px;z-index:2;

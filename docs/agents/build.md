@@ -32,9 +32,9 @@ icons.js → highlight.js → markdown.js → vendor/docpreview.js
 
 | 文件 | 管什么 |
 | --- | --- |
-| `pane.js`（`PV.pane`） | 预览窗格作为一个单元的全部事情：内容身份 `bodyKey`、渲染任务身份 `reqId` / `pending`、创建与销毁、固定时的正文迁移、每列的宽度与排列、按住头部拖动重排固定列 |
+| `pane.js`（`PV.pane`） | 预览窗格作为一个单元的全部事情：内容身份 `bodyKey`、渲染任务身份 `reqId` / `pending`、创建与销毁、固定 / 分屏时的正文迁移、列模型（一列 1–2 个窗格，列宽与上下比例）、抓手换位 / 下 1/3 分屏 / 临时列右拖自动固定 |
 | `preview-body.js`（`PV.body`） | 正文与头部**画成什么样**：按类型分派（Markdown / 代码视图 / 图片与连续预览 / HTML 迷你浏览器 / PDF / docx / pptx / 网页 / SVG 编辑）、头部副标题与元信息、缩放档位 |
-| `webview.js`（`PV.web`） | 内嵌网页的几何同步：把每个网页预览列当前该占的矩形声明给主进程（`web:sync`），用 rAF 合并拖动与缩放；弹层打开时先 `setOccluded(true)` 把原生视图藏起来 |
+| `webview.js`（`PV.web`） | 内嵌网页的几何同步：把每个网页预览列当前该占的矩形声明给主进程（`web:sync`），用 rAF 合并拖动与缩放；弹层打开时先 `setOccluded(true)`、拖动列 / 分隔条 / 窗格时先 `setDragHidden(true)` 把原生视图藏起来（松手后按新矩形回来） |
 | `svgedit.js`（`PV.svgedit`） | SVG 编辑模式的正文：解析与安全清洗、选择、拖动（矩形带框内文字）、矩形八向缩放、文字单行编辑、删除、撤销重做、自动保存；它自己管 `pane.view.destroy` 清理监听与 ResizeObserver |
 | `find.js`（`PV.find`） | 预览内查找：查找条、命中标记、在命中之间跳转 |
 | `projects.js`（`PV.projects`） | 项目切换条：最多 5 个项目、图标目录与图标选择、每项目浏览位置的持久化；打开 / 切换由 `app.js` 通过 `PV.projects.init()` 注入 |
@@ -63,7 +63,7 @@ SVG 编辑的写文件不在渲染进程：`PV.svgedit` 只调 `pv.writeSvg()`�
 （size / mtime）并在不一致时返回 `CONFLICT`，写临时文件后原子替换；边界见
 [security.md](security.md#svg-编辑的写入通道)。
 
-动这个分层时，`test/integration.test.cjs` 的 C1 / C2 / C4 / F1 / P1 / P3 / E1 / E2 / E3 / W1
+动这个分层时，`test/integration.test.cjs` 的 C1 / C2 / C4 / F1 / P1 / P3 / P4 / E1 / E2 / E3 / W1
 就是它的回归网。
 
 ## 打包内容

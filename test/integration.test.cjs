@@ -15,7 +15,8 @@
  *   F2     代码块异步高亮后查找命中不丢
  *   P1     图片列（连续预览列出同目录图片、缩放档位、切到非图片时退出）
  *   P2     晚到的旧图片请求不污染缩放状态
- *   P3     拖动固定列头部换位置；拖临时预览列只提示先固定
+ *   P3     拖动抓手换位置；临时列拖到右侧自动固定
+ *   P4     拖到列的下 1/3 分屏；取消分屏里的一格恢复单格；临时列也能直接分屏
  *   E1     SVG 编辑：改字、拖动、矩形缩放、删除（连框内文字）、撤销与自动保存
  *   E2     SVG 保存边界：只写工作区内已存在的 .svg，版本冲突不覆盖
  *   E3     含脚本 / 事件属性 / javascript: 链接的 SVG 只读显示，不执行也不保存
@@ -794,7 +795,7 @@ async function main() {
     eq('焦点在输入框上', dbl.active, 'svg-textinput');
   });
 
-  await run('P3', '拖动固定列头部换位置；拖临时预览列只提示先固定', async () => {
+  await run('P3', '拖动抓手换位置；临时列拖到右侧自动固定', async () => {
     const f = await prepare();
     const runPage = await renderer();
     stubList(f.ws, ['alpha.md', 'beta.md', 'gamma.md']);
@@ -811,15 +812,16 @@ async function main() {
         .map(e=>e.querySelector('.pv-nm').textContent.trim());
       const headOf=(name)=>[...document.querySelectorAll('.pane.is-pinned .pv-head')]
         .find(h=>h.querySelector('.pv-nm').textContent.trim()===name);
+      const gripOf=(name)=>headOf(name).querySelector('.pv-grip');
       const ev=(type,el,x,y)=>el.dispatchEvent(new PointerEvent(type,{
         bubbles:true,cancelable:true,pointerId:7,button:0,
         buttons:type==='pointerup'?0:1,clientX:x,clientY:y}));
       const drag=(from,to,fx)=>{
-        const a=headOf(from).getBoundingClientRect(), b=headOf(to).getBoundingClientRect();
-        const sy=a.top+8, ty=b.top+8, x2=b.left+b.width*fx;
+        const g=gripOf(from).getBoundingClientRect(), b=headOf(to).getBoundingClientRect();
+        const sy=g.top+g.height/2, ty=b.top+8, x2=b.left+b.width*fx;
         const panes=document.querySelector('#panes');
-        ev('pointerdown',headOf(from),a.left+a.width/2,sy);
-        ev('pointermove',panes,a.left+a.width/2+10,sy);   // 越过 4px 阈值，进入拖动
+        ev('pointerdown',gripOf(from),g.left+g.width/2,sy);
+        ev('pointermove',panes,g.left+g.width/2+10,sy);   // 越过 4px 阈值，进入拖动
         ev('pointermove',panes,x2,ty);                    // 移过目标列的中点
         ev('pointerup',panes,x2,ty);
         return wait(150);
@@ -831,20 +833,104 @@ async function main() {
       await drag('beta.md','alpha.md',0.9);
       const after=pinnedNames();
 
-      // 临时预览列：拖动头部只提示，不动固定列
+      // 临时列的抓手拖到右侧：这一次落点会把它固定成最后一列
       clickRow('gamma.md'); await wait(350);
-      const head=document.querySelector('.pane:not(.is-pinned) .pv-head');
-      const r=head.getBoundingClientRect();
+      const tg=document.querySelector('.pane:not(.is-pinned) .pv-grip');
+      const tr=tg.getBoundingClientRect();
+      const bh=headOf('beta.md').getBoundingClientRect();
       const panes=document.querySelector('#panes');
-      ev('pointerdown',head,r.left+r.width/2,r.top+8);
-      ev('pointermove',panes,r.left+r.width/2+30,r.top+8);
-      ev('pointerup',panes,r.left+r.width/2+30,r.top+8);
-      return {before, after, tempOrder:pinnedNames(), toastText:document.querySelector('#toast').textContent};
+      ev('pointerdown',tg,tr.left+tr.width/2,tr.top+tr.height/2);
+      ev('pointermove',panes,tr.left+tr.width/2+10,tr.top+tr.height/2);
+      ev('pointermove',panes,bh.left+bh.width*0.9,bh.top+8);
+      ev('pointerup',panes,bh.left+bh.width*0.9,bh.top+8);
+      await wait(250);
+      const temp=document.querySelector('.pane:not(.is-pinned)');
+      return {before, after, final:pinnedNames(), tempHidden:!!temp && temp.hidden,
+        toastText:document.querySelector('#toast').textContent};
     })()`);
     eqJson('新固定的列排在左边', p3.before, ['beta.md', 'alpha.md']);
     eqJson('把左列拖到右列之后，顺序互换', p3.after, ['alpha.md', 'beta.md']);
-    eqJson('拖动临时预览列不改变固定列顺序', p3.tempOrder, ['alpha.md', 'beta.md']);
-    ok('拖动临时列时提示先固定', p3.toastText.indexOf('请先固定此栏') >= 0, p3.toastText);
+    eqJson('临时列拖到右侧后固定成最后一列', p3.final, ['alpha.md', 'beta.md', 'gamma.md']);
+    ok('自动固定后临时列收起', p3.tempHidden, p3);
+    ok('提示已固定临时列', p3.toastText.indexOf('已固定：gamma.md') >= 0, p3.toastText);
+  });
+
+  await run('P4', '拖到列的下 1/3 分屏；取消一格后恢复单格；临时列也能分屏', async () => {
+    const f = await prepare();
+    const runPage = await renderer();
+    stubList(f.ws, ['alpha.md', 'beta.md', 'gamma.md']);
+    stubRead((_e, p) => ({ text: path.basename(String(p)).toUpperCase(), size: 10 }));
+    createdWin.webContents.send('workspace:opened', f.ws);
+    await sleep(200);
+    const p4 = await runPage(`(async()=>{
+      const wait=(ms)=>new Promise(r=>setTimeout(r,ms));
+      const clickRow=(n)=>[...document.querySelectorAll('.row')].find(e=>e.textContent.includes(n)).click();
+      const pin=()=>document.querySelector('.pane:not(.is-pinned) button[data-act="pin"]').click();
+      const paneOf=(name)=>[...document.querySelectorAll('.pane.is-pinned')]
+        .find(p=>p.querySelector('.pv-nm').textContent.trim()===name);
+      const ev=(type,el,x,y)=>el.dispatchEvent(new PointerEvent(type,{
+        bubbles:true,cancelable:true,pointerId:9,button:0,
+        buttons:type==='pointerup'?0:1,clientX:x,clientY:y}));
+      const dragGripTo=(grip,x,y)=>{
+        const r=grip.getBoundingClientRect(), panes=document.querySelector('#panes');
+        ev('pointerdown',grip,r.left+r.width/2,r.top+r.height/2);
+        ev('pointermove',panes,r.left+r.width/2+8,r.top+r.height/2);
+        ev('pointermove',panes,x,y);
+        ev('pointerup',panes,x,y);
+      };
+      const splitPanes=()=>{
+        const col=document.querySelector('.pane-col.is-split');
+        if(!col) return [];
+        return [...col.querySelectorAll('.pane')].map(p=>({
+          name:p.querySelector('.pv-nm').textContent.trim(),
+          top:p.getBoundingClientRect().top,
+          w:p.getBoundingClientRect().width
+        })).sort((a,b)=>a.top-b.top);
+      };
+
+      clickRow('alpha.md'); await wait(350); pin(); await wait(200);
+      clickRow('beta.md'); await wait(350); pin(); await wait(200);
+      const ar=paneOf('alpha.md').getBoundingClientRect();
+      dragGripTo(paneOf('beta.md').querySelector('.pv-grip'),
+        ar.left+ar.width/2, ar.top+ar.height*0.85);
+      await wait(250);
+      const split=!!document.querySelector('.pane-col.is-split');
+      const panes=splitPanes();
+      const visibleCols=[...document.querySelectorAll('.pane-col')].filter(c=>!c.hidden).length;
+
+      // 分屏里取消下面那一格：列还在，恢复成一格
+      paneOf('beta.md').querySelector('button[data-act="pin"]').click();
+      await wait(250);
+      const afterUnpin={
+        split:document.querySelectorAll('.pane-col.is-split').length,
+        pinned:[...document.querySelectorAll('.pane.is-pinned')]
+          .map(p=>p.querySelector('.pv-nm').textContent.trim())
+      };
+
+      // 临时列：拖到 alpha 那一列的下 1/3，直接固定并分屏
+      clickRow('gamma.md'); await wait(350);
+      const tempGrip=document.querySelector('.pane:not(.is-pinned) .pv-grip');
+      const ar2=paneOf('alpha.md').getBoundingClientRect();
+      dragGripTo(tempGrip, ar2.left+ar2.width/2, ar2.top+ar2.height*0.85);
+      await wait(250);
+      const tempSplit=splitPanes();
+      const temp=document.querySelector('.pane:not(.is-pinned)');
+      return {
+        split:split, panes:panes, visibleCols:visibleCols,
+        afterUnpin:afterUnpin,
+        tempSplit:tempSplit, tempHidden:!!temp && temp.hidden,
+        toastText:document.querySelector('#toast').textContent
+      };
+    })()`);
+    ok('下 1/3 落点形成分屏', p4.split, p4);
+    eqJson('一列里上 alpha 下 beta', p4.panes.map((p) => p.name), ['alpha.md', 'beta.md']);
+    ok('分屏两格同宽', p4.panes.length === 2 && Math.abs(p4.panes[0].w - p4.panes[1].w) < 2, p4.panes);
+    eq('分屏不增加列数', p4.visibleCols, 1);
+    eq('取消分屏里的一格后列还在', p4.afterUnpin.split, 0);
+    eqJson('只留下 alpha', p4.afterUnpin.pinned, ['alpha.md']);
+    eqJson('临时列拖到 alpha 下 1/3 后上下分屏', p4.tempSplit.map((p) => p.name), ['alpha.md', 'gamma.md']);
+    ok('临时列分屏后收起', p4.tempHidden, p4);
+    ok('提示已分屏', p4.toastText.indexOf('已分屏：gamma.md') >= 0, p4.toastText);
   });
 
   await run('W1', '网页视图只接受 http(s)，移出同步列表即销毁', async () => {

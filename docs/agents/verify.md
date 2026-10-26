@@ -16,7 +16,8 @@ npm run test:integration  # 只跑集成套件
   （altChunk、`javascript:` 与制表符混淆的超链接都不执行脚本）、预览异步结果的归属
   （加载中固定、旧文档解析失败、同文件重新读取、晚到的旧图片请求不污染缩放）、
   预览内查找（命中与计数、切到不支持查找的列时自动关、固定时查询词跟到新列、
-  代码块异步高亮后命中不丢）、固定列拖动排序（落位与临时列提示）、SVG 编辑
+  代码块异步高亮后命中不丢）、抓手拖动换位与临时列右拖自动固定（P3）、列下 1/3
+  分屏 / 取消一格恢复单格 / 临时列直接分屏（P4）、SVG 编辑
   （改字、拖动带框内文字、矩形缩放、删除与撤销、自动保存走 `fs:write-svg` 桩、
   `sendInputEvent` 的真实双击能打开输入框）、含脚本 SVG 的只读清洗、高亮 Worker
   并发初始化、并发切换工作区只留一个授权根、`pv://` 协议边界，以及网页视图的
@@ -40,7 +41,8 @@ npm run test:integration -- --only=F1      # 改了预览内查找
 npm run test:integration -- --only=E1,E3   # 改了 SVG 编辑 / 清洗
 npm run test:integration -- --only=E2      # 改了 SVG 保存通道
 npm run test:integration -- --only=E4      # 改了 SVG 双击 / 指针手势
-npm run test:integration -- --only=P3      # 改了固定列 / 头部拖动
+npm run test:integration -- --only=P3      # 改了抓手换位 / 临时列自动固定
+npm run test:integration -- --only=P4      # 改了列内分屏
 npm run test:integration -- --only=W1      # 改了内嵌网页视图
 npm run test:integration -- --skip=C1,C2   # 其余都跑，跳过这两段
 ```
@@ -80,9 +82,11 @@ CI（[.github/workflows/ci.yml](../../.github/workflows/ci.yml)）在**开 PR �
 当默认——等 CI 要一轮，本地先跑一遍更快。
 
 **它不覆盖什么。** 断言用的是可控的 IPC 桩，钉住的是逻辑（晚到的响应必须被丢弃），
-不是真实磁盘时序；界面行为仍然只有截图钩子能验——**布局与列宽、固定列的阅读位置、
-连续预览、项目切换条、预览变更提示**完全没进断言，**固定列换位置**进了顺序与临时列
-提示（P3），**图片缩放**进了档位与晚到请求（P1/P2），**查找**进了开关、计数、固定迁移
+不是真实磁盘时序；界面行为仍然只有截图钩子能验——**列宽拖动的像素、固定列的阅读位置、
+连续预览、项目切换条、预览变更提示**完全没进断言，**抓手换位与临时列自动固定**进了
+顺序、临时列收起与提示（P3），**列内上下分屏**进了列数、上下顺序、两格同宽、取消一格
+恢复单格与临时列直接分屏（P4；分屏分隔条的手感与落点提示的观感仍靠探针），**图片缩放**
+进了档位与晚到请求（P1/P2），**查找**进了开关、计数、固定迁移
 与代码高亮后的命中（F1/F2），**SVG 编辑**进了改字 / 拖动 / 缩放 / 删除 / 撤销与保存
 内容（E1）、真实磁盘上的写入边界与冲突（E2）、不安全 SVG 的只读清洗（E3）、
 `sendInputEvent` 的真实双击（E4——合成 `dblclick` 测不出指针捕获把点击目标改掉的问题），
@@ -106,8 +110,8 @@ CI（[.github/workflows/ci.yml](../../.github/workflows/ci.yml)）在**开 PR �
 
 ## 界面探针
 
-界面行为里没进断言的那部分（布局与列宽、固定列、图片缩放、连续预览，以及查找的观感）
-靠探针驱动。主进程的截图钩子能在不改代码的情况下驱动界面并截屏（参数见
+界面行为里没进断言的那部分（列宽拖动的像素、分屏分隔条比例、分屏落点提示、图片缩放、
+连续预览，以及查找的观感）靠探针驱动。主进程的截图钩子能在不改代码的情况下驱动界面并截屏（参数见
 `npm run shot -- --help`），但每次都从零写选择器与等待太费，所以骨架与 runner 都在仓库里：
 
 ```bash
@@ -115,7 +119,7 @@ npm run probe -- .tmp/my-probe.js --open=.tmp/panews --shot=.tmp/p.png
 ```
 
 - `test/probe-harness.js` 是骨架，挂在 `window.H` 上：`H.pick / H.temp / H.pin /
-  H.panes / H.layout / H.scrollTop / H.anchor / H.click / H.type / H.key / H.toast`。
+  H.vis / H.cols / H.layout / H.scrollTop / H.anchor / H.click / H.type / H.key / H.toast`。
   **文件顶部那份选择器清单是界面的约定**——改界面结构时先更新它，别让每个探针
   各自硬编码选择器。
 - `scripts/run-probe.mjs` 把骨架与探针拼成一个脚本交给 `--shot-js`，默认带上独立的
