@@ -82,11 +82,13 @@
 
 ## 5. 测试与探针
 
-- 纯逻辑：`npm run test:unit`（`test/unit.test.cjs`，S2–S6 等）。
+- 纯逻辑：`npm run test:unit`（`test/unit.test.cjs`，S2–S7 等）。
 - Electron 集成：`npm run test:integration -- --only=P3,P4`（`test/integration.test.cjs`）；
   全部用例 id 在文件头。
 - 界面截图：`npm run probe -- .tmp/my-probe.js --open=.tmp/ws`；探针骨架是
   `test/probe-harness.js`，`H.*` 选择器与等待都在里面，**改界面结构要先改骨架**。
+- 文档索引：`npm run check:docs`（`scripts/check-docs.mjs`）检查 `docs/` 下的文档都进了
+  AGENTS.md / CODEMAP.md，且相对链接没有死链；CI 在开 PR 与合并进 main 时跑。
 - 会受原生 `WebContentsView` 影响的网页列，`capturePage()` 拍不到页面内容；只截图宿主 UI。
 
 ## 6. 文档地图

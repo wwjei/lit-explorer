@@ -114,6 +114,8 @@ function cleanImageSrc(raw) {
 async function resolveImageTargets(mdPath, srcs) {
   const base = await fsApi.assertAllowed(mdPath);
   const dir = path.dirname(base);
+  // openWorkspace() 每次都先 resetAllowedRoots() 再只允许当前根，所以这里唯一的一项
+  // 就是当前工作区；将来真有多个授权根，这个取法要跟着改。
   const root = fsApi.allowedRootList()[0];
   return Promise.all(srcs.slice(0, IMG_MAX_PER_DOC).map(async (raw) => {
     const src = typeof raw === 'string' ? raw : String(raw == null ? '' : raw);

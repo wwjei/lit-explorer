@@ -35,7 +35,7 @@
 
 ### S1：Word altChunk 可自动执行脚本并访问宿主 API
 
-位置：[src/renderer/docpreview.js:17](src/renderer/docpreview.js#L17)。
+位置：[src/renderer/docpreview.js:17](../../src/renderer/docpreview.js#L17)。
 
 `renderDocx()` 在宿主页面内调用 `docx-preview.renderAsync()`，没有覆盖依赖默认开启的 `renderAltChunks`。本地安装的 `docx-preview@0.4.1` 会把 altChunk HTML 写入没有 `sandbox` 属性的 iframe 的 `srcdoc`。该 iframe 继承宿主源，脚本能够访问父页面的 `pv` 对象。
 
@@ -55,7 +55,7 @@
 
 ### S2：Markdown 链接可注入宿主事件处理器
 
-位置：[src/renderer/markdown.js:11](src/renderer/markdown.js#L11)；转义函数见 [src/renderer/highlight.js:75](src/renderer/highlight.js#L75)。
+位置：[src/renderer/markdown.js:11](../../src/renderer/markdown.js#L11)；转义函数见 [src/renderer/highlight.js:75](../../src/renderer/highlight.js#L75)。
 
 `inline()` 先用 `escapeHtml()` 处理文本，再把链接地址拼入带双引号的 `href` 属性。该函数只转义 `&`、`<`、`>`，没有转义引号；适合 HTML 文本节点的处理不足以保护属性上下文。
 
@@ -81,7 +81,7 @@
 
 ### S3：junction / 符号链接绕过工作区边界
 
-位置：[src/main/fs-api.js:131](src/main/fs-api.js#L131)。
+位置：[src/main/fs-api.js:131](../../src/main/fs-api.js#L131)。
 
 `assertAllowed()` 只做 `path.resolve()` 和字符串前缀检查；文件系统随后会跟随链接，实际访问的目标可能位于根目录外。目录枚举还会把链接目录识别为可进入的目录。
 
@@ -106,7 +106,7 @@ audit-outside/            未授权目录
 
 ### C1：加载完成前固定，固定列永久停在“读取中…”
 
-位置：[src/renderer/app.js:1016](src/renderer/app.js#L1016)，`adoptPaneBody()`。
+位置：[src/renderer/app.js:1016](../../src/renderer/app.js#L1016)，`adoptPaneBody()`。
 
 该函数把 DOM 和 `bodyKey` 搬入固定列，随后清空原列的 `bodyKey`。未完成的读取任务仍捕获原列；响应回来时，被原列的 `stale()` 检查丢弃。固定列继承了正确的内容 key，`renderPane()` 又认为它不需要重新渲染，因此没有任何任务会填充固定列。
 
@@ -116,7 +116,7 @@ audit-outside/            未授权目录
 
 ### C2：旧文档解析错误覆盖新文件预览
 
-位置：[src/renderer/app.js:743](src/renderer/app.js#L743)，`renderDocPreview()` 的异常分支。
+位置：[src/renderer/app.js:743](../../src/renderer/app.js#L743)，`renderDocPreview()` 的异常分支。
 
 成功分支在解析完成后检查了 `stale()`，异常分支却直接改写共享的 `pane.body`。如果用户已切换文件，旧文档稍后抛出的解析异常会用旧文件的失败卡片覆盖新内容，头部与正文也会不一致。
 
@@ -133,7 +133,7 @@ audit-outside/            未授权目录
 
 ### C3：高亮 Worker 并发初始化导致语言状态错误
 
-位置：[src/renderer/highlight/worker.js:74](src/renderer/highlight/worker.js#L74)，`ensure()`。
+位置：[src/renderer/highlight/worker.js:74](../../src/renderer/highlight/worker.js#L74)，`ensure()`。
 
 `self.onmessage` 是异步函数，多个消息可以在 `await` 期间交错执行。首次并发请求不同语言时，两次 `ensure()` 都能看到 `highlighter === null`，各自创建实例并覆盖全局引用；共享的 `loaded` 集合却累计了两个实例各自加载的语言。最终实例通常只包含其中一种语言，但集合声称两种都已加载。
 
@@ -149,7 +149,7 @@ Language `python` not found, you may need to load it first
 
 ### C4：同一文件重新读取时，旧响应覆盖新内容
 
-位置：[src/renderer/app.js:1158](src/renderer/app.js#L1158)、[src/renderer/app.js:1172](src/renderer/app.js#L1172)。
+位置：[src/renderer/app.js:1158](../../src/renderer/app.js#L1158)、[src/renderer/app.js:1172](../../src/renderer/app.js#L1172)。
 
 `renderPaneBody()` 用 `pane.bodyKey !== key` 判定任务是否过期，但 key 只描述路径、模式与预览开关，不区分同一内容的不同请求。“重新读取”强制发起新任务时，key 不变，因此前后两个响应都被视为有效。
 

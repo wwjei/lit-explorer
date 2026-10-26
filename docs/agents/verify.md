@@ -6,6 +6,7 @@
 npm test                  # 单元 + Electron 集成
 npm run test:unit         # 只跑不需要 Electron 的那部分
 npm run test:integration  # 只跑集成套件
+npm run check:docs        # 文档索引与死链（改文档后跑，CI 也会跑）
 ```
 
 - `test/unit.test.cjs`：工作区路径边界（`assertAllowed` 按真实路径比较、junction

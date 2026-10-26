@@ -7,13 +7,11 @@
 
 - **打 tag 之前这个文件必须是空的。** 发版检查清单里有这一步，见
   [docs/agents/release.md](docs/agents/release.md)。
-- 清不掉就逐条写明为什么可以带着发，并把它挪到该去的地方：要人拍板的进
-  [further_notes.md](further_notes.md)，要等上游的进
-  [docs/security-debt.md](docs/security-debt.md)，属于产品取舍的写进
-  [FEATURES.md](FEATURES.md)。
+- 清不掉就逐条写明为什么可以带着发，再把它挪到该去的地方（池子分工见
+  [AGENTS.md](AGENTS.md)）。
 - 每条写清：现象、影响、怎么修（没查清就写「先查清什么」）、为什么现在不做。
 - 修完直接删掉整条，别在这里维护「已完成」列表。
-- **这不是需求池。** 想做的功能进 [further_notes.md](further_notes.md)。
+- **这不是需求池。** 想做的功能与要拍板的决策进 [further_notes.md](further_notes.md)。
 
 ---
 

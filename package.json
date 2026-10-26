@@ -12,6 +12,7 @@
     "icons": "node scripts/build-icons.mjs",
     "notices": "node scripts/build-notices.mjs",
     "audit": "node scripts/audit-report.mjs",
+    "check:docs": "node scripts/check-docs.mjs",
     "test": "node test/unit.test.cjs && electron test/integration.test.cjs",
     "test:unit": "node test/unit.test.cjs",
     "test:integration": "electron test/integration.test.cjs",
