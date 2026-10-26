@@ -8,7 +8,7 @@
  *   - 键盘、指针、顶部按钮、主进程事件，以及把上面几个模块接起来
  *
  * 加载顺序：icons.js → highlight.js → markdown.js → vendor/docpreview.js →
- *           pane.js → preview-body.js → svgedit.js → find.js → projects.js → app.js。
+ *           pane.js → preview-body.js → webview.js → svgedit.js → find.js → projects.js → app.js。
  */
 (function () {
   'use strict';
@@ -66,30 +66,84 @@
     return String(dir || '').replace(/[\\/]+$/, '').toLowerCase();
   }
 
+  /* ---- 网页条目：地址规则与主进程 web-url.js 保持一致 ---- */
+  const WEB_KIND = 'web';
+  const WEB_URL_MAX = 2048;
+  /** 与主进程 state-sanitize.js 的 MAX_FAV_ITEMS 一致 */
+  const FAV_MAX_ITEMS = 500;
+
+  function normalizeWebUrl(raw) {
+    const s = typeof raw === 'string' ? raw.trim() : '';
+    if (!s || s.length > WEB_URL_MAX) return '';
+    if (/[\u0000-\u001f\u007f]/.test(s)) return '';
+    let u;
+    try { u = new URL(s); } catch { return ''; }
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return '';
+    if (u.username || u.password) return '';
+    return u.toString();
+  }
+
+  function webHost(url) {
+    try { return new URL(url).hostname.replace(/^www\./i, ''); } catch { return ''; }
+  }
+
+  function isWebFav(f) {
+    return !!f && f.kind === WEB_KIND && typeof f.url === 'string' && !!f.url;
+  }
+
+  /** 一条快速访问的身份：文件是路径，网页是规范化后的地址 */
+  function favIdentity(f) {
+    return isWebFav(f) ? f.url : f.path;
+  }
+
+  function webNodeFromFav(fav) {
+    return { name: fav.name, kind: WEB_KIND, url: fav.url, path: fav.url, isDir: false };
+  }
+
   function normalizeFavorites(list) {
     if (!Array.isArray(list)) return [];
     const root = (state.root || '').replace(/[\\/]+$/, '').toLowerCase();
-    return list.map((item) => {
-      if (typeof item === 'string') {
-        return {
-          path: item,
-          name: item.split(/[\\/]/).filter(Boolean).pop() || item,
+    const seen = new Set();
+    const out = [];
+    for (const item of list) {
+      let fav = null;
+      if (item && typeof item === 'object' && item.kind === WEB_KIND) {
+        const url = normalizeWebUrl(item.url);
+        if (!url) continue;
+        fav = {
+          url: url,
+          name: (typeof item.name === 'string' && item.name.trim()) || webHost(url) || url,
           isDir: false,
-          kind: 'txt'
+          kind: WEB_KIND
         };
+      } else {
+        if (typeof item === 'string') {
+          fav = {
+            path: item,
+            name: item.split(/[\\/]/).filter(Boolean).pop() || item,
+            isDir: false,
+            kind: 'txt'
+          };
+        } else if (item && item.path) {
+          fav = {
+            path: item.path,
+            name: item.name || item.path.split(/[\\/]/).filter(Boolean).pop() || item.path,
+            isDir: !!item.isDir,
+            kind: item.kind || (item.isDir ? 'folder' : 'txt')
+          };
+        }
+        if (!fav) continue;
+        const p = fav.path.replace(/[\\/]+$/, '').toLowerCase();
+        if (root && p !== root && !p.startsWith(root + '\\') && !p.startsWith(root + '/')) continue;
       }
-      if (!item || !item.path) return null;
-      return {
-        path: item.path,
-        name: item.name || item.path.split(/[\\/]/).filter(Boolean).pop() || item.path,
-        isDir: !!item.isDir,
-        kind: item.kind || (item.isDir ? 'folder' : 'txt')
-      };
-    }).filter((f) => {
-      if (!f) return false;
-      const p = f.path.replace(/[\\/]+$/, '').toLowerCase();
-      return !root || p === root || p.startsWith(root + '\\') || p.startsWith(root + '/');
-    });
+      const key = isWebFav(fav)
+        ? 'w:' + fav.url
+        : 'p:' + fav.path.replace(/[\\/]+$/, '').toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(fav);
+    }
+    return out;
   }
 
   function findLoadedNode(target) {
@@ -146,6 +200,7 @@
 
   async function openFavorite(fav) {
     if (!state.root || !fav) return;
+    if (isWebFav(fav)) { openWebFavorite(fav); return; }
     const parts = partsUnderRoot(fav.path);
     if (!parts) { toast('快速访问项不在当前工作区内'); return; }
     if (!parts.length) { goToPathIndex(-1); return; }
@@ -202,11 +257,217 @@
     if (target.isDir) await loadColumn(targetCol + 1);
   }
 
+  /**
+   * 网页快速访问：不参与目录导航，直接把它作为预览列的内容。
+   * 列号取当前最后一栏，只为让 ↑↓ 还有「从哪一栏继续」可依。
+   */
+  function openWebFavorite(fav) {
+    const node = webNodeFromFav(fav);
+    state.sel = { col: Math.max(0, state.path.length - 1), node };
+    state.mode = 'preview';
+    if (!PV.pane.previewOpen()) setPreviewVisible(true);
+    render();
+    scheduleSaveNav();
+  }
+
+  function removeWebFavorite(url) {
+    const at = state.favs.findIndex((f) => isWebFav(f) && f.url === url);
+    if (at < 0) return;
+    const fav = state.favs[at];
+    state.favs.splice(at, 1);
+    // 临时预览列正显示这一条时一并清空（固定列里的那份不主动关，用户可自己收）
+    if (state.sel && state.sel.node.kind === WEB_KIND && state.sel.node.url === url) {
+      state.sel = null;
+      state.mode = 'preview';
+    }
+    const temp = PV.pane.allPanes()[0];
+    if (temp && temp.node && temp.node.kind === WEB_KIND && temp.node.url === url) {
+      PV.pane.resetTemp();
+    }
+    saveFavorites();
+    render();
+    toast('已从快速访问移除：' + fav.name);
+  }
+
+  /* ---- 添加 / 编辑网页链接的小浮层 ----
+   * 做成挂在 body 上的浮层而不是面板内联表单：面板每次 render() 都会重建，
+   * 内联输入框会丢焦点。打开期间把网页视图藏起来，否则原生视图会盖住浮层。
+   */
+  let webForm = null;
+
+  function closeWebForm(restore) {
+    if (!webForm) return;
+    const form = webForm;
+    webForm = null;
+    form.el.remove();
+    document.removeEventListener('pointerdown', form.onDoc, true);
+    document.removeEventListener('keydown', form.onKey, true);
+    if (restore !== false && PV.web) PV.web.setOccluded(false);
+  }
+
+  function placeWebForm(el, anchor) {
+    const r = el.getBoundingClientRect();
+    const a = anchor && anchor.getBoundingClientRect ? anchor.getBoundingClientRect() : null;
+    let left = a ? a.left : 16;
+    // 默认放在按钮下方；面板在窗口底部（默认布局）时改成上方，两种情况都夹在视口里
+    let top = a ? a.bottom + 8 : 72;
+    if (a && top + r.height > window.innerHeight - 8) top = a.top - r.height - 8;
+    left = Math.max(8, Math.min(window.innerWidth - r.width - 8, left));
+    top = Math.max(8, Math.min(window.innerHeight - r.height - 8, top));
+    el.style.left = Math.round(left) + 'px';
+    el.style.top = Math.round(top) + 'px';
+  }
+
+  function openWebForm(editing, anchor) {
+    if (!state.root) return;
+    const isEdit = !!editing;
+    closeWebForm(false);
+    const el = document.createElement('div');
+    el.className = 'web-pop';
+    el.innerHTML = '<div class="web-pop-h">' + icon('globe', '', 14)
+      + '<span>' + (isEdit ? '编辑网页链接' : '添加网页链接') + '</span></div>'
+      + '<label class="web-field"><span>名称</span>'
+      + '<input class="web-name" type="text" maxlength="120" autocomplete="off" spellcheck="false" '
+      + 'placeholder="不填就用域名"></label>'
+      + '<label class="web-field"><span>链接</span>'
+      + '<input class="web-url" type="url" autocomplete="off" spellcheck="false" '
+      + 'placeholder="https://…"></label>'
+      + '<div class="web-err" hidden></div>'
+      + '<div class="web-actions"><button type="button" class="btn-quiet" data-web-cancel>取消</button>'
+      + '<button type="button" class="btn-primary" data-web-ok>' + (isEdit ? '保存' : '添加') + '</button></div>';
+    document.body.appendChild(el);
+    const nameInput = el.querySelector('.web-name');
+    const urlInput = el.querySelector('.web-url');
+    const errEl = el.querySelector('.web-err');
+    if (isEdit) {
+      nameInput.value = editing.name || '';
+      urlInput.value = editing.url || '';
+    }
+    placeWebForm(el, anchor);
+
+    if (PV.web) PV.web.setOccluded(true);
+
+    const onDoc = (e) => {
+      if (!el.contains(e.target)) closeWebForm();
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        e.stopPropagation();
+        closeWebForm();
+      }
+    };
+    document.addEventListener('pointerdown', onDoc, true);
+    document.addEventListener('keydown', onKey, true);
+
+    const fail = (msg) => {
+      errEl.textContent = msg;
+      errEl.hidden = false;
+      urlInput.focus();
+      urlInput.select();
+    };
+
+    const submit = () => {
+      const url = normalizeWebUrl(urlInput.value);
+      if (!url) { fail('只支持 http:// 或 https:// 开头的链接'); return; }
+      if (state.favs.some((f) => isWebFav(f) && f.url === url && f !== editing)) {
+        fail('这个链接已经在快速访问里');
+        return;
+      }
+      if (!isEdit && state.favs.length >= FAV_MAX_ITEMS) {
+        fail('快速访问条目太多了，先删掉一些');
+        return;
+      }
+      const oldUrl = isEdit ? editing.url : '';
+      const name = nameInput.value.trim().slice(0, 120) || webHost(url) || url;
+      if (isEdit) {
+        editing.url = url;
+        editing.name = name;
+      } else {
+        state.favs.push({ url: url, name: name, kind: WEB_KIND, isDir: false });
+      }
+      // 正在预览的就是这一条：让所有展示它的窗格跟着改名 / 换地址
+      if (isEdit) {
+        for (const pane of PV.pane.allPanes()) {
+          const node = pane.node;
+          if (!node || node.kind !== WEB_KIND || node.url !== oldUrl) continue;
+          node.url = url;
+          node.path = url;
+          node.name = name;
+          if (oldUrl !== url) {
+            node.webCurrentUrl = '';
+            node.webError = null;
+          }
+        }
+      }
+      saveFavorites();
+      closeWebForm();
+      render();
+      toast((isEdit ? '已更新网页链接：' : '已添加网页链接：') + name);
+    };
+
+    el.querySelector('[data-web-cancel]').addEventListener('click', () => closeWebForm());
+    el.querySelector('[data-web-ok]').addEventListener('click', submit);
+    el.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && e.target.tagName === 'INPUT') { e.preventDefault(); submit(); }
+    });
+
+    const mine = { el: el, onDoc: onDoc, onKey: onKey };
+    webForm = mine;
+    // 先把网页视图藏起来、宿主拿回焦点，再聚焦输入框
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (webForm !== mine) return;
+      (isEdit ? nameInput : urlInput).focus();
+      if (isEdit) nameInput.select();
+    }));
+  }
+
+  /** 主进程的网页状态：更新头部地址、把失败落到正文卡片 */
+  function handleWebState(ev) {
+    if (!ev || typeof ev !== 'object') return;
+    if (ev.status === 'download-blocked') {
+      toast('网页下载已被拦截，请在浏览器中打开');
+      return;
+    }
+    if (ev.status === 'key') {
+      if (ev.key === 'f') toast('网页列暂不支持预览内查找');
+      return;
+    }
+    if (!ev.url || ev.status === 'title') return;
+
+    let touched = false;
+    for (const pane of PV.pane.allPanes()) {
+      const node = pane.node;
+      if (!node || node.kind !== WEB_KIND || node.url !== ev.url) continue;
+      touched = true;
+      if (ev.status === 'loading') {
+        node.webError = null;
+      } else if (ev.status === 'loaded') {
+        node.webError = null;
+        node.webCurrentUrl = ev.currentUrl || node.url;
+      } else if (ev.status === 'navigated') {
+        node.webCurrentUrl = ev.currentUrl || node.url;
+      } else if (ev.status === 'error') {
+        node.webError = { code: ev.code, desc: ev.desc };
+      } else if (ev.status === 'gone') {
+        node.webError = { code: 'RENDER_GONE', desc: ev.reason };
+      }
+      PV.pane.renderPane(pane,
+        ev.status === 'error' || ev.status === 'gone' || ev.status === 'loading');
+    }
+    if (touched && PV.web) PV.web.schedule();
+  }
+
   /** 快速访问的一行：栏内启动列表与最左栏面板共用同一套标记 */
-  function favRowHtml(f, selPath) {
-    return '<div class="row fav-row' + (f.path === selPath ? ' is-sel' : '')
-      + '" data-fav-path="' + esc(f.path) + '" title="' + esc(f.path) + '" role="button">'
-      + nodeIcon({ name: f.name, isDir: f.isDir, kind: f.kind }, 14)
+  function favRowHtml(f, selKey) {
+    const key = favIdentity(f);
+    const web = isWebFav(f);
+    const title = web ? f.url : f.path;
+    return '<div class="row fav-row' + (key === selKey ? ' is-sel' : '') + (web ? ' is-web' : '')
+      + '" data-fav-key="' + esc(key) + '" title="' + esc(title) + '" role="button">'
+      + nodeIcon(web
+        ? { name: f.name, isDir: false, kind: WEB_KIND }
+        : { name: f.name, isDir: f.isDir, kind: f.kind }, 14)
       + '<span class="nm">' + esc(f.name) + '</span>'
       + '</div>';
   }
@@ -224,16 +485,20 @@
     if (!panel) return;
     panel.hidden = false;
     applyLeftSplit(colEl);
-    const selPath = state.sel ? state.sel.node.path : '';
+    const selKey = state.sel
+      ? (state.sel.node.kind === WEB_KIND ? state.sel.node.url : state.sel.node.path)
+      : '';
     const rows = state.favs.length
-      ? state.favs.map((f) => favRowHtml(f, selPath)).join('')
-      : '<div class="col-note">右键或行尾闪电图标加入快速访问</div>';
+      ? state.favs.map((f) => favRowHtml(f, selKey)).join('')
+      : '<div class="col-note">右键或行尾闪电图标加入快速访问；点标题栏的 + 添加网页链接</div>';
+    const add = '<button class="col-toggle fav-add" data-web-add title="添加网页链接" aria-label="添加网页链接">'
+      + icon('globe', '', 12) + icon('plus', 'fav-plus', 10) + '</button>';
     const swap = state.favTop
       ? ''
       : '<button class="col-toggle" data-swap-panels title="与上方面板交换位置" aria-label="交换上下面板">'
         + icon('toTop', '', 14) + '</button>';
     panel.innerHTML = '<div class="fav-head">' + icon('zapFilled', 'fav-head-ic', 12)
-      + '<span class="fav-title">快速访问</span>' + swap + '</div>'
+      + '<span class="fav-title">快速访问</span>' + add + swap + '</div>'
       + '<div class="fav-scroll"><div class="fav-list">' + rows + '</div></div>';
   }
 
@@ -359,6 +624,7 @@
   async function openRoot(dir) {
     // 先记下当前项目的浏览位置，再换工作区
     saveNavNow();
+    closeWebForm();
     navRestored = false;
     state.root = dir;
     state.rootName = dir.split(/[\\/]/).filter(Boolean).pop() || dir;
@@ -462,12 +728,23 @@
     if (nav && nav.sel) {
       const ci = state.path.length - 1;
       const col = state.cols[ci];
+      let restored = false;
       if (col && col.state === 'ready' && col.entries) {
         const node = col.entries.find((e) => !e.isDir && PV.projects.samePath(e.path, nav.sel));
-        if (node) await selectNode(node, ci, { scroll: false, revealPreview: true });
+        if (node) {
+          await selectNode(node, ci, { scroll: false, revealPreview: true });
+          restored = true;
+        }
+      }
+      // 上次选中的是一条网页快捷方式：它不是目录里的条目，按地址找回收藏
+      if (!restored) {
+        const fav = state.favs.find((f) => isWebFav(f) && f.url === nav.sel);
+        if (fav) openWebFavorite(fav);
       }
     }
-    if (nav && nav.mode === 'source') state.mode = 'source';
+    if (nav && nav.mode === 'source' && !(state.sel && state.sel.node.kind === WEB_KIND)) {
+      state.mode = 'source';
+    }
     render();
   }
 
@@ -490,7 +767,16 @@
     if (res && res.root) toast('已打开：' + res.root);
   }
 
+  /** 网页列的兜底出口：拉起系统浏览器（地址由主进程再校验一次） */
+  async function openWebExternal(node) {
+    const url = node.webCurrentUrl || node.url;
+    const res = await pv.openExternalUrl(url);
+    if (res && res.ok) toast('已在浏览器中打开');
+    else toast('无法打开这个链接');
+  }
+
   async function openWithSystem(node) {
+    if (node.kind === WEB_KIND) { await openWebExternal(node); return; }
     if (node.isDir) {
       const res = await pv.reveal(node.path);
       if (res && res.error) toast('无法打开：' + node.name);
@@ -522,7 +808,7 @@
         + esc(folder.path) + '">' + esc(folder.name) + '</button>';
     });
     const sel = state.sel;
-    if (sel && !sel.node.isDir) {
+    if (sel && !sel.node.isDir && sel.node.kind !== WEB_KIND) {
       html += '<span class="crumb-sep">' + icon('chevron', '', 13) + '</span>';
       html += '<button class="crumb is-last" data-crumb="' + last + '" title="' + esc(sel.node.path) + '">'
         + esc(sel.node.name) + '</button>';
@@ -828,10 +1114,16 @@
       return;
     }
 
-    // 点击快速访问项：导航到它并选中
+    // 快速访问面板标题栏：添加网页链接
+    if (e.target.closest('[data-web-add]')) {
+      openWebForm(null, e.target.closest('[data-web-add]'));
+      return;
+    }
+
+    // 点击快速访问项：文件导航并选中，网页直接进预览列
     const favRow = e.target.closest('.fav-row');
     if (favRow) {
-      const fav = state.favs.find((f) => f.path === favRow.dataset.favPath);
+      const fav = state.favs.find((f) => favIdentity(f) === favRow.dataset.favKey);
       if (fav) openFavorite(fav);
       return;
     }
@@ -867,13 +1159,17 @@
 
     const favRow = e.target.closest('.fav-row');
     if (favRow) {
-      const fav = state.favs.find((f) => f.path === favRow.dataset.favPath);
+      const fav = state.favs.find((f) => favIdentity(f) === favRow.dataset.favKey);
       if (fav) {
-        pv.openContextMenu({
-          path: fav.path,
-          kind: fav.isDir ? 'folder' : 'file',
-          favorited: true
-        });
+        if (isWebFav(fav)) {
+          pv.openContextMenu({ kind: 'web', url: fav.url, name: fav.name });
+        } else {
+          pv.openContextMenu({
+            path: fav.path,
+            kind: fav.isDir ? 'folder' : 'file',
+            favorited: true
+          });
+        }
       }
       return;
     }
@@ -946,16 +1242,26 @@
       return;
     }
     if (!node) return;
-    if (act === 'reload') {
+    if (act === 'reload' || act === 'web-reload') {
       // 重新读取后基线由正文落地时上报；先清掉高亮，避免读失败时一直亮着
       pane.changed = false;
       btn.classList.add('spin');
       setTimeout(() => btn.classList.remove('spin'), 520);
-      PV.pane.renderPane(pane, true);
+      if (node.kind === WEB_KIND) {
+        node.webError = null;
+        PV.pane.renderPane(pane, true);
+        // 视图可能还没建（刚切过来）或已被销毁：sync 会补建，reload 只负责已有的
+        const job = pv.webReload(node.url);
+        if (job && typeof job.catch === 'function') job.catch(() => {});
+        PV.web.schedule();
+      } else {
+        PV.pane.renderPane(pane, true);
+      }
     } else if (act === 'copy-path') {
-      pv.copyText(node.path).then(() => toast('已复制路径：' + node.path));
+      const text = node.kind === WEB_KIND ? (node.webCurrentUrl || node.url) : node.path;
+      pv.copyText(text).then(() => toast((node.kind === WEB_KIND ? '已复制链接：' : '已复制路径：') + text));
     } else if (act === 'reveal') {
-      pv.reveal(node.path);
+      if (node.kind !== WEB_KIND) pv.reveal(node.path);
     } else if (act === 'external') {
       openWithSystem(node);
     }
@@ -1048,9 +1354,14 @@
         e.preventDefault();
         const pane = PV.find.targetPane();
         if (pane && PV.find.canFind(pane)) { PV.find.open(pane); return; }
-        // 有预览但类型不支持查找（源码视图 / 图片 / PDF / HTML）时给一句提示，
+        // 有预览但类型不支持查找（源码视图 / 图片 / PDF / HTML / 网页）时给一句提示，
         // 别默默跳到文件名搜索框上去
-        if (pane) { toast('这一列不支持查找：Markdown 与 Word / PPT 预览里可以用 Ctrl+F'); return; }
+        if (pane) {
+          toast(pane.node && pane.node.kind === WEB_KIND
+            ? '网页列暂不支持预览内查找'
+            : '这一列不支持查找：Markdown 与 Word / PPT 预览里可以用 Ctrl+F');
+          return;
+        }
         $('#search').focus();
         $('#search').select();
         return;
@@ -1169,6 +1480,7 @@
   /** 记下某个窗格「现在显示的是哪个版本」 */
   function noteLoaded(pane, node, info) {
     if (!pane || !pane.node || !node || pane.node.path !== node.path) return;
+    if (node.kind === WEB_KIND) return;
     if (info && typeof info.size === 'number' && typeof info.mtime === 'number') {
       pane.known = { path: node.path, size: info.size, mtime: info.mtime };
       pane.changed = false;
@@ -1192,7 +1504,7 @@
 
   async function pollPane(pane) {
     const node = pane.node;
-    if (!node || node.isDir) return;
+    if (!node || node.isDir || node.kind === WEB_KIND) return;
     let st;
     try {
       st = await pv.stat(node.path);
@@ -1302,7 +1614,8 @@
     selection: function () { return state.sel; },
     renderHead: PV.body.head,
     renderBody: PV.body.render,
-    bodyKey: PV.body.key
+    bodyKey: PV.body.key,
+    afterLayout: function () { if (PV.web) PV.web.schedule(); }
   });
   PV.projects.init({
     toast: toast,
@@ -1343,8 +1656,16 @@
     $('#search').select();
   });
   pv.onToggleFavorite((node) => {
-    if (node && node.path) toggleFavorite(node);
+    if (!node) return;
+    if (node.kind === WEB_KIND && node.url) removeWebFavorite(node.url);
+    else if (node.path) toggleFavorite(node);
   });
+  pv.onEditWeb((payload) => {
+    if (!payload || !payload.url) return;
+    const fav = state.favs.find((f) => isWebFav(f) && f.url === payload.url);
+    if (fav) openWebForm(fav, colsEl.querySelector('[data-web-add]'));
+  });
+  pv.onWebState(handleWebState);
   pv.onPreviewPrefs((prefs) => {
     if (!prefs) return;
     state.previewDocx = prefs.previewDocx !== false;

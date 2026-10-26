@@ -73,3 +73,27 @@ SMIL、事件属性、`javascript:` / 危险 `data:` 链接、`file:` / 相对�
   仍然走 `<img>`，不执行脚本；
 - 不要为了省事把第三方解析器放进带 `allow-same-origin` 的 iframe，那样沙箱形同虚设。
   需要更强隔离时应放进不透明源、通过 postMessage 传数据。
+
+## 内嵌网页视图
+
+网页预览（快速访问里的 `kind: 'web'` 条目）不是文件预览：它加载的是任意在线页面。
+边界如下：
+
+- 地址只接受 `http(s)`（`src/main/web-url.js`）。渲染进程与主进程各校验一次，
+  `web:sync` 里的每个地址都重新过一遍；`file:` / `javascript:` / `data:` /
+  其他自定义协议与带账号密码的地址一律拒绝。页面里的 `mailto:` 是例外：
+  只交给系统邮件程序，不进入视图；
+- 独立的 `persist:web-docs` 会话，**不挂 preload**，`sandbox: true`、
+  `contextIsolation: true`、`nodeIntegration: false`；页面拿不到 `pv` 桥接。
+  宿主的 `pv://` 处理器不在这个会话里，另外在会话层取消 `pv://` / `file://` 请求；
+- 权限默认拒绝（只放行 `clipboard-sanitized-write`，在线文档的复制按钮要用）；
+  下载一律拦截；`window.open` 转系统浏览器；`will-attach-webview` 拒绝；
+- 页面内部导航允许 `http(s)`，其他协议由 `will-navigate` / `will-redirect` 拦下；
+- 不要给主窗口打开 `webviewTag`，不要在网页视图里挂 preload，也不要把它改成
+  带 `allow-same-origin` 的 iframe；
+- 原生视图会盖住 HTML：弹层打开时 `PV.web.setOccluded(true)` 先藏起来，关掉再恢复；
+  隐藏视图时主进程会把焦点还给宿主，否则表单收不到键盘。
+
+网页内容能联网、能写自己的 cookie、能被站点跟踪，这是浏览器的正常行为，不算越界；
+但它不能读工作区、不能调宿主 IPC；除了页面里的 `mailto:` 会交给系统邮件程序，
+不能启动本机程序。

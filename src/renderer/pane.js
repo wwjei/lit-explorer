@@ -11,7 +11,7 @@
  *   - 渲染任务：晚到的旧响应写不进正文（见 beginTask）
  *   - 创建 / 销毁 / 视图卸载
  *   - 迁移：固定一列时把正文整块搬到新窗格
- *   - 宽度与排列：每列独立宽度、按可用空间压缩、拖动改宽
+ *   - 宽度与排列：每列独立宽度、按可用空间压缩、拖动改宽、按住头部换位置
  *
  * 正文与头部「画成什么样」不在这里：app.js 把 preview-body.js 的三个口子装进来
  * （PV.pane.init 的 renderHead / renderBody / bodyKey）。查找条长在窗格上，所以本文件
@@ -19,7 +19,7 @@
  * 引用，与加载顺序无关。
  *
  * 加载顺序：icons.js → highlight.js → markdown.js → vendor/docpreview.js →
- *           pane.js → preview-body.js → svgedit.js → find.js → projects.js → app.js。
+ *           pane.js → preview-body.js → webview.js → svgedit.js → find.js → projects.js → app.js。
  */
 (function () {
   'use strict';
@@ -40,6 +40,7 @@
    *   renderHead(pane, node)  头部 HTML
    *   renderBody(...)         正文渲染，返回 Promise（见 renderPane 的调用处）
    *   bodyKey(pane,node,mode) 内容身份
+   *   afterLayout()           布局变了：网页视图的矩形要跟着重算（webview.js）
    */
   const hooks = {
     toast: function () {},
@@ -47,7 +48,8 @@
     selection: function () { return null; },
     renderHead: function () { return ''; },
     renderBody: function () { return null; },
-    bodyKey: function () { return ''; }
+    bodyKey: function () { return ''; },
+    afterLayout: function () {}
   };
 
   /** 临时预览列是否显示（固定列不受它影响） */
@@ -57,7 +59,7 @@
 
   let paneSeq = 0;
   const panes = new Map();
-  /** 固定住的预览列（最多 MAX_PINS 个），[0] 是最新固定的，排在最左 */
+  /** 固定住的预览列（最多 MAX_PINS 个），[0] 在最左；新固定的插到最左，可拖动换位置 */
   let pins = [];
 
   function createPane(opts) {
@@ -381,7 +383,10 @@
     // 关掉临时预览列不影响固定列：整块预览区只在「一列都没有」时才收起
     const list = visiblePanes();
     previewEl.hidden = list.length === 0;
-    if (!list.length) return;
+    if (!list.length) {
+      hooks.afterLayout();
+      return;
+    }
 
     for (const pane of allPanes()) pane.el.hidden = list.indexOf(pane) < 0;
     syncPaneOrder(list);
@@ -392,6 +397,8 @@
     for (let i = 0; i < list.length; i++) renderPane(list[i], force);
     // 临时预览列被收起来（内容已经在固定列里）时，挂在它上面的查找条一并收掉
     PV.find.revalidate();
+    // 头部高度、列宽、显隐都定了，网页视图的矩形现在才准
+    hooks.afterLayout();
   }
 
   /* ============================ 固定与迁移 ============================ */
@@ -581,6 +588,7 @@
       mainFloor = left >= auto ? 0 : left;
     }
     applyPaneWidths();
+    hooks.afterLayout();
   });
   panesEl.addEventListener('pointerup', () => {
     if (!paneDrag) return;
@@ -594,6 +602,95 @@
     else if (tempPane.w !== drag.tempW) pv.setState({ previewWidth: tempPane.w });
   });
 
+  /* ============================ 拖动换位置 ============================ */
+  /**
+   * 按住窗格头部的空白处可以拖动固定列，换到其它固定列的位置。
+   * 只重排 pins（固定列），临时预览列始终在最左——拖它没有可换的位置，
+   * 所以越过阈值时给一句「请先固定此栏」的提示。
+   *
+   * 拖动期间不实时重排：只在目标缝隙上画一条竖线，松手时一次性落位。
+   * 实时重排会让相邻列在指针底下反复移位，反而不好瞄准。
+   */
+  const HEAD_DRAG_SLOP = 4;
+  let headDrag = null;
+
+  function endHeadDrag(commit) {
+    const d = headDrag;
+    headDrag = null;
+    if (!d) return;
+    d.pane.el.classList.remove('is-moving');
+    document.body.classList.remove('pane-moving');
+    for (const p of pins) p.head.classList.remove('drop-before', 'drop-after');
+    if (!commit || !d.active) return;
+    const from = pins.indexOf(d.pane);
+    const to = d.target;
+    if (from < 0 || to < 0 || from === to) return;
+    pins.splice(from, 1);
+    pins.splice(to, 0, d.pane);
+    renderPreview();
+  }
+
+  /** 指针落在哪个缝隙：对除自己以外的固定列取中点，返回插入到 rest 里的下标 */
+  function headDropIndex(x) {
+    const rest = pins.filter((p) => p !== headDrag.pane);
+    let idx = rest.length;
+    for (let i = 0; i < rest.length; i++) {
+      const r = rest[i].el.getBoundingClientRect();
+      if (x < r.left + r.width / 2) { idx = i; break; }
+    }
+    return idx;
+  }
+
+  function paintHeadDrop(idx) {
+    for (const p of pins) p.head.classList.remove('drop-before', 'drop-after');
+    const rest = pins.filter((p) => p !== headDrag.pane);
+    // 落回原位时不画线：拖了半天又放回去，不该看起来像变了位置
+    if (!rest.length || idx === pins.indexOf(headDrag.pane)) return;
+    if (idx < rest.length) rest[idx].head.classList.add('drop-before');
+    else rest[rest.length - 1].head.classList.add('drop-after');
+  }
+
+  panesEl.addEventListener('pointerdown', (e) => {
+    if (e.button !== 0) return;
+    const head = e.target.closest ? e.target.closest('.pv-head') : null;
+    if (!head) return;
+    // 头部里的按钮 / 路径 / 分段控件仍然是正常点击
+    if (e.target.closest('button, a, input, textarea, select, [contenteditable="true"]')) return;
+    const pane = paneOf(head);
+    if (!pane || !pane.node) return;
+    headDrag = { pane: pane, x: e.clientX, y: e.clientY, pointerId: e.pointerId, active: false, target: -1 };
+    // 拖出窗格边界也要继续收到 move / up；合成事件没有真实指针，捕获失败不影响判定
+    try { head.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+  });
+
+  panesEl.addEventListener('pointermove', (e) => {
+    const d = headDrag;
+    if (!d || e.pointerId !== d.pointerId) return;
+    if (!d.active) {
+      if (Math.abs(e.clientX - d.x) < HEAD_DRAG_SLOP && Math.abs(e.clientY - d.y) < HEAD_DRAG_SLOP) return;
+      if (!d.pane.pinned) {
+        headDrag = null;
+        hooks.toast('请先固定此栏，再拖动调整位置');
+        return;
+      }
+      d.active = true;
+      d.pane.el.classList.add('is-moving');
+      document.body.classList.add('pane-moving');
+    }
+    const idx = headDropIndex(e.clientX);
+    if (idx === d.target) return;
+    d.target = idx;
+    paintHeadDrop(idx);
+  });
+
+  panesEl.addEventListener('pointerup', (e) => {
+    if (!headDrag || e.pointerId !== headDrag.pointerId) return;
+    endHeadDrag(true);
+  });
+  panesEl.addEventListener('pointercancel', () => endHeadDrag(false));
+  // 拖到一半窗口失焦（Alt+Tab）：收掉拖动中的样式，免得光标和变淡的标题卡住
+  window.addEventListener('blur', () => endHeadDrag(false));
+
   /* ============================ 对外接口 ============================ */
   window.PV = window.PV || {};
   PV.pane = {
@@ -603,7 +700,7 @@
     /* 渲染与布局 */
     renderPreview: renderPreview,
     renderPane: renderPane,
-    relayout: function () { fitPaneWidths(); applyPaneWidths(); },
+    relayout: function () { fitPaneWidths(); applyPaneWidths(); hooks.afterLayout(); },
 
     /* 显示开关（预览区整体是否显示） */
     previewOpen: function () { return previewOpen; },
@@ -625,6 +722,7 @@
 
     /* 查询 */
     paneOf: paneOf,
+    allPanes: allPanes,
     modeOf: modeOf,
     visiblePanes: visiblePanes,
     isImageNode: isImageNode,

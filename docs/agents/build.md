@@ -24,20 +24,21 @@ README 与界面直接使用它。`scripts/build-icons.mjs` 自带 PNG 解码、
 
 ```
 icons.js → highlight.js → markdown.js → vendor/docpreview.js
-         → pane.js → preview-body.js → svgedit.js → find.js → projects.js → app.js
+         → pane.js → preview-body.js → webview.js → svgedit.js → find.js → projects.js → app.js
 ```
 
 **加载顺序是契约**：后加载的文件可以在函数体里引用前面的（`PV.pane` / `PV.body` /
-`PV.svgedit` / `PV.find` / `PV.projects`），反过来只在运行时引用、不在加载时引用。
+`PV.web` / `PV.svgedit` / `PV.find` / `PV.projects`），反过来只在运行时引用、不在加载时引用。
 
 | 文件 | 管什么 |
 | --- | --- |
-| `pane.js`（`PV.pane`） | 预览窗格作为一个单元的全部事情：内容身份 `bodyKey`、渲染任务身份 `reqId` / `pending`、创建与销毁、固定时的正文迁移、每列的宽度与排列 |
-| `preview-body.js`（`PV.body`） | 正文与头部**画成什么样**：按类型分派（Markdown / 代码视图 / 图片与连续预览 / HTML 迷你浏览器 / PDF / docx / pptx / SVG 编辑）、头部副标题与元信息、缩放档位 |
+| `pane.js`（`PV.pane`） | 预览窗格作为一个单元的全部事情：内容身份 `bodyKey`、渲染任务身份 `reqId` / `pending`、创建与销毁、固定时的正文迁移、每列的宽度与排列、按住头部拖动重排固定列 |
+| `preview-body.js`（`PV.body`） | 正文与头部**画成什么样**：按类型分派（Markdown / 代码视图 / 图片与连续预览 / HTML 迷你浏览器 / PDF / docx / pptx / 网页 / SVG 编辑）、头部副标题与元信息、缩放档位 |
+| `webview.js`（`PV.web`） | 内嵌网页的几何同步：把每个网页预览列当前该占的矩形声明给主进程（`web:sync`），用 rAF 合并拖动与缩放；弹层打开时先 `setOccluded(true)` 把原生视图藏起来 |
 | `svgedit.js`（`PV.svgedit`） | SVG 编辑模式的正文：解析与安全清洗、选择、拖动（矩形带框内文字）、矩形八向缩放、文字单行编辑、删除、撤销重做、自动保存；它自己管 `pane.view.destroy` 清理监听与 ResizeObserver |
 | `find.js`（`PV.find`） | 预览内查找：查找条、命中标记、在命中之间跳转 |
 | `projects.js`（`PV.projects`） | 项目切换条：最多 5 个项目、图标目录与图标选择、每项目浏览位置的持久化；打开 / 切换由 `app.js` 通过 `PV.projects.init()` 注入 |
-| `app.js` | 目录导航（多栏、虚拟滚动、快速访问）、键盘 / 指针 / 主进程事件接线，以及把上面几个模块接起来 |
+| `app.js` | 目录导航（多栏、虚拟滚动、快速访问与网页条目）、键盘 / 指针 / 主进程事件接线，以及把上面几个模块接起来 |
 
 分层是为了把「异步任务与界面归属」收在一处：正文**只能通过任务对象写**
 （`task.write` / `task.replace`，见 `pane.js` 的 `beginTask`），晚到的旧任务写不动，
@@ -53,12 +54,17 @@ icons.js → highlight.js → markdown.js → vendor/docpreview.js
 两个动作交回 `app.js`（`PV.projects.init({ switchTo, openNew, toast })`）。切换前的导航快照
 与切换后的逐级恢复在 `app.js` 里，因为只有它知道 `state.path` 与各栏的加载状态。
 
-动这个分层时，`test/integration.test.cjs` 的 C1 / C2 / C4 / F1 / P1 / E1 / E2 / E3 就是它的回归网。
+网页视图的创建与安全策略不在渲染进程：`src/main/web-views.js` 按 `web:sync` 的声明增删
+`WebContentsView`，`src/main/web-url.js` 是两个进程共用的地址白名单。`PV.web` 只负责
+「按现在的布局，每个网页列该占哪块矩形」，不直接碰主进程的视图对象。
 
 SVG 编辑的写文件不在渲染进程：`PV.svgedit` 只调 `pv.writeSvg()`，真正落盘的是
 `src/main/fs-api.js` 的 `writeSvgFile()`。它只接受工作区内已存在的 `.svg`、要版本基线
 （size / mtime）并在不一致时返回 `CONFLICT`，写临时文件后原子替换；边界见
 [security.md](security.md#svg-编辑的写入通道)。
+
+动这个分层时，`test/integration.test.cjs` 的 C1 / C2 / C4 / F1 / P1 / P3 / E1 / E2 / E3 / W1
+就是它的回归网。
 
 ## 打包内容
 
