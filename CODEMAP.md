@@ -29,6 +29,7 @@
 | Markdown 渲染、链接白名单 | `src/renderer/markdown.js` | `toHtml()`、`safeHref()` | `javascript:`、`markdown`、`inline()` |
 | 代码高亮、降级与 Worker | `src/renderer/highlight.js`、`src/renderer/highlight/` | `mount()`、`plan()`、`tokenize()`、`tokenHtml()`、`highlightFences()` | `PV.highlight`、`shiki`、`cacheGet`、`getWorker` |
 | Word / PPT 内嵌预览 | `src/renderer/docpreview.js`、`preview-body.js` | `renderDocx()`、`renderPptx()`、`renderDocPreview()`、`sanitizeDocDom()` | `docx-preview`、`pptx-preview`、`altChunk`、`PV.docpreview` |
+| 图片 / HTML / PDF 的协议预览地址 | `src/main/main.js`、`preview-body.js` | `toPreviewUrl()`、`registerPreviewProtocol()`、`renderImageView()`、`renderImageSeq()` | `pv://local`、`fs:preview-url`、`?v=<mtime>-<size>`、`cache-control: no-store` |
 | 图片缩放、连续预览 | `preview-body.js`、`pane.js` | `renderImageView()`、`renderImageSeq()`、`setZoom()`、`toggleSeq()`、`paneScrollKeep()` | `pane.zoom`、`pane.continuous`、`.imgseq`、`.img-wrap` |
 | 网页快速访问 / 内嵌网页 | `app.js`、`src/renderer/webview.js`、`src/main/web-views.js`、`src/main/web-url.js` | `openWebFavorite()`、`openWebForm()`、`handleWebState()`、`PV.web.sync()`、`webViews.sync()`、`normalizeWebUrl()` | `web:sync`、`WebContentsView`、`favs`、`pane.webCurrentUrl`、`setOccluded`、`setDragHidden` |
 | 预览内查找 | `src/renderer/find.js` | `open()`、`refresh()`、`carryFrom()`、`afterRender()`、`markMatches()` | `PV.find`、`.find-bar`、`mark.find-hit`、`Ctrl+F` |

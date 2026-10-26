@@ -5,6 +5,7 @@
  * 不再用固定 sleep 凑时间。迭代时用 --only 挑相关的那一段跑，别整跑。
  *
  *   proto  pv:// 协议边界（工作区内 200、区外与经链接指向区外 403）
+ *   U1     预览地址带文件版本（保存后 URL 变化，查询串不影响协议取文件）
  *   S1     不可信 docx 不执行脚本（altChunk / 超链接）
  *   S4     渲染进程不能自行扩大授权根（workspace:open 只认主进程给过的目录）
  *   C1     加载完成前固定，固定列不能停在加载态
@@ -255,6 +256,20 @@ async function main() {
     ok('制表符混淆的协议同样被清掉',
       !s1.tabHref || !/^java\tscript:/i.test(s1.tabHref), s1.tabHref);
     eq('制表符混淆的脚本没有执行', s1.tabExecuted, 'undefined');
+  });
+
+  await run('U1', '预览地址带文件版本，保存后 URL 会变化', async () => {
+    const f = await prepare();
+    const file = path.join(f.ws, 'versioned.svg');
+    fs.writeFileSync(file, '<svg xmlns="http://www.w3.org/2000/svg"/>');
+
+    const first = await mainCtx.handlers['fs:preview-url'](null, file);
+    ok('地址带文件版本', !!(first && first.url) && /[?&]v=\d+-\d+$/.test(first.url), first);
+    eq('带版本号的地址仍能读到文件', (await net.fetch(first.url)).status, 200);
+
+    fs.writeFileSync(file, '<svg xmlns="http://www.w3.org/2000/svg" width="9" height="9"/>');
+    const second = await mainCtx.handlers['fs:preview-url'](null, file);
+    ok('文件变化后 URL 也跟着变', second && second.url !== first.url, { first, second });
   });
 
   await run('S4', '渲染进程不能自行扩大授权根', async () => {

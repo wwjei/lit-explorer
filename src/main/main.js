@@ -353,7 +353,15 @@ function registerIpc() {
 
   ipcMain.handle('fs:preview-url', async (_e, filePath) => {
     try {
-      return { url: toPreviewUrl(await fsApi.assertAllowed(filePath)) };
+      const abs = await fsApi.assertAllowed(filePath);
+      // 同一路径的图片会按 URL 命中 Chromium 的内存缓存，no-store 也拦不住；
+      // 带上文件版本，保存后重新渲染才会取到新内容
+      let version = '';
+      try {
+        const st = await fsp.stat(abs);
+        version = '?v=' + Math.round(st.mtimeMs) + '-' + st.size;
+      } catch { /* 取不到版本就用不带查询串的地址，能不能读交给协议判断 */ }
+      return { url: toPreviewUrl(abs) + version };
     } catch (err) {
       return { error: err.code || 'EURL' };
     }
