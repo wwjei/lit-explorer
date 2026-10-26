@@ -8,6 +8,7 @@
  *   S4  渲染进程不能自行扩大授权根：offerRoot / isOfferedRoot
  *   S5  切换工作区后旧工作区不再可读：resetAllowedRoots
  *   S6  渲染进程提交的设置：字段白名单、窗口几何、项目路径校验
+ *   S7  界面层路径比较：分隔符等价、大小写、相对根各段与排序
  *
  * 跑法：npm run test:unit                     全跑
  *       npm run test:unit -- --only=S2        只跑一段
@@ -22,13 +23,16 @@ const { ROOT, run, ok, eq, eqJson, done, freshDir, linkDir } = require('./helper
 /**
  * 在沙箱里加载渲染进程的 IIFE 模块。
  * 它们只通过 window.PV 互相引用，沙箱里让 window 指向自己即可，
- * 不用把宿主进程的全局变量弄脏。
+ * 不用把宿主进程的全局变量弄脏。共享契约要按 index.html 的顺序先加载。
  */
 function loadRenderer() {
-  const sandbox = {};
+  const sandbox = { pv: { platform: process.platform } };
   sandbox.window = sandbox;
   vm.createContext(sandbox);
-  for (const file of ['highlight.js', 'markdown.js']) {
+  vm.runInContext(
+    fs.readFileSync(path.join(ROOT, 'src/shared/contracts.js'), 'utf8'),
+    sandbox, { filename: 'contracts.js' });
+  for (const file of ['paths.js', 'highlight.js', 'markdown.js']) {
     const code = fs.readFileSync(path.join(ROOT, 'src/renderer', file), 'utf8');
     vm.runInContext(code, sandbox, { filename: file });
   }
@@ -38,6 +42,10 @@ function loadRenderer() {
 (async () => {
   await run('S2', 'Markdown 链接与转义', () => {
     const toHtml = loadRenderer().PV.markdown.toHtml;
+
+    eq('属性转义同时处理单双引号',
+      loadRenderer().PV.highlight.escapeAttr('<a b="c" \'d\'>'),
+      '&lt;a b=&quot;c&quot; &#39;d&#39;&gt;');
 
     const injected = toHtml('[click](#"onclick="window.__x=1)');
     ok('引号逃不出 href 属性（没有 on* 属性）', !/\son[a-z]+\s*=/i.test(injected), injected);
@@ -53,8 +61,56 @@ function loadRenderer() {
     ok('查询串里的 & 没有被破坏', good.indexOf('y=1&amp;z=2') >= 0, good);
 
     ok('原始 HTML 仍被转义', toHtml('<img src=x onerror=1>').indexOf('&lt;img') >= 0);
-    eq('渲染器不产出 <img>（图片语法与内嵌 HTML 都不支持）',
-      (toHtml('![a](b.png)\n\n<img src="c.png">').match(/<img/g) || []).length, 0);
+
+    // 图片：地址由主进程解析成 pv://；没有解析结果就落成占位，渲染器不猜路径
+    const md = loadRenderer().PV.markdown;
+    const imgMap = new Map([['figures/a b.png', {
+      src: 'figures/a b.png', url: 'pv://local/C%3A/p/figures/a%20b.png?v=1-2'
+    }]]);
+    const img = md.toHtml('![分层 × 出包](<figures/a b.png> "图 <&>")', imgMap);
+    ok('图片渲染成 <img>，地址用主进程给的 pv://',
+      /<img src="pv:\/\/local\/[^"]+\?v=1-2"/.test(img), img);
+    ok('alt 与标题都进了属性并转义',
+      img.indexOf('alt="分层 × 出包"') >= 0 && img.indexOf('title="图 &lt;&amp;&gt;"') >= 0, img);
+    ok('图片带懒加载', img.indexOf('loading="lazy"') >= 0, img);
+    ok('不残留 !', img.indexOf('!') < 0, img);
+
+    const remote = md.toHtml('![x](https://e.example/a.png?x=1&y=2)', imgMap);
+    ok('远程图片直接用原地址（& 转义）',
+      remote.indexOf('src="https://e.example/a.png?x=1&amp;y=2"') >= 0, remote);
+
+    const protoRel = md.toHtml('![x](//host/x.png)');
+    ok('协议相对地址按 https 处理（file:// 宿主里不会变成 file://主机名）',
+      protoRel.indexOf('src="https://host/x.png"') >= 0, protoRel);
+
+    for (const bad of ['javascript:1', 'data:image/png;base64,AA', 'file:///etc/passwd', 'vbscript:1']) {
+      const html = md.toHtml('![x](' + bad + ')');
+      ok('不生成图片：' + bad, html.indexOf('<img') < 0, html);
+      ok('也不留下半截链接：' + bad, html.indexOf('<a ') < 0, html);
+    }
+
+    const miss = md.toHtml('![缺失](figures/nope.png)');
+    ok('没有解析结果时落成占位（不产出 <img>）',
+      miss.indexOf('<img') < 0 && miss.indexOf('md-img-missing') >= 0, miss);
+    ok('占位里写明原因', miss.indexOf('无法读取') >= 0, miss);
+    const gone = md.toHtml('![没了](figures/gone.png)',
+      new Map([['figures/gone.png', { src: 'figures/gone.png', error: 'ENOENT' }]]));
+    ok('主进程报 ENOENT 时占位写「文件不存在」', gone.indexOf('文件不存在') >= 0, gone);
+    const denied = md.toHtml('![越界](../outside/x.png)',
+      new Map([['../outside/x.png', { src: '../outside/x.png', error: 'EACCES_ROOT' }]]));
+    ok('越界图片的占位写明不在工作区内', denied.indexOf('不在工作区内') >= 0, denied);
+
+    const linkedImg = md.toHtml('[![a](<figures/a b.png>)](https://e.example)', imgMap);
+    ok('图片可以嵌在链接文字里',
+      /<a href="https:\/\/e\.example"[^>]*><img /.test(linkedImg), linkedImg);
+    ok('行内代码里的图片语法不会变成图片',
+      md.toHtml('`![a](<figures/a b.png>)`', imgMap).indexOf('<img') < 0);
+
+    eqJson('imageSources 只收本地地址、去重、跳过代码块', md.imageSources([
+      '![a](x.png)', '![](https://e.example/y.png)', '',
+      '```', '![](skip.png)', '```', '',
+      '![a](x.png)', '![b](<my fig.png>)'
+    ].join('\n')), ['x.png', 'my fig.png']);
 
     const rich = toHtml([
       '# H', '', '**粗** *斜* `码` ~~删~~', '',
@@ -71,7 +127,7 @@ function loadRenderer() {
     ok('围栏代码块', rich.indexOf('md-code') >= 0);
     ok('链接文字里的行内样式仍然生效',
       toHtml('[**粗** 和 `码`](https://x.example)').indexOf('<code>码</code>') >= 0);
-    ok('占位符不漏进输出', !/[\u0000\u0001]/.test(rich + injected));
+    ok('占位符不漏进输出', !/[\u0000\u0001]/.test(rich + injected + img + miss + linkedImg));
 
     // 行内代码占位符不能落进 href：否则回填 <code> 时会把代码里的引号带进属性
     const codeInUrl = toHtml('[x](http://a`"onclick="window.__x=1//`)');
@@ -182,7 +238,8 @@ function loadRenderer() {
       projects: [
         { path: 'C:\\ok', name: 'ok', icon: { type: 'glyph', id: 'code' } },
         { path: 'C:\\Windows', name: 'bad' },
-        { path: 'C:\\ok', icon: { type: 'image', data: 'data:text/html,<script>' } }
+        { path: 'C:\\ok', icon: { type: 'image', data: 'data:text/html,<script>' } },
+        { path: 'C:\\ok', icon: { type: 'text', text: ' 中文A ' } }
       ]
     }, (p) => offered.has(p));
 
@@ -192,10 +249,11 @@ function loadRenderer() {
     eq('普通偏好照常保存', patch.theme, 'dark');
     eq('previewWidth 有上限', patch.previewWidth, 10000);
     eq('leftSplitRatio 有范围', patch.leftSplitRatio, 0.92);
-    eq('只保留主进程给过的项目', patch.projects.length, 2);
+    eq('只保留主进程给过的项目', patch.projects.length, 3);
     eq('未授权的项目路径被丢弃',
       patch.projects.some((p) => p.path === 'C:\\Windows'), false);
     eq('非图片 data URL 的图标被丢弃', patch.projects[1].icon, null);
+    eqJson('文字图标去掉空白并只留两个字符', patch.projects[2].icon, { type: 'text', text: '中文' });
 
     // 网页快捷方式：只认 http(s)，且不能借网页条目把 path 写进设置
     const webUrl = require(path.join(ROOT, 'src/main/web-url.js'));
@@ -222,6 +280,61 @@ function loadRenderer() {
     eq('网页条目不带 path（不能借它注入路径）',
       list.filter((f) => f.kind === 'web' && Object.prototype.hasOwnProperty.call(f, 'path')).length, 0);
     eq('文件条目照常保留', list[0].path, 'C:\\ws\\a.md');
+
+    // 每个项目记住的固定列布局：结构、数量与数值都要收敛
+    const nav = san.sanitizeNav({
+      path: ['C:\\ws'],
+      sel: 'C:\\ws\\a.md',
+      mode: 'source',
+      layout: {
+        mainFloor: 99999,
+        pins: [
+          { w: 100, split: 2, panes: [
+            { path: 'C:\\ws\\a.md', name: 'a.md', kind: 'md', mode: 'source', zoom: 99, continuous: true },
+            { kind: 'web', url: ' HTTP://EXAMPLE.com/doc ', name: '文档' },
+            { path: 'C:\\ws\\third.md', kind: 'md' }
+          ] },
+          { w: 500, split: 0.4, panes: [] },
+          { w: 500, split: 0.4, panes: [{ path: 'C:\\ws\\b.md', kind: 'evil' }] },
+          { w: 500, split: 0.4, panes: [{ path: 'C:\\ws\\c.md', kind: 'md' }] },
+          { w: 500, split: 0.4, panes: [{ path: 'C:\\ws\\d.md', kind: 'md' }] }
+        ]
+      }
+    });
+    eq('固定列最多 3 列', nav.layout.pins.length, 3);
+    eq('空列被丢掉、每列最多 2 格', nav.layout.pins[0].panes.length, 2);
+    eq('宽度 / 分屏比例 / 主栏下限都有界',
+      [nav.layout.pins[0].w, nav.layout.pins[0].split, nav.layout.mainFloor].join('|'),
+      '240|0.8|10000');
+    eq('文件格保留模式、缩放与连续预览',
+      [nav.layout.pins[0].panes[0].mode, nav.layout.pins[0].panes[0].zoom,
+        nav.layout.pins[0].panes[0].continuous].join('|'),
+      'source|8|true');
+    eq('网页格只留规范化后的 http(s) 地址',
+      [nav.layout.pins[0].panes[1].url, nav.layout.pins[0].panes[1].path,
+        nav.layout.pins[0].panes[1].kind].join('|'),
+      'http://example.com/doc|http://example.com/doc|web');
+    eq('未知文件类型退回 txt', nav.layout.pins[1].panes[0].kind, 'txt');
+    eq('只有非法网页的布局整份丢弃',
+      san.sanitizeNav({ layout: { pins: [{ panes: [{ kind: 'web', url: 'javascript:alert(1)' }] }] } }).layout,
+      undefined);
+  });
+
+  await run('S7', '界面层路径比较与排序', () => {
+    const p = loadRenderer().PV.paths;
+
+    eq('反斜杠与斜杠等价', p.same('C:\\ws\\a.md', 'C:/ws/a.md'), true);
+    eq('Windows 上大小写不敏感、其它平台区分大小写',
+      p.same('C:\\WS\\A.MD', 'c:/ws/a.md'), process.platform === 'win32');
+    eq('前缀相同的兄弟目录不在根内', p.within('C:\\ws', 'C:\\ws-evil\\x'), false);
+    eq('根自身算在根内', p.within('C:\\ws', 'C:/ws'), true);
+    eqJson('相对根的各段', p.partsUnder('C:\\ws', 'C:/ws/docs/a.md'), ['docs', 'a.md']);
+    eq('根自身没有段', p.partsUnder('C:\\ws', 'C:\\ws\\').length, 0);
+    eq('界外返回 null', p.partsUnder('C:\\ws', 'D:\\other\\a.md'), null);
+    eq('副标题保留原分隔符', p.relUnder('C:\\ws', 'C:\\ws\\docs\\a.md'), 'docs\\a.md');
+    eq('baseName 去掉末尾分隔符', p.baseName('C:\\ws\\a.md\\'), 'a.md');
+    eq('目录排在文件前', p.compareNodes({ name: 'z', isDir: true }, { name: 'a', isDir: false }) < 0, true);
+    eq('数字按数值排序', p.compareNodes({ name: 'a10', isDir: false }, { name: 'a2', isDir: false }) > 0, true);
   });
 
   done();

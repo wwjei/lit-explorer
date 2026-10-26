@@ -9,17 +9,9 @@
 1. **待拍板** —— 需要维护者做选择才能推进的事。写明选项与各自的代价，别只写「以后再说」。
 2. **待排期** —— 方案已经调研清楚，只差优先级的功能。细节放 [docs/design/](docs/design/)。
 
-**不进这里**（各有各的地方）：
-
-| 东西 | 去哪 |
-| --- | --- |
-| 小 bug、瑕疵、顺手清理 | [PENDING.md](PENDING.md)——**发版前必须清空** |
-| 已知但没有可行修法的依赖 / 安全问题 | [docs/security-debt.md](docs/security-debt.md) |
-| 已经做出来的行为 | [FEATURES.md](FEATURES.md) |
-| **已排进版本规划的功能** | [FEATURES.md](FEATURES.md) 第 8 节 |
-| 明确不做的（非目标） | [FEATURES.md](FEATURES.md) 第 2 节 |
-| 操作手册 | [docs/agents/](docs/agents/) |
-| 一次性调试记录 | 留在提交信息里 |
+**不进这里**：小 bug 与顺手清理去 [PENDING.md](PENDING.md)（**发版前必须清空**），
+依赖 / 安全债去 [docs/security-debt.md](docs/security-debt.md)，一次性调试记录留在
+提交信息里。完整分工见 [AGENTS.md](AGENTS.md)。
 
 - **详细方案放 [docs/design/](docs/design/)**，这里只留结论和一句为什么。本文件是要被
   反复读的索引，不该堆成长文。
@@ -67,6 +59,4 @@
 
 ## 待排期（方案已就绪）
 
-**（暂无）** 方案已经调研清楚、只差优先级的功能放这里。目前没有——已经在
-[FEATURES.md](FEATURES.md) 第 8 节的版本规划里的，不进这个池子，它的方案文档由那一行
-自己指过去。
+**（暂无）** 方案已经调研清楚、只差优先级的功能放这里；细节放 docs/design/。

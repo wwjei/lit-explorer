@@ -217,10 +217,6 @@ function isOfferedRoot(dir) {
   return false;
 }
 
-function offeredRootList() {
-  return Array.from(offeredRoots);
-}
-
 function isInsideAnyRoot(abs) {
   for (const root of allowedRoots) {
     if (within(root, abs)) return true;
@@ -237,10 +233,6 @@ async function assertAllowed(target) {
   throw err;
 }
 
-function isDirEntry(dirent) {
-  return dirent.isDirectory();
-}
-
 /** 读取一层目录（只做 readdir，不做 stat，保证大目录首屏足够快） */
 async function listDir(dir) {
   const abs = await assertAllowed(dir);
@@ -249,7 +241,7 @@ async function listDir(dir) {
   const symlinks = [];
 
   for (const dirent of dirents) {
-    let isDir = isDirEntry(dirent);
+    const isDir = dirent.isDirectory();
     if (dirent.isSymbolicLink()) symlinks.push(dirent.name);
     entries.push({
       name: dirent.name,
@@ -447,7 +439,6 @@ module.exports = {
   resetAllowedRoots,
   offerRoot,
   isOfferedRoot,
-  offeredRootList,
   assertAllowed,
   kindFor,
   mimeFor,

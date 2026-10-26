@@ -7,8 +7,9 @@
  *   - 多栏目录导航：加载、选中、面包屑、虚拟滚动、快速访问
  *   - 键盘、指针、顶部按钮、主进程事件，以及把上面几个模块接起来
  *
- * 加载顺序：icons.js → highlight.js → markdown.js → vendor/docpreview.js →
- *           pane.js → preview-body.js → webview.js → svgedit.js → find.js → projects.js → app.js。
+ * 加载顺序：shared/contracts.js → paths.js → icons.js → highlight.js → markdown.js →
+ *           vendor/docpreview.js → pane.js → preview-body.js → webview.js → svgedit.js →
+ *           find.js → projects.js → app.js。
  */
 (function () {
   'use strict';
@@ -66,11 +67,11 @@
     return String(dir || '').replace(/[\\/]+$/, '').toLowerCase();
   }
 
-  /* ---- 网页条目：地址规则与主进程 web-url.js 保持一致 ---- */
+  /* ---- 网页条目：地址规则与主进程 web-url.js 保持一致（进程边界无法共享实现）；
+   *      数量上限来自 shared/contracts.js，两边读同一份 ---- */
   const WEB_KIND = 'web';
-  const WEB_URL_MAX = 2048;
-  /** 与主进程 state-sanitize.js 的 MAX_FAV_ITEMS 一致 */
-  const FAV_MAX_ITEMS = 500;
+  const WEB_URL_MAX = PV.contracts.MAX_URL_CHARS;
+  const FAV_MAX_ITEMS = PV.contracts.MAX_FAV_ITEMS;
 
   function normalizeWebUrl(raw) {
     const s = typeof raw === 'string' ? raw.trim() : '';
@@ -102,7 +103,6 @@
 
   function normalizeFavorites(list) {
     if (!Array.isArray(list)) return [];
-    const root = (state.root || '').replace(/[\\/]+$/, '').toLowerCase();
     const seen = new Set();
     const out = [];
     for (const item of list) {
@@ -120,25 +120,23 @@
         if (typeof item === 'string') {
           fav = {
             path: item,
-            name: item.split(/[\\/]/).filter(Boolean).pop() || item,
+            name: PV.paths.baseName(item) || item,
             isDir: false,
             kind: 'txt'
           };
         } else if (item && item.path) {
           fav = {
             path: item.path,
-            name: item.name || item.path.split(/[\\/]/).filter(Boolean).pop() || item.path,
+            name: item.name || PV.paths.baseName(item.path) || item.path,
             isDir: !!item.isDir,
             kind: item.kind || (item.isDir ? 'folder' : 'txt')
           };
         }
         if (!fav) continue;
-        const p = fav.path.replace(/[\\/]+$/, '').toLowerCase();
-        if (root && p !== root && !p.startsWith(root + '\\') && !p.startsWith(root + '/')) continue;
+        // 收藏按当前工作区归属：越界的旧条目直接丢掉
+        if (state.root && !PV.paths.within(state.root, fav.path)) continue;
       }
-      const key = isWebFav(fav)
-        ? 'w:' + fav.url
-        : 'p:' + fav.path.replace(/[\\/]+$/, '').toLowerCase();
+      const key = isWebFav(fav) ? 'w:' + fav.url : 'p:' + PV.paths.key(fav.path);
       if (seen.has(key)) continue;
       seen.add(key);
       out.push(fav);
@@ -150,14 +148,14 @@
     for (let ci = 0; ci < state.cols.length; ci++) {
       const col = state.cols[ci];
       if (!col || !col.entries) continue;
-      const hit = col.entries.find((e) => e.path === target);
+      const hit = col.entries.find((e) => PV.paths.same(e.path, target));
       if (hit) return hit;
     }
     return null;
   }
 
   function isFavorite(path) {
-    return state.favs.some((f) => f.path === path);
+    return state.favs.some((f) => f.path && PV.paths.same(f.path, path));
   }
 
   function saveFavorites() {
@@ -169,13 +167,13 @@
   function toggleFavorite(target) {
     if (!target || !target.path) return;
     const node = findLoadedNode(target.path) || target;
-    const at = state.favs.findIndex((f) => f.path === node.path);
+    const at = state.favs.findIndex((f) => f.path && PV.paths.same(f.path, node.path));
     if (at >= 0) {
       state.favs.splice(at, 1);
     } else {
       state.favs.push({
         path: node.path,
-        name: node.name || node.path.split(/[\\/]/).filter(Boolean).pop() || node.path,
+        name: node.name || PV.paths.baseName(node.path) || node.path,
         isDir: !!node.isDir,
         kind: node.isDir ? 'folder' : (node.kind || 'txt')
       });
@@ -186,22 +184,10 @@
     toast(at >= 0 ? '已从快速访问移除：' + (node.name || '') : '已加入快速访问：' + (node.name || ''));
   }
 
-  /** 快速访问项相对当前工作区根目录的各段名字 */
-  function partsUnderRoot(absPath) {
-    if (!state.root) return null;
-    const root = state.root.replace(/[\\/]+$/, '');
-    const p = String(absPath || '').replace(/[\\/]+$/, '');
-    if (p.toLowerCase() === root.toLowerCase()) return [];
-    const base = root.toLowerCase();
-    const low = p.toLowerCase();
-    if (!low.startsWith(base + '\\') && !low.startsWith(base + '/')) return null;
-    return p.slice(root.length).split(/[\\/]+/).filter(Boolean);
-  }
-
   async function openFavorite(fav) {
     if (!state.root || !fav) return;
     if (isWebFav(fav)) { openWebFavorite(fav); return; }
-    const parts = partsUnderRoot(fav.path);
+    const parts = PV.paths.partsUnder(state.root, fav.path);
     if (!parts) { toast('快速访问项不在当前工作区内'); return; }
     if (!parts.length) { goToPathIndex(-1); return; }
 
@@ -260,12 +246,13 @@
   /**
    * 网页快速访问：不参与目录导航，直接把它作为预览列的内容。
    * 列号取当前最后一栏，只为让 ↑↓ 还有「从哪一栏继续」可依。
+   * reveal=false 用于切项目恢复：用户关掉的临时预览列不要被重新展开。
    */
-  function openWebFavorite(fav) {
+  function openWebFavorite(fav, reveal) {
     const node = webNodeFromFav(fav);
     state.sel = { col: Math.max(0, state.path.length - 1), node };
     state.mode = 'preview';
-    if (!PV.pane.previewOpen()) setPreviewVisible(true);
+    if (!PV.pane.previewOpen() && reveal !== false) setPreviewVisible(true);
     render();
     scheduleSaveNav();
   }
@@ -433,7 +420,7 @@
       if (ev.key === 'f') toast('网页列暂不支持预览内查找');
       return;
     }
-    if (!ev.url || ev.status === 'title') return;
+    if (!ev.url) return;
 
     let touched = false;
     for (const pane of PV.pane.allPanes()) {
@@ -557,10 +544,7 @@
     const q = state.query.toLowerCase();
     const base = baseItemsOf(ci);
     const list = q ? base.filter((e) => e.name.toLowerCase().indexOf(q) >= 0) : base.slice();
-    list.sort((a, b) => {
-      if (a.isDir !== b.isDir) return a.isDir ? -1 : 1;
-      return a.name.localeCompare(b.name, 'zh-Hans-CN', { numeric: true });
-    });
+    list.sort(PV.paths.compareNodes);
     col._items = list;
     col._itemsKey = cacheKey;
     return list;
@@ -627,7 +611,7 @@
     closeWebForm();
     navRestored = false;
     state.root = dir;
-    state.rootName = dir.split(/[\\/]/).filter(Boolean).pop() || dir;
+    state.rootName = PV.paths.baseName(dir) || dir;
     state.path = [{ name: state.rootName, path: dir, isDir: true, kind: 'folder' }];
     state.cols = [];
     state.sel = null;
@@ -641,14 +625,13 @@
     dirtyDirs.clear();
     dirKnown.clear();
     // 切换条：当前项立刻高亮；新项目有空位就加进去
-    PV.projects.setActive(dir);
     PV.projects.noteOpened(dir);
     const nav = PV.projects.navOf(dir);
     setWelcome(false);
     render();
     await loadColumn(0);
     if (nav) {
-      await restoreNav(nav);
+      await applySavedNav(nav);
       navRestored = true;
     }
     scheduleSaveNav();
@@ -698,7 +681,9 @@
     return {
       path: state.path.map((f) => f.path),
       sel: state.sel ? state.sel.node.path : null,
-      mode: state.mode
+      mode: state.mode,
+      // 固定列、列宽、分屏比例都跟着项目走：切走时一起存，切回来原样恢复
+      layout: PV.pane.layoutSnapshot()
     };
   }
 
@@ -732,20 +717,27 @@
       if (col && col.state === 'ready' && col.entries) {
         const node = col.entries.find((e) => !e.isDir && PV.projects.samePath(e.path, nav.sel));
         if (node) {
-          await selectNode(node, ci, { scroll: false, revealPreview: true });
+          // 恢复选中不等于用户点了文件：临时预览列关着就别强行展开
+          await selectNode(node, ci, { scroll: false });
           restored = true;
         }
       }
       // 上次选中的是一条网页快捷方式：它不是目录里的条目，按地址找回收藏
       if (!restored) {
         const fav = state.favs.find((f) => isWebFav(f) && f.url === nav.sel);
-        if (fav) openWebFavorite(fav);
+        if (fav) openWebFavorite(fav, false);
       }
     }
     if (nav && nav.mode === 'source' && !(state.sel && state.sel.node.kind === WEB_KIND)) {
       state.mode = 'source';
     }
     render();
+  }
+
+  /** 恢复某个项目保存的导航与固定列布局（首次启动、切换项目共用） */
+  async function applySavedNav(nav) {
+    await restoreNav(nav);
+    PV.pane.restoreLayout(nav.layout);
   }
 
   /* ---- 项目切换 / 新开项目 ---- */
@@ -909,7 +901,7 @@
         : '';
       head.innerHTML = '<b>' + esc(folder.name) + '</b>'
         + '<button class="col-toggle rescanbtn' + (dirtyDirs.size ? ' is-changed' : '') + '"'
-        + ' data-rescan title="' + (dirtyDirs.size ? '工作区有变化，点击重新扫描' : '重新扫描 (F5)')
+        + ' data-rescan title="' + rescanTitle()
         + '" aria-label="重新扫描">' + icon('refresh', '', 14) + '</button>'
         + '<button class="col-toggle' + (state.hideDot ? ' is-on' : '') + '" data-toggle-dot title="'
         + (state.hideDot ? '显示以 . 开头的文件/文件夹' : '隐藏以 . 开头的文件/文件夹') + '" aria-label="切换点文件显示">'
@@ -1070,6 +1062,13 @@
   function togglePreview(force) {
     setPreviewVisible(typeof force === 'boolean' ? force : !PV.pane.previewOpen());
     PV.pane.renderPreview();
+  }
+
+  /** 把焦点落到顶栏的文件名搜索框（Ctrl+F 的兜底、菜单里的「聚焦搜索框」共用） */
+  function focusSearch() {
+    const el = $('#search');
+    el.focus();
+    el.select();
   }
 
   function ensureVisible(ci, idx) {
@@ -1362,8 +1361,7 @@
             : '这一列不支持查找：Markdown 与 Word / PPT 预览里可以用 Ctrl+F');
           return;
         }
-        $('#search').focus();
-        $('#search').select();
+        focusSearch();
         return;
       }
       if (k === 'l' && e.shiftKey) {
@@ -1524,13 +1522,17 @@
     }
   }
 
+  /** 重新扫描按钮的提示语：有外部变更时说明该点它了 */
+  function rescanTitle() {
+    return dirtyDirs.size ? '工作区有变化，点击重新扫描' : '重新扫描 (F5)';
+  }
+
   /** 只改按钮本身，不整块重绘（重绘会把栏内滚动位置清掉） */
   function paintRescan() {
     const btn = colsEl.querySelector('[data-rescan]');
     if (!btn) return;
-    const dirty = dirtyDirs.size > 0;
-    btn.classList.toggle('is-changed', dirty);
-    btn.title = dirty ? '工作区有变化，点击重新扫描' : '重新扫描 (F5)';
+    btn.classList.toggle('is-changed', dirtyDirs.size > 0);
+    btn.title = rescanTitle();
   }
 
   /** 某个目录刚重新读过：收掉它的变更标记，并重新记 mtime 基线 */
@@ -1615,7 +1617,9 @@
     renderHead: PV.body.head,
     renderBody: PV.body.render,
     bodyKey: PV.body.key,
-    afterLayout: function () { if (PV.web) PV.web.schedule(); }
+    afterLayout: function () { if (PV.web) PV.web.schedule(); },
+    layoutChanged: function () { scheduleSaveNav(); },
+    allowPinnedPath: function (path) { return PV.paths.partsUnder(state.root, path) !== null; }
   });
   PV.projects.init({
     toast: toast,
@@ -1651,10 +1655,7 @@
   pv.onTheme((theme) => applyTheme(theme));
   pv.onTogglePreview(() => togglePreview());
   pv.onRescan(() => rescan());
-  pv.onFocusSearch(() => {
-    $('#search').focus();
-    $('#search').select();
-  });
+  pv.onFocusSearch(focusSearch);
   pv.onToggleFavorite((node) => {
     if (!node) return;
     if (node.kind === WEB_KIND && node.url) removeWebFavorite(node.url);
@@ -1699,7 +1700,7 @@
       PV.projects.noteOpened(state.root);
       const nav = navRestored ? null : PV.projects.navOf(state.root);
       render();
-      if (nav) await restoreNav(nav);
+      if (nav) await applySavedNav(nav);
     }
     if (st.previewWidth > 0) PV.pane.setTempWidth(st.previewWidth);
     applyMaximized(await pv.isMaximized());

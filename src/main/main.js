@@ -12,6 +12,7 @@ const store = require('./store');
 const stateSanitize = require('./state-sanitize');
 const webViews = require('./web-views');
 const webUrl = require('./web-url');
+const contracts = require('../shared/contracts');
 
 const DEV_ROOT = path.join(__dirname, '..', '..');
 const DEV = process.argv.includes('--dev');
@@ -73,6 +74,69 @@ function toPreviewUrl(filePath) {
   const normalized = abs.split(path.sep).join('/');
   const prefix = normalized.startsWith('/') ? '' : '/';
   return 'pv://local' + prefix + normalized.split('/').map(encodeURIComponent).join('/');
+}
+
+/* ------------------------------------------------------------------ *
+ * Markdown 图片地址 -> pv://
+ * 本地地址相对 md 文件所在目录；以 / 或 \ 开头的按工作区根。
+ * 每个候选都过 assertAllowed()：越界（含 junction / 符号链接）一律拒绝。
+ * ------------------------------------------------------------------ */
+const IMG_SRC_MAX = 2048;
+const IMG_MAX_PER_DOC = contracts.MAX_MD_IMAGES;
+const IMG_MAX_BYTES = 32 * 1024 * 1024;
+
+function codedError(code) {
+  const err = new Error(code);
+  err.code = code;
+  return err;
+}
+
+/** 图片 / HTML / PDF 的预览地址都带文件版本，保存后重新渲染才能拿到新内容 */
+function previewVersion(st) {
+  return '?v=' + Math.round(st.mtimeMs) + '-' + st.size;
+}
+
+/** 去掉 <> 包裹、片段与查询串并解码；控制字符 / 协议头 / UNC 一律判无效 */
+function cleanImageSrc(raw) {
+  let s = String(raw == null ? '' : raw).trim();
+  if (s.length > IMG_SRC_MAX) return '';
+  if (s.startsWith('<') && s.endsWith('>')) s = s.slice(1, -1).trim();
+  // 本地文件没有查询串与片段；文件名里真带 # 的会落到「文件不存在」
+  s = s.replace(/[?#].*$/, '');
+  try { s = decodeURIComponent(s); } catch { /* 保持原样 */ }
+  if (!s || /[\u0000-\u001f\u007f]/.test(s)) return '';
+  const scheme = /^([a-zA-Z][a-zA-Z0-9+.-]*):/.exec(s);
+  // 单字母是 Windows 盘符；UNC 路径会真的去连网络主机，也不收
+  if ((scheme && scheme[1].length > 1) || s.startsWith('//') || s.startsWith('\\\\')) return '';
+  return s;
+}
+
+async function resolveImageTargets(mdPath, srcs) {
+  const base = await fsApi.assertAllowed(mdPath);
+  const dir = path.dirname(base);
+  // openWorkspace() 每次都先 resetAllowedRoots() 再只允许当前根，所以这里唯一的一项
+  // 就是当前工作区；将来真有多个授权根，这个取法要跟着改。
+  const root = fsApi.allowedRootList()[0];
+  return Promise.all(srcs.slice(0, IMG_MAX_PER_DOC).map(async (raw) => {
+    const src = typeof raw === 'string' ? raw : String(raw == null ? '' : raw);
+    try {
+      const clean = cleanImageSrc(src);
+      if (!clean) throw codedError('EBAD_SRC');
+      const abs = /^[\\/]/.test(clean) && root
+        ? path.resolve(root, clean.replace(/^[\\/]+/, ''))
+        : path.resolve(dir, clean);
+      const real = await fsApi.assertAllowed(abs);
+      const st = await fsp.stat(real);
+      if (!st.isFile()) throw codedError('ENOT_FILE');
+      if (st.size > IMG_MAX_BYTES) throw codedError('ETOO_LARGE');
+      const kind = fsApi.kindFor(real);
+      if (kind !== 'image' && kind !== 'svg') throw codedError('ENOT_IMAGE');
+      // 与 fs:preview-url 一样带文件版本：改了图再刷新要拿到新内容
+      return { src: src, url: toPreviewUrl(real) + previewVersion(st) };
+    } catch (err) {
+      return { src: src, error: (err && err.code) || 'EIMG' };
+    }
+  }));
 }
 
 function registerPreviewProtocol() {
@@ -262,14 +326,7 @@ async function openWorkspace(dir, options = {}) {
 function registerIpc() {
   ipcMain.handle('workspace:sample', () => fsApi.offerRoot(assetPath('sample-project')));
 
-  ipcMain.handle('workspace:pick', async () => {
-    const res = await dialog.showOpenDialog(win, {
-      title: '选择项目目录',
-      properties: ['openDirectory']
-    });
-    if (res.canceled || !res.filePaths.length) return { canceled: true };
-    return openWorkspace(res.filePaths[0]);
-  });
+  ipcMain.handle('workspace:pick', () => pickFolderAndOpen());
 
   // 只接受主进程给过的目录（示例项目、最近打开、上次的工作区、已打开过的）。
   // 渲染进程不能凭自己拼的路径把任意现存目录登记成新的授权根——授权决策留在主进程。
@@ -353,9 +410,27 @@ function registerIpc() {
 
   ipcMain.handle('fs:preview-url', async (_e, filePath) => {
     try {
-      return { url: toPreviewUrl(await fsApi.assertAllowed(filePath)) };
+      const abs = await fsApi.assertAllowed(filePath);
+      // 同一路径的图片会按 URL 命中 Chromium 的内存缓存，no-store 也拦不住；
+      // 带上文件版本，保存后重新渲染才会取到新内容
+      let version = '';
+      try {
+        const st = await fsp.stat(abs);
+        version = previewVersion(st);
+      } catch { /* 取不到版本就用不带查询串的地址，能不能读交给协议判断 */ }
+      return { url: toPreviewUrl(abs) + version };
     } catch (err) {
       return { error: err.code || 'EURL' };
+    }
+  });
+
+  // Markdown 里的本地图片：一次把整篇的地址解析完，渲染进程据此出 <img> 或占位
+  ipcMain.handle('fs:resolve-images', async (_e, mdPath, srcs) => {
+    try {
+      if (!Array.isArray(srcs) || !srcs.length) return { items: [] };
+      return { items: await resolveImageTargets(mdPath, srcs) };
+    } catch (err) {
+      return { error: err.code || 'EIMG', items: [] };
     }
   });
 
@@ -498,12 +573,14 @@ function showContextMenu(payload) {
  * 不用原生菜单栏（Windows 上那一行「文件 编辑 视图 帮助」太占地方也不好看），
  * 入口收敛到标题栏的 ⋯ 按钮、右键菜单和快捷键里。
  * ------------------------------------------------------------------ */
-async function pickAndOpen() {
+/** 选择并打开一个工作区：按钮（workspace:pick）与菜单的 Ctrl+O 共用 */
+async function pickFolderAndOpen() {
   const res = await dialog.showOpenDialog(win, {
     title: '选择项目目录',
     properties: ['openDirectory']
   });
-  if (!res.canceled && res.filePaths.length) await openWorkspace(res.filePaths[0]);
+  if (res.canceled || !res.filePaths.length) return { canceled: true };
+  return openWorkspace(res.filePaths[0]);
 }
 
 async function toggleThemeFromMain() {
@@ -528,7 +605,7 @@ async function togglePreviewPref(key) {
 async function showAppMenu() {
   const state = await store.load();
   const items = [
-    { label: '打开文件夹…', accelerator: 'Ctrl+O', click: pickAndOpen },
+    { label: '打开文件夹…', accelerator: 'Ctrl+O', click: pickFolderAndOpen },
     { label: '打开示例项目', click: () => openWorkspace(assetPath('sample-project')) },
     { type: 'separator' },
     { label: '重新扫描目录', accelerator: 'F5', click: () => win.webContents.send('app:rescan') },

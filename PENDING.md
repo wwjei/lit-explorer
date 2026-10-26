@@ -7,14 +7,11 @@
 
 - **打 tag 之前这个文件必须是空的。** 发版检查清单里有这一步，见
   [docs/agents/release.md](docs/agents/release.md)。
-- 清不掉就逐条写明为什么可以带着发，并把它挪到该去的地方：要人拍板的进
-  [further_notes.md](further_notes.md)，要等上游的进
-  [docs/security-debt.md](docs/security-debt.md)，属于产品取舍的写进
-  [FEATURES.md](FEATURES.md)。
+- 清不掉就逐条写明为什么可以带着发，再把它挪到该去的地方（池子分工见
+  [AGENTS.md](AGENTS.md)）。
 - 每条写清：现象、影响、怎么修（没查清就写「先查清什么」）、为什么现在不做。
 - 修完直接删掉整条，别在这里维护「已完成」列表。
-- **这不是需求池。** 想做的功能进 [further_notes.md](further_notes.md)，
-  已排期的进 [FEATURES.md](FEATURES.md) 第 8 节。
+- **这不是需求池。** 想做的功能与要拍板的决策进 [further_notes.md](further_notes.md)。
 
 ---
 
@@ -48,17 +45,3 @@ GitHub 拉 Electron 二进制并超时。**静默失效**是这里真正的问�
 README 的「依赖安装慢 / 卡在下载 Electron」一节要跟着改。
 
 **为什么现在不做**：要实测，且不影响当前功能。
-
----
-
-## T1 · `fs-api.js` 有两个导出没人用
-
-**现象**：`allowedRootList()` 与 `offeredRootList()`（`src/main/fs-api.js`）定义并导出，
-但 `src/`、`test/`、`scripts/` 里都没有调用点。
-
-**影响**：无功能影响。只是导出的 API 面比实际需要的大——后面有人看到会以为它们是被依赖
-的接口，改动时不敢动。
-
-**怎么修**：先确认没有计划中的用途（比如探针或调试要读），确认没有就删掉定义与导出。
-
-**为什么现在不做**：属于顺手清理，攒着和别的改动一起过。

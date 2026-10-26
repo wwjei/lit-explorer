@@ -17,9 +17,9 @@
  * 保存是自动的：拖动 / 缩放松手、文字提交、删除、撤销各写一次。写入按顺序排队，
  * 每次带上读取时的 size / mtime；磁盘上已经变了就停在「保存冲突」，不覆盖别人的修改。
  *
- * 加载顺序：icons.js → highlight.js → markdown.js → vendor/docpreview.js →
- *           pane.js → preview-body.js → webview.js → svgedit.js → find.js →
- *           projects.js → app.js。
+ * 加载顺序：shared/contracts.js → paths.js → icons.js → highlight.js → markdown.js →
+ *           vendor/docpreview.js → pane.js → preview-body.js → webview.js → svgedit.js →
+ *           find.js → projects.js → app.js。
  */
 (function () {
   'use strict';
@@ -35,9 +35,7 @@
   const HANDLES = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
   const DATA_IMAGE = /^data:image\/(?:png|jpe?g|gif|webp|avif|bmp);base64,/i;
 
-  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({
-    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-  })[c]);
+  const esc = PV.highlight.escapeAttr;
 
   /** 保留两位小数，避免 transform 里出现一长串浮点尾巴 */
   function fmt(n) {
@@ -172,6 +170,23 @@
       cur = cur.parentElement;
     }
     return null;
+  }
+
+  /**
+   * 双击点可能落在两个字形之间的空隙里（浏览器不会把 text 当成整块可点区域），
+   * 这时用包围盒再找一次：取包含该点、面积最小的 text / tspan。
+   */
+  function textAtPoint(root, x, y) {
+    let best = null;
+    for (const el of root.querySelectorAll('tspan, text')) {
+      if (el.querySelector('tspan, textPath')) continue;
+      const r = el.getBoundingClientRect();
+      if (r.width < 1 || r.height < 1) continue;
+      if (x < r.left || x > r.right || y < r.top || y > r.bottom) continue;
+      const area = r.width * r.height;
+      if (!best || area < best.area) best = { el: el, area: area };
+    }
+    return best ? best.el : null;
   }
 
   function canResize(el) {
@@ -531,8 +546,10 @@
         before: serialize(),
         moved: false
       };
-      // 拖出窗口也要收到 pointerup，否则下一次移动会接着把形状拖走
-      try { stage.setPointerCapture(e.pointerId); } catch { /* 合成事件没有真实指针 */ }
+      // 拖出窗口也要收到 pointerup。捕获必须设在被点的元素上，不能设在 stage：
+      // 捕获到 stage 会把同一串输入里的 mouseup / click / dblclick 也重定向过去，
+      // 浏览器就认为两次点击没落在文字上，双击编辑永远打不开。
+      try { el.setPointerCapture(e.pointerId); } catch { /* 合成事件没有真实指针 */ }
     }
 
     function onMove(e) {
@@ -612,7 +629,7 @@
         before: serialize(),
         moved: false
       };
-      try { stage.setPointerCapture(e.pointerId); } catch { /* ignore */ }
+      try { el.setPointerCapture(e.pointerId); } catch { /* ignore */ }
     }
 
     function applyResize(dx, dy) {
@@ -712,13 +729,8 @@
 
       stage.addEventListener('dblclick', (e) => {
         if (input) return;
-        const target = textTarget(e.target, root);
-        if (!target) {
-          if (shapeTarget(e.target, root) && e.target.localName === 'text') {
-            h.toast('这段文字由多个片段组成，请双击具体的一行');
-          }
-          return;
-        }
+        const target = textTarget(e.target, root) || textAtPoint(root, e.clientX, e.clientY);
+        if (!target) return;
         e.preventDefault();
         openInput(target);
       });

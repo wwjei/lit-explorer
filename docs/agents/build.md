@@ -23,7 +23,8 @@ README 与界面直接使用它。`scripts/build-icons.mjs` 自带 PNG 解码、
 上挂东西，由 `index.html` 按固定顺序 `<script>` 加载，没有模块系统：
 
 ```
-icons.js → highlight.js → markdown.js → vendor/docpreview.js
+src/shared/contracts.js（主进程 require，渲染进程先加载）
+paths.js → icons.js → highlight.js → markdown.js → vendor/docpreview.js
          → pane.js → preview-body.js → webview.js → svgedit.js → find.js → projects.js → app.js
 ```
 
@@ -32,12 +33,14 @@ icons.js → highlight.js → markdown.js → vendor/docpreview.js
 
 | 文件 | 管什么 |
 | --- | --- |
-| `pane.js`（`PV.pane`） | 预览窗格作为一个单元的全部事情：内容身份 `bodyKey`、渲染任务身份 `reqId` / `pending`、创建与销毁、固定时的正文迁移、每列的宽度与排列、按住头部拖动重排固定列 |
+| `src/shared/contracts.js` | 两个进程必须一致的数量上限与可固定类型白名单。主进程 `require`，渲染进程由 `index.html` 先加载成 `PV.contracts`；两边读同一份，避免上限 / 类型名单各写一遍后漂移 |
+| `paths.js`（`PV.paths`） | 界面层的路径比较与展示：Windows 大小写不敏感、`\` 与 `/` 等价、相对工作区根的各段与副标题。主进程 `fs-api.js` 的真实路径校验是另一件事，不要合并 |
+| `pane.js`（`PV.pane`） | 预览窗格作为一个单元的全部事情：内容身份 `bodyKey`、渲染任务身份 `reqId` / `pending`、创建与销毁、固定 / 分屏时的正文迁移、列模型（一列 1–2 个窗格，列宽与上下比例）、抓手换位 / 下 1/3 分屏 / 临时列右拖自动固定 |
 | `preview-body.js`（`PV.body`） | 正文与头部**画成什么样**：按类型分派（Markdown / 代码视图 / 图片与连续预览 / HTML 迷你浏览器 / PDF / docx / pptx / 网页 / SVG 编辑）、头部副标题与元信息、缩放档位 |
-| `webview.js`（`PV.web`） | 内嵌网页的几何同步：把每个网页预览列当前该占的矩形声明给主进程（`web:sync`），用 rAF 合并拖动与缩放；弹层打开时先 `setOccluded(true)` 把原生视图藏起来 |
+| `webview.js`（`PV.web`） | 内嵌网页的几何同步：把每个网页预览列当前该占的矩形声明给主进程（`web:sync`），用 rAF 合并拖动与缩放；弹层打开时先 `setOccluded(true)`、拖动列 / 分隔条 / 窗格时先 `setDragHidden(true)` 把原生视图藏起来（松手后按新矩形回来） |
 | `svgedit.js`（`PV.svgedit`） | SVG 编辑模式的正文：解析与安全清洗、选择、拖动（矩形带框内文字）、矩形八向缩放、文字单行编辑、删除、撤销重做、自动保存；它自己管 `pane.view.destroy` 清理监听与 ResizeObserver |
 | `find.js`（`PV.find`） | 预览内查找：查找条、命中标记、在命中之间跳转 |
-| `projects.js`（`PV.projects`） | 项目切换条：最多 5 个项目、图标目录与图标选择、每项目浏览位置的持久化；打开 / 切换由 `app.js` 通过 `PV.projects.init()` 注入 |
+| `projects.js`（`PV.projects`） | 项目切换条：最多 5 个项目、图标目录与图标选择、每项目浏览位置与固定列布局的持久化；打开 / 切换由 `app.js` 通过 `PV.projects.init()` 注入 |
 | `app.js` | 目录导航（多栏、虚拟滚动、快速访问与网页条目）、键盘 / 指针 / 主进程事件接线，以及把上面几个模块接起来 |
 
 分层是为了把「异步任务与界面归属」收在一处：正文**只能通过任务对象写**
@@ -63,7 +66,7 @@ SVG 编辑的写文件不在渲染进程：`PV.svgedit` 只调 `pv.writeSvg()`�
 （size / mtime）并在不一致时返回 `CONFLICT`，写临时文件后原子替换；边界见
 [security.md](security.md#svg-编辑的写入通道)。
 
-动这个分层时，`test/integration.test.cjs` 的 C1 / C2 / C4 / F1 / P1 / P3 / E1 / E2 / E3 / W1
+动这个分层时，`test/integration.test.cjs` 的 C1 / C2 / C4 / F1 / P1 / P3 / P4 / E1 / E2 / E3 / W1
 就是它的回归网。
 
 ## 打包内容

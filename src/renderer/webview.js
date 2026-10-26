@@ -10,17 +10,21 @@
  *   每次 renderPreview、列宽拖动、窗口缩放 / 最大化、预览收起、窗口失焦。
  * 用 requestAnimationFrame 合并，拖动分界线时不会每像素一次 IPC。
  *
- * 加载顺序：icons.js → highlight.js → markdown.js → vendor/docpreview.js →
- *           pane.js → preview-body.js → webview.js → find.js → projects.js → app.js。
+ * 加载顺序：shared/contracts.js → paths.js → icons.js → highlight.js → markdown.js →
+ *           vendor/docpreview.js → pane.js → preview-body.js → webview.js → svgedit.js →
+ *           find.js → projects.js → app.js。
  */
 (function () {
   'use strict';
 
   /** 有弹层（网页表单、项目图标选择器）压住预览区时，先把所有网页视图藏起来 */
   let occluded = false;
+  /** 拖动列 / 分隔条 / 窗格时也先藏起来：原生视图会吃掉鼠标事件，拖动会断 */
+  let dragHidden = false;
   let frame = 0;
 
   function visibleInPane(pane) {
+    if (occluded || dragHidden) return false;
     if (pane.el.hidden) return false;
     const preview = document.getElementById('preview');
     if (!preview || preview.hidden) return false;
@@ -79,10 +83,17 @@
     schedule();
   }
 
+  /** 拖动期间藏网页视图（只藏不销毁）；松手后 afterLayout 会按新矩形放回来 */
+  function setDragHidden(on) {
+    dragHidden = !!on;
+    schedule();
+  }
+
   window.PV = window.PV || {};
   PV.web = {
     sync: sync,
     schedule: schedule,
-    setOccluded: setOccluded
+    setOccluded: setOccluded,
+    setDragHidden: setDragHidden
   };
 })();

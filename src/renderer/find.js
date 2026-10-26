@@ -9,8 +9,9 @@
  * 通知到这里：窗格那边调 closeIfOn / revalidate / afterRender / carryFrom。
  * 窗格本身的信息（哪个可见、最近操作的是谁、点在谁身上）一律问 PV.pane。
  *
- * 加载顺序：icons.js → highlight.js → markdown.js → vendor/docpreview.js →
- *           pane.js → preview-body.js → webview.js → svgedit.js → find.js → projects.js → app.js。
+ * 加载顺序：shared/contracts.js → paths.js → icons.js → highlight.js → markdown.js →
+ *           vendor/docpreview.js → pane.js → preview-body.js → webview.js → svgedit.js →
+ *           find.js → projects.js → app.js。
  */
 (function () {
   'use strict';

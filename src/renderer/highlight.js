@@ -72,9 +72,15 @@
     return EXT_LANG[lower.slice(dot + 1)] || null;
   }
 
+  /** 文本上下文转义：不进属性时用它 */
   function escapeHtml(s) {
     return String(s == null ? '' : s)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  /** 属性上下文转义（含引号）：拼 HTML 字符串时所有插值都该走这个 */
+  function escapeAttr(s) {
+    return escapeHtml(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
   function fmtSize(bytes) {
@@ -461,6 +467,7 @@
     highlightFences: highlightFences,
     langFor: langFor,
     escapeHtml: escapeHtml,
+    escapeAttr: escapeAttr,
     LINE_H: LINE_H,
     /** 最近一次分词的分段耗时，供性能核对使用 */
     stats: stats

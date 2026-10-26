@@ -19,7 +19,9 @@
   不能直接 `store.patch(changes)`：`state.window` 会在下次启动时当 `BrowserWindow` 参数，
   `projects[].path` 会在下次启动时被 `offerRoot`。窗口只取 `{x,y,width,height}`，
   项目路径必须 `isOfferedRoot()`，其余字段逐个校验类型与范围。新增可持久化字段时，
-  同时改 `sanitizePatch()` 与测试（单测 S6）。
+  同时改 `sanitizePatch()` 与测试（单测 S6）。`projects[].nav.layout` 里的固定列路径
+  同样不是授权依据：恢复时渲染进程只保留当前工作区内的路径（`PV.paths.partsUnder()`），
+  实际读取仍过 `assertAllowed()`；网页格只接受规范化后的 `http(s)`。
 - 不要在 `preload.js` 暴露通用的写、删除、移动或执行任意命令的接口；目前只有
   `writeSvg()` 这一个写入口，不要再加「写任意文件」的变体；
 - 授权决策留在主进程。渲染进程只能打开主进程**给过**的目录（`fs-api.js` 的
@@ -86,7 +88,12 @@ SMIL、事件属性、`javascript:` / 危险 `data:` 链接、`file:` / 相对�
 - 独立的 `persist:web-docs` 会话，**不挂 preload**，`sandbox: true`、
   `contextIsolation: true`、`nodeIntegration: false`；页面拿不到 `pv` 桥接。
   宿主的 `pv://` 处理器不在这个会话里，另外在会话层取消 `pv://` / `file://` 请求；
-- 权限默认拒绝（只放行 `clipboard-sanitized-write`，在线文档的复制按钮要用）；
+- 权限默认拒绝（只放行 `clipboard-sanitized-write`，在线文档的复制按钮要用）。
+  `clipboard-read`（右键粘贴 / 页面粘贴按钮）按 `requestingUrl` 的 origin 弹一次原生确认，
+  决定只在本次运行内记住；拒绝后 `Ctrl+V` 仍然可用。`setPermissionCheckHandler` 对
+  `clipboard-read` 返回 true 只是让页面的 `permissions.query` 报告 granted（否则在线
+  文档会认为剪贴板被禁用、不显示粘贴入口），**真正的读取仍会走 request handler 询问**——
+  不要把这个 check 改成对所有权限返回 true；
   下载一律拦截；`window.open` 转系统浏览器；`will-attach-webview` 拒绝；
 - 页面内部导航允许 `http(s)`，其他协议由 `will-navigate` / `will-redirect` 拦下；
 - 不要给主窗口打开 `webviewTag`，不要在网页视图里挂 preload，也不要把它改成

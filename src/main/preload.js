@@ -23,6 +23,7 @@ contextBridge.exposeInMainWorld('pv', {
   readBytes: (filePath) => ipcRenderer.invoke('fs:read-bytes', filePath),
   stat: (target) => ipcRenderer.invoke('fs:stat', target),
   previewUrl: (filePath) => ipcRenderer.invoke('fs:preview-url', filePath),
+  resolveImages: (mdPath, srcs) => ipcRenderer.invoke('fs:resolve-images', mdPath, srcs),
   writeSvg: (filePath, content, expected) =>
     ipcRenderer.invoke('fs:write-svg', filePath, content, expected),
 

@@ -174,6 +174,7 @@ body.is-maximized .app{box-shadow:none}
   flex:none;height:30px;display:flex;align-items:center;justify-content:space-between;gap:8px;
   padding:0 8px 0 12px;border-bottom:1px solid var(--line-soft);
   font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);
+  order:0;
 }
 .col-head b{flex:1;min-width:0;font-weight:500;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .col-head span{flex:none;font-variant-numeric:tabular-nums}
@@ -183,7 +184,7 @@ body.is-maximized .app{box-shadow:none}
 }
 .col-toggle:hover{background:var(--hover);color:var(--text)}
 .col-toggle.is-on{background:var(--sel);color:var(--accent-ink)}
-.col-list{flex:1;overflow-y:auto;overflow-x:hidden;padding:8px 6px 16px}
+.col-list{flex:1;overflow-y:auto;overflow-x:hidden;padding:8px 6px 16px;order:1}
 .col-list.is-virt{padding:0 6px;position:relative}
 .vspace{position:relative;width:100%}
 .vwin{position:absolute;left:0;right:0;top:0}
@@ -226,24 +227,21 @@ body.is-maximized .app{box-shadow:none}
 .row.is-broken .nm{color:var(--muted);text-decoration:line-through}
 
 /* ============ 最左栏：项目根目录 / 快速访问 两个面板 ============ */
-/* 顺序：默认项目根目录在上、快速访问在下，中间夹一条可拖动的分隔条 */
-.col-head{order:0}
-.col-list{order:1}
-.panel-resize{order:2}
-.fav-panel{order:3}
+/* 顺序：默认项目根目录在上、快速访问在下，中间夹一条可拖动的分隔条；
+   交换只改 order，DOM 顺序不变，面板内部的查询逻辑不受影响 */
 /* 两个面板的高度由 applyLeftSplit 按「上 : 下」比例写成行内样式（默认 2/3 : 1/3） */
 .fav-panel{
-  flex:1 1 auto;min-height:0;
+  order:3;flex:1 1 auto;min-height:0;
   display:flex;flex-direction:column;
   border-top:1px solid var(--line);background:var(--panel);
 }
-/* 交换上下顺序：只改视觉顺序，DOM 顺序不变，面板内部的查询逻辑不受影响 */
+/* 交换上下顺序：只改视觉顺序 */
 .col.is-fav-top .fav-panel{order:0;border-top:0;border-bottom:1px solid var(--line)}
 .col.is-fav-top .panel-resize{order:1}
 .col.is-fav-top .col-head{order:2}
 .col.is-fav-top .col-list{order:3}
 /* 两个面板之间的分隔条（7px 是为了好抓，视觉上是一条线） */
-.panel-resize{flex:none;height:7px;position:relative;cursor:row-resize;background:var(--panel)}
+.panel-resize{order:2;flex:none;height:7px;position:relative;cursor:row-resize;background:var(--panel)}
 .panel-resize::after{content:"";position:absolute;inset:2px 0;background:transparent}
 .panel-resize:hover::after{background:var(--sel-line)}
 .panel-resize.is-drag::after{background:var(--accent)}
@@ -285,13 +283,18 @@ body.resizing{cursor:col-resize}
 /* ============ 预览区与窗格 ============ */
 .preview{flex:none;display:flex;min-height:0;background:var(--panel)}
 .panes{display:flex;min-height:0}
-/* 一个预览窗格：临时预览与每个固定住的预览各占一个，宽度各自独立 */
-.pane{
-  flex:none;min-width:0;min-height:0;display:flex;flex-direction:column;
-  position:relative;background:var(--panel);border-left:1px solid var(--line);
-  container-type:inline-size;
+/* 一列预览：宽度属于列，列里放 1–2 个上下排列的窗格 */
+.pane-col{
+  flex:none;min-width:0;min-height:0;display:flex;position:relative;
+  background:var(--panel);border-left:1px solid var(--line);
 }
-/* 窗格左侧边界：拖动只改这一列的宽度 */
+.pane-stack{flex:1 1 auto;min-width:0;min-height:0;display:flex;flex-direction:column}
+/* 一个预览窗格：宽度由所在的列决定，列内两格时上下分 */
+.pane{
+  flex:1 1 0;width:100%;min-width:0;min-height:0;display:flex;flex-direction:column;
+  position:relative;background:var(--panel);container-type:inline-size;
+}
+/* 列左侧边界：拖动只改这一列的宽度 */
 .pane-resize{
   position:absolute;left:-3px;top:0;bottom:0;width:7px;z-index:3;cursor:col-resize;
 }
@@ -300,17 +303,48 @@ body.resizing{cursor:col-resize}
 .pane-resize.is-drag::after{background:var(--accent)}
 /* 固定住的窗格：头部顶边加一道强调色细线，和临时预览区分开 */
 .pane.is-pinned .pv-head{box-shadow:inset 0 2px 0 var(--accent)}
+/* 上下分屏的分隔条：拖动改两格的比例 */
+.pane-split{
+  flex:none;height:6px;position:relative;z-index:3;cursor:row-resize;
+  background:var(--panel-2);border-top:1px solid var(--line);border-bottom:1px solid var(--line);
+}
+.pane-split::after{
+  content:"";position:absolute;left:50%;top:2px;width:28px;height:2px;margin-left:-14px;
+  border-radius:1px;background:var(--line);opacity:.9;
+}
+.pane-split:hover{background:var(--hover)}
+.pane-split:hover::after{background:var(--accent)}
+/* 拖到某一列下 1/3 时的落点提示：底部染色 + 目标列头部提亮（网页列也不至于看不见） */
+.split-hint{
+  display:none;position:absolute;left:0;right:0;bottom:0;height:33%;z-index:4;
+  pointer-events:none;background:color-mix(in srgb,var(--accent) 10%,transparent);
+  border-top:2px solid var(--accent);
+}
+.pane-col.is-split-target .split-hint{display:block}
+.pane-col.is-split-target > .pane-stack > .pane:first-child .pv-head{
+  background:color-mix(in srgb,var(--accent) 9%,var(--panel));
+}
 .pv-head{
   flex:none;display:flex;align-items:flex-start;flex-wrap:wrap;gap:10px;
   padding:12px 12px 10px 14px;border-bottom:1px solid var(--line-soft);
-  position:relative;cursor:grab;user-select:none;
+  position:relative;user-select:none;
 }
 .pv-head:empty{display:none}
 .pv-head button{cursor:pointer}
-/* 按住头部拖动固定列：拖动中标题变淡，目标缝隙画一条强调色竖线 */
-.pane.is-moving .pv-head{opacity:.55;cursor:grabbing}
+/* 头部左边的小抓手：只有这一小块可以拖动换位置 / 分屏，不再整条头部都是手 */
+.pv-head .pv-grip{
+  flex:none;align-self:flex-start;display:grid;place-items:center;
+  width:16px;height:24px;margin:-3px 0 0 -8px;padding:0;
+  border:0;border-radius:5px;background:none;color:var(--muted);
+  opacity:.65;cursor:grab;
+}
+.pv-head .pv-grip:hover{opacity:1;background:var(--hover);color:var(--text-2)}
+.pv-head .pv-grip:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+/* 拖动中标题变淡，目标缝隙画一条强调色竖线 */
+.pane.is-moving .pv-head{opacity:.55}
+.pane.is-moving .pv-grip{cursor:grabbing;opacity:.9}
 body.pane-moving{cursor:grabbing}
-body.pane-moving .pv-head{cursor:grabbing}
+body.pane-moving .pv-grip{cursor:grabbing}
 .pv-head.drop-before::before,
 .pv-head.drop-after::before{
   content:"";position:absolute;top:0;bottom:0;width:3px;z-index:2;
@@ -625,6 +659,12 @@ kbd{
 .prose th{background:var(--panel-2);font-weight:500;color:var(--text-2)}
 .prose tbody tr:hover{background:var(--panel-2)}
 .prose del{color:var(--muted)}
+/* 正文图片：限宽、圆角；白底让深色主题下的透明 PNG / SVG 也能看清 */
+.prose img{max-width:100%;height:auto;border-radius:8px;border:1px solid var(--line-soft);background:#fff}
+/* 图片没加载出来的占位：显示 alt 与原因，不留碎图标 */
+.md-img-missing{display:inline-flex;align-items:baseline;gap:6px;padding:2px 8px;
+  border:1px dashed var(--line-strong);border-radius:6px;color:var(--muted);font-size:12px}
+.md-img-missing .why{opacity:.75}
 .md-table-wrap{overflow-x:auto}
 
 /* ============ 项目切换条（左栏底部） ============ */
@@ -634,10 +674,20 @@ kbd{
   border-top:1px solid var(--line);background:var(--panel);
 }
 .proj-tile{
-  width:32px;height:32px;flex:none;border-radius:8px;
+  position:relative;width:32px;height:32px;flex:none;border-radius:8px;
   display:grid;place-items:center;background:transparent;
 }
 .proj-tile:hover{background:var(--hover)}
+/* 活跃项目图标下方一条灰色短线；切换项目时从旧位置滑过来（projects.js 给 --proj-line-from） */
+.proj-tile.is-on::after{
+  content:"";position:absolute;left:7px;bottom:-3px;width:18px;height:2px;
+  border-radius:1px;background:var(--muted);opacity:.9;
+}
+.proj-tile.is-line-move::after{animation:proj-line-move .24s cubic-bezier(.22,.61,.36,1)}
+@keyframes proj-line-move{
+  from{transform:translateX(var(--proj-line-from,0))}
+  to{transform:translateX(0)}
+}
 /* 没打开的项目整组去色；悬停时恢复，方便确认要点的是哪个 */
 .proj-ic{display:grid;place-items:center;filter:grayscale(1);opacity:.8;transition:filter .15s,opacity .15s}
 .proj-tile:hover .proj-ic,
@@ -647,6 +697,9 @@ kbd{
   display:grid;place-items:center;width:16px;height:16px;
   font-size:10.5px;font-weight:600;line-height:1;
 }
+/* 用户自定义的文字图标：两个字符时缩小一点，保证 16px 的图标框里放得下 */
+.proj-text{font-size:9.5px;letter-spacing:0}
+.proj-text.is-two{font-size:8px;letter-spacing:-.2px}
 .proj-img{display:block;width:16px;height:16px;border-radius:4px;object-fit:cover}
 .proj-add{
   margin-left:auto;width:32px;height:32px;flex:none;border-radius:8px;
@@ -691,12 +744,16 @@ kbd{
 [data-theme="dark"] .proj-warn{border:1px solid rgba(255,255,255,.09)}
 
 /* ============ 项目图标选择 ============ */
-.pj-pop{
-  position:fixed;z-index:60;width:300px;padding:6px;border-radius:12px;
+/* 项目图标选择器与网页表单共用浮层外壳，只有宽高不同 */
+.pj-pop,.web-pop{
+  position:fixed;z-index:60;border-radius:12px;
   background:var(--panel);border:1px solid var(--line);
   box-shadow:0 18px 48px -12px rgba(16,24,40,.28),0 2px 6px rgba(16,24,40,.07);
 }
-[data-theme="dark"] .pj-pop{box-shadow:0 18px 52px -12px rgba(0,0,0,.72),0 2px 6px rgba(0,0,0,.4)}
+[data-theme="dark"] .pj-pop,[data-theme="dark"] .web-pop{
+  box-shadow:0 18px 52px -12px rgba(0,0,0,.72),0 2px 6px rgba(0,0,0,.4);
+}
+.pj-pop{width:300px;padding:6px}
 .pj-pop.is-wide{width:322px}
 .pj-pop-h{display:flex;align-items:center;gap:9px;height:42px;padding:0 6px 0 4px;margin-bottom:2px;
   border-bottom:1px solid var(--line-soft)}
@@ -714,6 +771,17 @@ kbd{
   padding:0 7px;border-radius:7px;font-size:11.5px;color:var(--text-2);text-align:left}
 .pj-more:hover{background:var(--hover);color:var(--text)}
 .pj-more .pj-chev{margin-left:auto;color:var(--muted)}
+/* 自定义文字图标：最多两个字符，Enter 或「应用」生效 */
+.pj-text{display:flex;align-items:center;gap:6px;height:32px;margin:4px 4px 0;
+  padding:0 4px 0 7px;border-radius:7px;background:var(--panel-2);border:1px solid var(--line)}
+.pj-text:focus-within{border-color:var(--accent)}
+.pj-text .pj-label{padding:0;flex:none;font-size:10.5px}
+.pj-text-in{flex:1;min-width:0;height:100%;border:0;background:none;outline:none;
+  color:var(--text);font:inherit;font-size:12px;letter-spacing:.02em}
+.pj-text-in::placeholder{color:var(--muted);letter-spacing:0}
+.pj-text-ok{flex:none;height:22px;padding:0 8px;border-radius:6px;
+  background:var(--panel);color:var(--text-2);font-size:11px;border:1px solid var(--line)}
+.pj-text-ok:hover{background:var(--hover);color:var(--text)}
 .pj-sep{height:1px;background:var(--line-soft);margin:4px 6px}
 .pj-item{display:flex;align-items:center;gap:8px;width:100%;height:29px;padding:0 8px;border-radius:7px;
   font-size:12px;color:var(--text);text-align:left}
@@ -736,14 +804,7 @@ kbd{
 .pj-two button:hover{background:var(--hover);color:var(--text)}
 
 /* ============ 网页快捷方式的添加 / 编辑 ============ */
-.web-pop{
-  position:fixed;z-index:60;width:308px;padding:10px;border-radius:12px;
-  background:var(--panel);border:1px solid var(--line);
-  box-shadow:0 18px 48px -12px rgba(16,24,40,.28),0 2px 6px rgba(16,24,40,.07);
-}
-[data-theme="dark"] .web-pop{
-  box-shadow:0 18px 52px -12px rgba(0,0,0,.72),0 2px 6px rgba(0,0,0,.4);
-}
+.web-pop{width:308px;padding:10px}
 .web-pop-h{
   display:flex;align-items:center;gap:7px;padding:0 2px 8px;
   font-size:12px;color:var(--text-2);border-bottom:1px solid var(--line-soft);
@@ -803,6 +864,7 @@ body.has-web #toast.on{transform:translateY(0)}
 @media (prefers-reduced-motion:reduce){
   .col.is-new{animation:none}
   .skeleton i{animation:none}
+  .proj-tile.is-line-move::after{animation:none}
   #toast{transition:none}
 }
 @media (max-width:1000px){

@@ -1,24 +1,31 @@
 'use strict';
 
 /**
- * 需要 Electron 的用例。每段都要付一次 Electron 启动的固定成本，迭代时用 --only
- * 挑相关的那一段跑，别整跑。
+ * 需要 Electron 的用例。窗口只开一次；段内等待一律等界面真的进入预期状态，
+ * 不再用固定 sleep 凑时间。迭代时用 --only 挑相关的那一段跑，别整跑。
  *
  *   proto  pv:// 协议边界（工作区内 200、区外与经链接指向区外 403）
+ *   U1     预览地址带文件版本（保存后 URL 变化，查询串不影响协议取文件）
  *   S1     不可信 docx 不执行脚本（altChunk / 超链接）
  *   S4     渲染进程不能自行扩大授权根（workspace:open 只认主进程给过的目录）
  *   C1     加载完成前固定，固定列不能停在加载态
  *   C2     旧文档解析失败不覆盖新文件的预览
  *   C3     高亮 Worker 并发初始化不丢语言
  *   C4     重新读取时晚到的旧响应不能覆盖新内容
+ *   M1     Markdown 图片：相对地址走 pv://，越界与缺失落成占位
  *   F1     预览内查找（命中、切到不支持查找的列时自动关、固定时跟过去）
  *   F2     代码块异步高亮后查找命中不丢
  *   P1     图片列（连续预览列出同目录图片、缩放档位、切到非图片时退出）
  *   P2     晚到的旧图片请求不污染缩放状态
- *   P3     拖动固定列头部换位置；拖临时预览列只提示先固定
+ *   P3     拖动抓手换位置；临时列拖到右侧自动固定
+ *   P4     拖到列的下 1/3 分屏；取消分屏里的一格恢复单格；临时列也能直接分屏
+ *   P5     切到别的项目再回来：固定列、列宽、分屏比例与模式都按项目恢复
+ *   P6     关掉的临时预览列不会因为切项目被重新打开
  *   E1     SVG 编辑：改字、拖动、矩形缩放、删除（连框内文字）、撤销与自动保存
  *   E2     SVG 保存边界：只写工作区内已存在的 .svg，版本冲突不覆盖
  *   E3     含脚本 / 事件属性 / javascript: 链接的 SVG 只读显示，不执行也不保存
+ *   E4     真实鼠标双击文字能打开输入框（指针捕获不能吞掉 dblclick）
+ *   W2     网页读剪贴板按站点询问一次，允许后本次运行不再问
  *   W1     网页视图只接受 http(s)，移出同步列表即销毁
  *   S6     并发切换工作区只留一个授权根
  *
@@ -32,9 +39,10 @@
  */
 
 const electron = require('electron');
-const { app, BrowserWindow, protocol, ipcMain, net, session } = electron;
+const { app, BrowserWindow, protocol, ipcMain, net, session, dialog, clipboard } = electron;
 const fs = require('node:fs');
 const path = require('node:path');
+const http = require('node:http');
 const vm = require('node:vm');
 const JSZip = require('jszip');
 const { ROOT, TMP, run, ok, eq, eqJson, done, freshDir, linkDir } = require('./helpers.cjs');
@@ -43,10 +51,52 @@ const fsApi = require(path.join(ROOT, 'src/main/fs-api.js'));
 const webViews = require(path.join(ROOT, 'src/main/web-views.js'));
 app.setPath('userData', path.join(TMP, 'user-data'));
 
-/** 各用例里人为注入的延迟，集中在这里便于调整（也是整个套件耗时的大头） */
+/** 各用例里人为注入的延迟，集中在这里便于调整；它们是竞态用例的机制，不要为提速随意缩短 */
 const DELAY = { read: 500, parse: 500, fast: 20 };
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * 主进程侧的条件等待：界面到位就返回，超时才失败。替代固定 sleep——
+ * 机器慢时自动多等，机器快时立刻继续。
+ */
+async function waitPage(runPage, expr, timeout) {
+  const end = Date.now() + (timeout || 8000);
+  for (;;) {
+    const value = await runPage(expr);
+    if (value) return value;
+    if (Date.now() > end) throw new Error('waitPage timeout: ' + expr);
+    await sleep(10);
+  }
+}
+
+/** 等这次 stubList 给的条目真的渲染出来，而不是上一段留下的行 */
+async function waitStubbedRows(runPage) {
+  const want = JSON.stringify(stubbedEntries.slice().sort());
+  await waitPage(runPage, `JSON.stringify([...document.querySelectorAll('.col[data-col="0"] .row .nm')]
+    .map(e=>e.textContent.trim()).sort()) === ${JSON.stringify(want)}`);
+}
+
+/**
+ * 这些段落共用 prepare() 建出来的工作区：固定列会作为项目布局存下来，
+ * 下一段重开同一根时会恢复上一段的 pin。段末清掉，避免夹具互相污染。
+ */
+async function clearPinnedColumns(runPage) {
+  await runPage('(()=>{PV.pane.clearPins(); PV.pane.renderPreview(); return true;})()');
+}
+
+/** 页内条件等待：所有 executeJavaScript 片段共用这一个全局函数 */
+const PAGE_WAIT_FOR = `window.waitFor = async (fn, timeout) => {
+  const end = Date.now() + (timeout || 8000);
+  for (;;) {
+    let value;
+    try { value = fn(); } catch (err) { value = null; }
+    if (value) return value;
+    if (Date.now() > end) throw new Error('waitFor timeout');
+    await new Promise((r) => setTimeout(r, 10));
+  }
+};
+void 0;`;
 
 /**
  * 把 main.js 载入沙箱，只为了拿 registerPreviewProtocol / toPreviewUrl。
@@ -71,14 +121,15 @@ function loadMainModule() {
       : n === './fs-api' ? fsApi
         : n === './state-sanitize' ? require(path.join(ROOT, 'src/main/state-sanitize.js'))
           : n === './web-url' ? require(path.join(ROOT, 'src/main/web-url.js'))
-            : n === './web-views' ? {
-              attachWindow: () => {},
-              sync: () => {},
-              reload: () => false,
-              destroyAll: () => {}
-            }
-              : n === './store' ? { load: async () => ({}), patch: async () => ({}) }
-                : require(n)),
+            : n === '../shared/contracts' ? require(path.join(ROOT, 'src/shared/contracts.js'))
+              : n === './web-views' ? {
+                attachWindow: () => {},
+                sync: () => {},
+                reload: () => false,
+                destroyAll: () => {}
+              }
+                : n === './store' ? { load: async () => ({}), patch: async () => ({}) }
+                  : require(n)),
     process: process,
     __dirname: path.join(ROOT, 'src/main'),
     URL, Response, console, setTimeout, clearTimeout
@@ -139,6 +190,7 @@ function renderer() {
         }
       });
       await createdWin.loadFile(path.join(ROOT, 'src/renderer/index.html'));
+      await createdWin.webContents.executeJavaScript(PAGE_WAIT_FOR);
       return (js) => createdWin.webContents.executeJavaScript(js);
     })();
   }
@@ -146,7 +198,9 @@ function renderer() {
 }
 
 /** 让文件列表里出现给定条目（渲染进程只认主进程推过来的列表） */
+let stubbedEntries = [];
 function stubList(ws, entries) {
+  stubbedEntries = entries.slice();
   ipcMain.removeHandler('fs:list');
   ipcMain.handle('fs:list', () => ({ entries: entries.map((e) => ({
     name: e, path: path.join(ws, e), isDir: false, kind: e.slice(e.lastIndexOf('.') + 1)
@@ -218,6 +272,20 @@ async function main() {
     eq('制表符混淆的脚本没有执行', s1.tabExecuted, 'undefined');
   });
 
+  await run('U1', '预览地址带文件版本，保存后 URL 会变化', async () => {
+    const f = await prepare();
+    const file = path.join(f.ws, 'versioned.svg');
+    fs.writeFileSync(file, '<svg xmlns="http://www.w3.org/2000/svg"/>');
+
+    const first = await mainCtx.handlers['fs:preview-url'](null, file);
+    ok('地址带文件版本', !!(first && first.url) && /[?&]v=\d+-\d+$/.test(first.url), first);
+    eq('带版本号的地址仍能读到文件', (await net.fetch(first.url)).status, 200);
+
+    fs.writeFileSync(file, '<svg xmlns="http://www.w3.org/2000/svg" width="9" height="9"/>');
+    const second = await mainCtx.handlers['fs:preview-url'](null, file);
+    ok('文件变化后 URL 也跟着变', second && second.url !== first.url, { first, second });
+  });
+
   await run('S4', '渲染进程不能自行扩大授权根', async () => {
     await prepare();
     const runPage = await renderer();
@@ -247,16 +315,18 @@ async function main() {
     stubList(f.ws, ['slow.md']);
     stubRead(async () => { await sleep(DELAY.read); return { text: 'LOADED_MARKER', size: 13 }; });
     createdWin.webContents.send('workspace:opened', f.ws);
-    await sleep(200);
+    await waitStubbedRows(runPage);
     const c1 = await runPage(`(async()=>{
       document.querySelector('.row').click();
       await new Promise(r=>setTimeout(r,50));
       document.querySelector('button[data-act="pin"]').click();
-      await new Promise(r=>setTimeout(r,${DELAY.read * 2 + 400}));
+      await waitFor(()=>[...document.querySelectorAll('.pane.is-pinned .pv-body')]
+        .some(e=>e.textContent.indexOf('LOADED_MARKER')>=0), 5000);
       return [...document.querySelectorAll('.pane.is-pinned .pv-body')].map(e=>e.textContent);
     })()`);
     ok('固定列显示正文而不是「读取中…」',
       c1.length === 1 && c1[0].indexOf('LOADED_MARKER') >= 0, c1);
+    await clearPinnedColumns(runPage);
   });
 
   await run('C2', '旧文档解析失败不覆盖新文件的预览', async () => {
@@ -266,9 +336,9 @@ async function main() {
     stubRead(() => ({ text: 'NEW_PREVIEW', size: 11 }));
     ipcMain.removeHandler('fs:read-bytes');
     ipcMain.handle('fs:read-bytes', () => ({ data: new Uint8Array([1, 2, 3]) }));
-    await runPage(`void(PV.docpreview.renderDocx=async()=>{await new Promise(r=>setTimeout(r,${DELAY.parse}));throw new Error('OLD_DOC_FAILURE')})`);
+    await runPage(`void(PV.docpreview.renderDocx=async()=>{await new Promise(r=>setTimeout(r,${DELAY.parse}));window.__oldDocFailed=1; throw new Error('OLD_DOC_FAILURE')})`);
     createdWin.webContents.send('workspace:opened', f.ws);
-    await sleep(200);
+    await waitStubbedRows(runPage);
     const c2 = await runPage(`(async()=>{
       const rows=[...document.querySelectorAll('.row')];
       rows.find(e=>e.textContent.includes('bad.docx')).click();
@@ -276,7 +346,8 @@ async function main() {
       rows.find(e=>e.textContent.includes('good.md')).click();
       await new Promise(r=>setTimeout(r,100));
       const before=document.querySelector('.pane:not(.is-pinned) .pv-body').textContent;
-      await new Promise(r=>setTimeout(r,${DELAY.parse + 300}));
+      await waitFor(()=>window.__oldDocFailed, 5000);
+      await new Promise(r=>setTimeout(r,50));
       return {before, after:document.querySelector('.pane:not(.is-pinned) .pv-body').textContent};
     })()`);
     ok('切换后显示新文件内容', c2.before.indexOf('NEW_PREVIEW') >= 0, c2.before);
@@ -315,18 +386,73 @@ async function main() {
       return { text: mine === 1 ? 'OLD_CONTENT' : 'LATEST_CONTENT', size: 13 };
     });
     createdWin.webContents.send('workspace:opened', f.ws);
-    await sleep(200);
+    await waitStubbedRows(runPage);
     const c4 = await runPage(`(async()=>{
+      const t0=Date.now();
       [...document.querySelectorAll('.row')].find(e=>e.textContent.includes('good.md')).click();
       await new Promise(r=>setTimeout(r,50));
       document.querySelector('.pane:not(.is-pinned) button[data-act="reload"]').click();
       await new Promise(r=>setTimeout(r,100));
       const before=document.querySelector('.pane:not(.is-pinned) .pv-body').textContent;
-      await new Promise(r=>setTimeout(r,${DELAY.read + 300}));
+      // 第一次读取的晚到响应在点击后 DELAY.read 落地；再留 100ms 给 IPC 派发
+      await new Promise(r=>setTimeout(r,Math.max(0, ${DELAY.read + 100} - (Date.now() - t0))));
       return {before, after:document.querySelector('.pane:not(.is-pinned) .pv-body').textContent};
     })()`);
     ok('重新读取后显示新内容', c4.before.indexOf('LATEST_CONTENT') >= 0, c4.before);
     ok('旧响应晚到时仍是新内容', c4.after.indexOf('LATEST_CONTENT') >= 0, c4.after);
+  });
+
+  await run('M1', 'Markdown 图片：相对地址渲染，越界与缺失落成占位', async () => {
+    const f = await prepare();
+    // 前面的段可能切过工作区（S4 会打开示例项目），这里把夹具重新登记回来
+    await fsApi.allowRoot(f.ws);
+    const runPage = await renderer();
+    const figures = path.join(f.ws, 'figures');
+    fs.mkdirSync(figures, { recursive: true });
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+      'base64');
+    fs.writeFileSync(path.join(figures, 'ok.png'), png);
+    fs.writeFileSync(path.join(f.outside, 'secret.png'), png);
+
+    stubList(f.ws, ['doc.md']);
+    stubRead(() => ({
+      text: [
+        '![本地](figures/ok.png)',
+        '![越界](../outside/secret.png)',
+        '![缺失](figures/nope.png)'
+      ].join('\n\n'),
+      size: 64
+    }));
+    // 真实的解析实现，测的是接线（授权判断仍在主进程里）
+    ipcMain.removeHandler('fs:resolve-images');
+    ipcMain.handle('fs:resolve-images', mainCtx.handlers['fs:resolve-images']);
+    createdWin.webContents.send('workspace:opened', f.ws);
+    await waitStubbedRows(runPage);
+
+    const m1 = await runPage(`(async()=>{
+      const pane=()=>document.querySelector('.pane:not(.is-pinned)');
+      [...document.querySelectorAll('.row')].find(e=>e.textContent.includes('doc.md')).click();
+      await waitFor(()=>pane().querySelector('.prose'));
+      await waitFor(()=>{
+        const imgs=[...pane().querySelectorAll('.prose img')];
+        const missing=pane().querySelectorAll('.md-img-missing').length;
+        return (imgs.length && imgs.every(i=>i.complete)) || missing===3;
+      });
+      const imgs=[...pane().querySelectorAll('.prose img')];
+      return {
+        imgs: imgs.map(i=>[i.getAttribute('src'), i.naturalWidth]),
+        missing: [...pane().querySelectorAll('.md-img-missing')].map(e=>e.textContent)
+      };
+    })()`);
+    eq('三张里只有本地那张生成 <img>', m1.imgs.length, 1);
+    ok('本地图片走 pv:// 并真的解码出来',
+      /^pv:\/\/local\/.+figures\/ok\.png\?v=\d+-\d+$/.test(m1.imgs[0] ? m1.imgs[0][0] : '')
+      && m1.imgs[0][1] > 0, m1.imgs);
+    eq('越界与缺失各落成一个占位', m1.missing.length, 2);
+    ok('占位写明原因（不在工作区内 / 文件不存在）',
+      /不在工作区内/.test(m1.missing.join('|')) && /文件不存在/.test(m1.missing.join('|')),
+      m1.missing);
   });
 
   await run('F1', '预览内查找：命中、切走自动关、固定时跟过去', async () => {
@@ -339,7 +465,7 @@ async function main() {
       size: 24
     }));
     createdWin.webContents.send('workspace:opened', f.ws);
-    await sleep(200);
+    await waitStubbedRows(runPage);
     const f1 = await runPage(`(async()=>{
       const wait=(ms)=>new Promise(r=>setTimeout(r,ms));
       const pane=()=>document.querySelector('.pane:not(.is-pinned)');
@@ -351,33 +477,34 @@ async function main() {
         i.value=q; i.dispatchEvent(new Event('input',{bubbles:true}));};
 
       clickRow('doc.md');
-      await wait(400);
+      await waitFor(()=>pane().querySelector('.prose') && /ZEBRA/.test(pane().textContent));
       ctrlF();
-      await wait(80);
+      await waitFor(()=>openFindBar());
       const opened=!!openFindBar();
       search('ZEBRA');
-      await wait(120);
+      await waitFor(()=>pane().querySelectorAll('mark.find-hit').length===2);
       const hits=pane().querySelectorAll('mark.find-hit').length;
       const count=openFindBar().querySelector('.find-count').textContent;
       openFindBar().querySelector('[data-find="next"]').click();
-      await wait(60);
+      await waitFor(()=>openFindBar().querySelector('.find-count').textContent==='2/2');
       const afterNext=openFindBar().querySelector('.find-count').textContent;
 
       // 切到不支持查找的代码视图：查找条应当自己关掉
       clickRow('code.js');
-      await wait(500);
+      await waitFor(()=>!openFindBar() && pane().querySelector('.codeview'));
       const closedOnCode=!openFindBar();
       const codeView=!!pane().querySelector('.codeview');
 
       // 回到 Markdown 再查一次，这次固定住：正文与查找条一起搬到新列
       clickRow('doc.md');
-      await wait(400);
+      await waitFor(()=>pane().querySelector('.prose') && /ZEBRA/.test(pane().textContent));
       ctrlF();
-      await wait(80);
+      await waitFor(()=>openFindBar());
       search('ZEBRA');
-      await wait(120);
+      await waitFor(()=>pane().querySelectorAll('mark.find-hit').length===2);
       pane().querySelector('button[data-act="pin"]').click();
-      await wait(400);
+      await waitFor(()=>{const p=document.querySelector('.pane.is-pinned');
+        return p && p.querySelectorAll('mark.find-hit').length===2;});
       const pin=document.querySelector('.pane.is-pinned');
       const pbar=pin.querySelector('.find-bar');
       const carried=!!pbar && !pbar.hidden && pbar.querySelector('.find-input').value==='ZEBRA';
@@ -391,6 +518,7 @@ async function main() {
     ok('切到代码视图后查找条自动关闭', f1.closedOnCode && f1.codeView, f1);
     ok('固定时查询词跟到新列', f1.carried, f1);
     eq('固定列里的命中重新落上', f1.pinHits, 2);
+    await clearPinnedColumns(runPage);
   });
 
   await run('F2', '代码块异步高亮不吞掉查找命中', async () => {
@@ -402,7 +530,7 @@ async function main() {
     const doc = 'ZEBRA outside\n\n```lua\n-- ZEBRA inside\n' + filler + '\n```\n';
     stubRead(() => ({ text: doc, size: doc.length }));
     createdWin.webContents.send('workspace:opened', f.ws);
-    await sleep(200);
+    await waitStubbedRows(runPage);
     const f2 = await runPage(`(async()=>{
       const wait=(ms)=>new Promise(r=>setTimeout(r,ms));
       const pane=()=>document.querySelector('.pane:not(.is-pinned)');
@@ -417,7 +545,8 @@ async function main() {
       await wait(40);
       const before=pane().querySelectorAll('mark.find-hit').length;
       const fenceSpansBefore=!!pane().querySelector('.md-code span');
-      await wait(1800);
+      await waitFor(()=>pane().querySelector('.md-code span')
+        && pane().querySelectorAll('.md-code mark.find-hit').length>=1, 10000);
       return {
         before: before,
         fenceSpansBefore: fenceSpansBefore,
@@ -444,28 +573,28 @@ async function main() {
     ipcMain.removeHandler('fs:preview-url');
     ipcMain.handle('fs:preview-url', () => ({ url: svg }));
     createdWin.webContents.send('workspace:opened', f.ws);
-    await sleep(200);
+    await waitStubbedRows(runPage);
     const p1 = await runPage(`(async()=>{
       const wait=(ms)=>new Promise(r=>setTimeout(r,ms));
       const pane=()=>document.querySelector('.pane:not(.is-pinned)');
       const clickRow=(n)=>[...document.querySelectorAll('.row')].find(e=>e.textContent.includes(n)).click();
 
       clickRow('a.svg');
-      await wait(400);
+      await waitFor(()=>pane().querySelector('.img-wrap'));
       const single=!!pane().querySelector('.img-wrap');
 
       pane().querySelector('button[data-act="seq"]').click();
-      await wait(700);
+      await waitFor(()=>pane().querySelectorAll('.imgseq-item').length===3);
       const items=pane().querySelectorAll('.imgseq-item').length;
       const current=pane().querySelectorAll('.imgseq-item.is-current').length;
 
       pane().querySelector('button[data-act="zoom-in"]').click();
-      await wait(150);
+      await waitFor(()=>pane().querySelector('[data-act="zoom-reset"]').textContent==='100%');
       const zoom=pane().querySelector('[data-act="zoom-reset"]').textContent;
 
       // 切到非图片：连续预览自动退出
       clickRow('note.md');
-      await wait(400);
+      await waitFor(()=>pane().querySelector('.prose') && !pane().querySelector('.imgseq'));
       return {
         single, items, current, zoom,
         seqExited: pane().querySelector('.imgseq') === null,
@@ -495,15 +624,18 @@ async function main() {
       return { url: name === 'x.svg' ? urlX : urlY };
     });
     createdWin.webContents.send('workspace:opened', f.ws);
-    await sleep(200);
+    await waitStubbedRows(runPage);
     const p2 = await runPage(`(async()=>{
       const wait=(ms)=>new Promise(r=>setTimeout(r,ms));
       const pane=()=>document.querySelector('.pane:not(.is-pinned)');
       const clickRow=(n)=>[...document.querySelectorAll('.row')].find(e=>e.textContent.includes(n)).click();
+      const t0=Date.now();
       clickRow('x.svg');
       await wait(50);
       clickRow('y.svg');
-      await wait(1200);
+      await waitFor(()=>pane().querySelector('.img-wrap img'));
+      const left=650-(Date.now()-t0);
+      if(left>0) await wait(left);
       pane().querySelector('[data-act="zoom-reset"]').click();
       await wait(80);
       pane().querySelector('button[data-act="zoom-in"]').click();
@@ -542,7 +674,7 @@ async function main() {
       return { ok: true, size: content.length, mtime: 1000 + writes.length };
     });
     createdWin.webContents.send('workspace:opened', f.ws);
-    await sleep(200);
+    await waitStubbedRows(runPage);
     const e1 = await runPage(`(async()=>{
       const wait=(ms)=>new Promise(r=>setTimeout(r,ms));
       const pe=(type,el,x,y)=>el.dispatchEvent(new PointerEvent(type,{
@@ -557,20 +689,21 @@ async function main() {
       const root=()=>pane().querySelector('.svg-stage svg');
 
       [...document.querySelectorAll('.row')].find(e=>e.textContent.includes('fig.svg')).click();
-      await wait(500);
+      await waitFor(()=>pane().querySelector('[data-act="svg-edit"]'));
       pane().querySelector('[data-act="svg-edit"]').click();
-      await wait(600);
+      await waitFor(()=>root());
       const mounted=!!root();
 
       // 双击改字
       const alpha=[...root().querySelectorAll('text')].find(t=>t.textContent==='Alpha');
       alpha.dispatchEvent(new MouseEvent('dblclick',{bubbles:true,cancelable:true}));
-      await wait(100);
+      await waitFor(()=>pane().querySelector('.svg-textinput'));
       const input=pane().querySelector('.svg-textinput');
       const inputShown=!!input;
       if(input){ input.value='Alpha2';
         input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true,cancelable:true})); }
-      await wait(300);
+      await waitFor(()=>[...root().querySelectorAll('text')].some(t=>t.textContent==='Alpha2')
+        && pane().querySelector('.svg-status').textContent==='已保存');
 
       // 拖动矩形：框里的文字跟着走
       let box=root().querySelector('#box');
@@ -579,7 +712,10 @@ async function main() {
       pe('pointerdown',box,br.left+br.width/2,br.top+br.height/2);
       pe('pointermove',window,br.left+br.width/2+30,br.top+br.height/2+20);
       pe('pointerup',window,br.left+br.width/2+30,br.top+br.height/2+20);
-      await wait(350);
+      await waitFor(()=>{const b=root().querySelector('#box');
+        const t=[...root().querySelectorAll('text')].find(t=>t.textContent==='Alpha2');
+        return (b.getAttribute('transform')||'').indexOf('translate')>=0
+          && (t.getAttribute('transform')||'').indexOf('translate')>=0;});
       const movedBox=(box.getAttribute('transform')||'').indexOf('translate')>=0;
       const movedText=([...root().querySelectorAll('text')]
         .find(t=>t.textContent==='Alpha2').getAttribute('transform')||'').indexOf('translate')>=0;
@@ -593,19 +729,21 @@ async function main() {
       pe('pointerdown',grip,g.left+g.width/2,g.top+g.height/2);
       pe('pointermove',window,g.left+g.width/2+50,g.top+g.height/2+30);
       pe('pointerup',window,g.left+g.width/2+50,g.top+g.height/2+30);
-      await wait(350);
+      await waitFor(()=>Number(root().querySelector('#box').getAttribute('width'))>w0);
       const w1=Number(root().querySelector('#box').getAttribute('width'));
 
       // 删除矩形：框里的文字一起删；Ctrl+Z 一起回来
       await click(root().querySelector('#gone'));
       await key(pane().querySelector('.svg-edit'),'Delete');
-      await wait(350);
+      await waitFor(()=>!root().querySelector('#gone')
+        && ![...root().querySelectorAll('text')].some(t=>t.textContent==='Beta'));
       const afterDelete={
         rect:!!root().querySelector('#gone'),
         beta:!![...root().querySelectorAll('text')].find(t=>t.textContent==='Beta')
       };
       await key(pane().querySelector('.svg-edit'),'z',{ctrlKey:true});
-      await wait(350);
+      await waitFor(()=>root().querySelector('#gone')
+        && [...root().querySelectorAll('text')].some(t=>t.textContent==='Beta'));
       const afterUndo={
         rect:!!root().querySelector('#gone'),
         beta:!![...root().querySelectorAll('text')].find(t=>t.textContent==='Beta')
@@ -702,14 +840,14 @@ async function main() {
       return { ok: true, size: content.length, mtime: 2 };
     });
     createdWin.webContents.send('workspace:opened', f.ws);
-    await sleep(200);
+    await waitStubbedRows(runPage);
     const e3 = await runPage(`(async()=>{
       const wait=(ms)=>new Promise(r=>setTimeout(r,ms));
       const pane=()=>document.querySelector('.pane:not(.is-pinned)');
       [...document.querySelectorAll('.row')].find(e=>e.textContent.includes('risky.svg')).click();
-      await wait(500);
+      await waitFor(()=>pane().querySelector('[data-act="svg-edit"]'));
       pane().querySelector('[data-act="svg-edit"]').click();
-      await wait(600);
+      await waitFor(()=>pane().querySelector('.svg-stage svg'));
       const root=pane().querySelector('.svg-stage svg');
       const rect=root && root.querySelector('#r');
       const r=rect && rect.getBoundingClientRect();
@@ -721,7 +859,7 @@ async function main() {
       }
       pane().querySelector('.svg-edit').dispatchEvent(new KeyboardEvent('keydown',
         {key:'Delete',bubbles:true,cancelable:true}));
-      await wait(300);
+      await wait(50);
       return {
         mounted: !!root,
         risky: !!pane().querySelector('.svg-edit.is-risky'),
@@ -749,13 +887,57 @@ async function main() {
     eq('只读模式不会写文件', writes.length, 0);
   });
 
-  await run('P3', '拖动固定列头部换位置；拖临时预览列只提示先固定', async () => {
+  await run('E4', '真实鼠标双击文字能打开输入框', async () => {
+    const f = await prepare();
+    const runPage = await renderer();
+    const source = '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200" viewBox="0 0 400 200">'
+      + '<rect width="400" height="200" fill="#fff"/>'
+      + '<text x="200" y="100" text-anchor="middle" font-size="20" fill="#111">Alpha</text>'
+      + '</svg>';
+    stubList(f.ws, ['dbl.svg']);
+    stubRead(() => ({ text: source, size: source.length, mtime: 1 }));
+    ipcMain.removeHandler('fs:preview-url');
+    ipcMain.handle('fs:preview-url', () => ({ url: 'data:image/svg+xml,%3Csvg%2F%3E' }));
+    createdWin.webContents.send('workspace:opened', f.ws);
+    await waitStubbedRows(runPage);
+    const pt = await runPage(`(async()=>{
+      const wait=(ms)=>new Promise(r=>setTimeout(r,ms));
+      [...document.querySelectorAll('.row')].find(e=>e.textContent.includes('dbl.svg')).click();
+      await waitFor(()=>document.querySelector('.pane:not(.is-pinned) [data-act="svg-edit"]'));
+      document.querySelector('.pane:not(.is-pinned) [data-act="svg-edit"]').click();
+      await waitFor(()=>document.querySelectorAll('.svg-stage svg text').length>0);
+      const text=[...document.querySelectorAll('.svg-stage svg text')].find(t=>t.textContent==='Alpha');
+      if (!text) return { error: 'NO_TEXT' };
+      const r=text.getBoundingClientRect();
+      return { x:r.left+r.width/2, y:r.top+r.height/2, w:r.width, h:r.height };
+    })()`);
+    ok('找到可双击的文字', pt && !pt.error && pt.w > 0 && pt.h > 0, pt);
+    const x = Math.round(pt.x);
+    const y = Math.round(pt.y);
+    const ev = (type, clickCount) => createdWin.webContents.sendInputEvent({
+      type: type, x: x, y: y, button: 'left', clickCount: clickCount
+    });
+    ev('mouseDown', 1); ev('mouseUp', 1);
+    await sleep(50);
+    ev('mouseDown', 2); ev('mouseUp', 2);
+    await waitPage(runPage, "!!document.querySelector('.svg-textinput')");
+    const dbl = await runPage(`(() => {
+      const i=document.querySelector('.svg-textinput');
+      return { input:!!i, value:i?i.value:null,
+        active:document.activeElement?document.activeElement.className:null };
+    })()`);
+    ok('真实双击打开输入框', dbl.input, dbl);
+    eq('输入框带着原文', dbl.value, 'Alpha');
+    eq('焦点在输入框上', dbl.active, 'svg-textinput');
+  });
+
+  await run('P3', '拖动抓手换位置；临时列拖到右侧自动固定', async () => {
     const f = await prepare();
     const runPage = await renderer();
     stubList(f.ws, ['alpha.md', 'beta.md', 'gamma.md']);
     stubRead((_e, p) => ({ text: path.basename(String(p)).toUpperCase(), size: 10 }));
     createdWin.webContents.send('workspace:opened', f.ws);
-    await sleep(200);
+    await waitStubbedRows(runPage);
     const p3 = await runPage(`(async()=>{
       const wait=(ms)=>new Promise(r=>setTimeout(r,ms));
       const clickRow=(n)=>[...document.querySelectorAll('.row')].find(e=>e.textContent.includes(n)).click();
@@ -766,40 +948,464 @@ async function main() {
         .map(e=>e.querySelector('.pv-nm').textContent.trim());
       const headOf=(name)=>[...document.querySelectorAll('.pane.is-pinned .pv-head')]
         .find(h=>h.querySelector('.pv-nm').textContent.trim()===name);
+      const gripOf=(name)=>headOf(name).querySelector('.pv-grip');
       const ev=(type,el,x,y)=>el.dispatchEvent(new PointerEvent(type,{
         bubbles:true,cancelable:true,pointerId:7,button:0,
         buttons:type==='pointerup'?0:1,clientX:x,clientY:y}));
       const drag=(from,to,fx)=>{
-        const a=headOf(from).getBoundingClientRect(), b=headOf(to).getBoundingClientRect();
-        const sy=a.top+8, ty=b.top+8, x2=b.left+b.width*fx;
+        const g=gripOf(from).getBoundingClientRect(), b=headOf(to).getBoundingClientRect();
+        const sy=g.top+g.height/2, ty=b.top+8, x2=b.left+b.width*fx;
         const panes=document.querySelector('#panes');
-        ev('pointerdown',headOf(from),a.left+a.width/2,sy);
-        ev('pointermove',panes,a.left+a.width/2+10,sy);   // 越过 4px 阈值，进入拖动
+        ev('pointerdown',gripOf(from),g.left+g.width/2,sy);
+        ev('pointermove',panes,g.left+g.width/2+10,sy);   // 越过 4px 阈值，进入拖动
         ev('pointermove',panes,x2,ty);                    // 移过目标列的中点
         ev('pointerup',panes,x2,ty);
         return wait(150);
       };
 
-      clickRow('alpha.md'); await wait(350); pin(); await wait(200);
-      clickRow('beta.md'); await wait(350); pin(); await wait(200);
+      clickRow('alpha.md');
+      await waitFor(()=>{const n=document.querySelector('.pane:not(.is-pinned) .pv-nm');
+        return n && n.textContent.trim()==='alpha.md';});
+      pin();
+      await waitFor(()=>document.querySelectorAll('.pane.is-pinned').length>=1);
+      clickRow('beta.md');
+      await waitFor(()=>{const n=document.querySelector('.pane:not(.is-pinned) .pv-nm');
+        return n && n.textContent.trim()==='beta.md';});
+      pin();
+      await waitFor(()=>document.querySelectorAll('.pane.is-pinned').length>=2);
       const before=pinnedNames();                         // 新固定的在左边
       await drag('beta.md','alpha.md',0.9);
       const after=pinnedNames();
 
-      // 临时预览列：拖动头部只提示，不动固定列
-      clickRow('gamma.md'); await wait(350);
-      const head=document.querySelector('.pane:not(.is-pinned) .pv-head');
-      const r=head.getBoundingClientRect();
+      // 临时列的抓手拖到右侧：这一次落点会把它固定成最后一列
+      clickRow('gamma.md');
+      await waitFor(()=>{const n=document.querySelector('.pane:not(.is-pinned) .pv-nm');
+        return n && n.textContent.trim()==='gamma.md';});
+      const tg=document.querySelector('.pane:not(.is-pinned) .pv-grip');
+      const tr=tg.getBoundingClientRect();
+      const bh=headOf('beta.md').getBoundingClientRect();
       const panes=document.querySelector('#panes');
-      ev('pointerdown',head,r.left+r.width/2,r.top+8);
-      ev('pointermove',panes,r.left+r.width/2+30,r.top+8);
-      ev('pointerup',panes,r.left+r.width/2+30,r.top+8);
-      return {before, after, tempOrder:pinnedNames(), toastText:document.querySelector('#toast').textContent};
+      ev('pointerdown',tg,tr.left+tr.width/2,tr.top+tr.height/2);
+      ev('pointermove',panes,tr.left+tr.width/2+10,tr.top+tr.height/2);
+      ev('pointermove',panes,bh.left+bh.width*0.9,bh.top+8);
+      ev('pointerup',panes,bh.left+bh.width*0.9,bh.top+8);
+      await waitFor(()=>document.querySelectorAll('.pane.is-pinned').length>=3
+        && !!document.querySelector('.pane:not(.is-pinned)')
+        && document.querySelector('.pane:not(.is-pinned)').hidden);
+      const temp=document.querySelector('.pane:not(.is-pinned)');
+      return {before, after, final:pinnedNames(), tempHidden:!!temp && temp.hidden,
+        toastText:document.querySelector('#toast').textContent};
     })()`);
     eqJson('新固定的列排在左边', p3.before, ['beta.md', 'alpha.md']);
     eqJson('把左列拖到右列之后，顺序互换', p3.after, ['alpha.md', 'beta.md']);
-    eqJson('拖动临时预览列不改变固定列顺序', p3.tempOrder, ['alpha.md', 'beta.md']);
-    ok('拖动临时列时提示先固定', p3.toastText.indexOf('请先固定此栏') >= 0, p3.toastText);
+    eqJson('临时列拖到右侧后固定成最后一列', p3.final, ['alpha.md', 'beta.md', 'gamma.md']);
+    ok('自动固定后临时列收起', p3.tempHidden, p3);
+    ok('提示已固定临时列', p3.toastText.indexOf('已固定：gamma.md') >= 0, p3.toastText);
+    await clearPinnedColumns(runPage);
+  });
+
+  await run('P4', '拖到列的下 1/3 分屏；取消一格后恢复单格；临时列也能分屏', async () => {
+    const f = await prepare();
+    const runPage = await renderer();
+    stubList(f.ws, ['alpha.md', 'beta.md', 'gamma.md']);
+    stubRead((_e, p) => ({ text: path.basename(String(p)).toUpperCase(), size: 10 }));
+    createdWin.webContents.send('workspace:opened', f.ws);
+    await waitStubbedRows(runPage);
+    const p4 = await runPage(`(async()=>{
+      const wait=(ms)=>new Promise(r=>setTimeout(r,ms));
+      const clickRow=(n)=>[...document.querySelectorAll('.row')].find(e=>e.textContent.includes(n)).click();
+      const pin=()=>document.querySelector('.pane:not(.is-pinned) button[data-act="pin"]').click();
+      const paneOf=(name)=>[...document.querySelectorAll('.pane.is-pinned')]
+        .find(p=>p.querySelector('.pv-nm').textContent.trim()===name);
+      const ev=(type,el,x,y)=>el.dispatchEvent(new PointerEvent(type,{
+        bubbles:true,cancelable:true,pointerId:9,button:0,
+        buttons:type==='pointerup'?0:1,clientX:x,clientY:y}));
+      const dragGripTo=(grip,x,y)=>{
+        const r=grip.getBoundingClientRect(), panes=document.querySelector('#panes');
+        ev('pointerdown',grip,r.left+r.width/2,r.top+r.height/2);
+        ev('pointermove',panes,r.left+r.width/2+8,r.top+r.height/2);
+        ev('pointermove',panes,x,y);
+        ev('pointerup',panes,x,y);
+      };
+      const splitPanes=()=>{
+        const col=document.querySelector('.pane-col.is-split');
+        if(!col) return [];
+        return [...col.querySelectorAll('.pane')].map(p=>({
+          name:p.querySelector('.pv-nm').textContent.trim(),
+          top:p.getBoundingClientRect().top,
+          w:p.getBoundingClientRect().width
+        })).sort((a,b)=>a.top-b.top);
+      };
+
+      clickRow('alpha.md');
+      await waitFor(()=>{const n=document.querySelector('.pane:not(.is-pinned) .pv-nm');
+        return n && n.textContent.trim()==='alpha.md';});
+      pin();
+      await waitFor(()=>document.querySelectorAll('.pane.is-pinned').length>=1);
+      clickRow('beta.md');
+      await waitFor(()=>{const n=document.querySelector('.pane:not(.is-pinned) .pv-nm');
+        return n && n.textContent.trim()==='beta.md';});
+      pin();
+      await waitFor(()=>document.querySelectorAll('.pane.is-pinned').length>=2);
+      const ar=paneOf('alpha.md').getBoundingClientRect();
+      dragGripTo(paneOf('beta.md').querySelector('.pv-grip'),
+        ar.left+ar.width/2, ar.top+ar.height*0.85);
+      await waitFor(()=>document.querySelector('.pane-col.is-split'));
+      const split=!!document.querySelector('.pane-col.is-split');
+      const panes=splitPanes();
+      const visibleCols=[...document.querySelectorAll('.pane-col')].filter(c=>!c.hidden).length;
+
+      // 分屏里取消下面那一格：列还在，恢复成一格
+      paneOf('beta.md').querySelector('button[data-act="pin"]').click();
+      await waitFor(()=>!document.querySelector('.pane-col.is-split'));
+      const afterUnpin={
+        split:document.querySelectorAll('.pane-col.is-split').length,
+        pinned:[...document.querySelectorAll('.pane.is-pinned')]
+          .map(p=>p.querySelector('.pv-nm').textContent.trim())
+      };
+
+      // 临时列：拖到 alpha 那一列的下 1/3，直接固定并分屏
+      clickRow('gamma.md');
+      await waitFor(()=>{const n=document.querySelector('.pane:not(.is-pinned) .pv-nm');
+        return n && n.textContent.trim()==='gamma.md';});
+      const tempGrip=document.querySelector('.pane:not(.is-pinned) .pv-grip');
+      const ar2=paneOf('alpha.md').getBoundingClientRect();
+      dragGripTo(tempGrip, ar2.left+ar2.width/2, ar2.top+ar2.height*0.85);
+      await waitFor(()=>!!document.querySelector('.pane-col.is-split')
+        && !!document.querySelector('.pane:not(.is-pinned)')
+        && document.querySelector('.pane:not(.is-pinned)').hidden);
+      const tempSplit=splitPanes();
+      const temp=document.querySelector('.pane:not(.is-pinned)');
+      return {
+        split:split, panes:panes, visibleCols:visibleCols,
+        afterUnpin:afterUnpin,
+        tempSplit:tempSplit, tempHidden:!!temp && temp.hidden,
+        toastText:document.querySelector('#toast').textContent
+      };
+    })()`);
+    ok('下 1/3 落点形成分屏', p4.split, p4);
+    eqJson('一列里上 alpha 下 beta', p4.panes.map((p) => p.name), ['alpha.md', 'beta.md']);
+    ok('分屏两格同宽', p4.panes.length === 2 && Math.abs(p4.panes[0].w - p4.panes[1].w) < 2, p4.panes);
+    eq('分屏不增加列数', p4.visibleCols, 1);
+    eq('取消分屏里的一格后列还在', p4.afterUnpin.split, 0);
+    eqJson('只留下 alpha', p4.afterUnpin.pinned, ['alpha.md']);
+    eqJson('临时列拖到 alpha 下 1/3 后上下分屏', p4.tempSplit.map((p) => p.name), ['alpha.md', 'gamma.md']);
+    ok('临时列分屏后收起', p4.tempHidden, p4);
+    ok('提示已分屏', p4.toastText.indexOf('已分屏：gamma.md') >= 0, p4.toastText);
+    await clearPinnedColumns(runPage);
+  });
+
+  await run('P5', '切项目再回来：固定列、宽度、分屏比例与模式都恢复', async () => {
+    const a = freshDir('layout-a');
+    const b = freshDir('layout-b');
+    const runPage = await renderer();
+    // 同一个窗口里切换两个工作区；列表按目录返回不同文件，读内容用桩
+    ipcMain.removeHandler('fs:list');
+    ipcMain.handle('fs:list', (_e, dir) => {
+      const isA = path.basename(String(dir)).toLowerCase() === 'layout-a';
+      const files = isA ? ['alpha.md', 'beta.md'] : ['other.md'];
+      return { entries: files.map((name) => ({
+        name: name, path: path.join(dir, name), isDir: false, kind: 'md'
+      })) };
+    });
+    stubRead((_e, p) => ({ text: path.basename(String(p)).toUpperCase(), size: 10 }));
+    createdWin.setSize(1200, 820);
+    await sleep(80);
+
+    const openRoot = async (dir, row) => {
+      createdWin.webContents.send('workspace:opened', dir);
+      await waitPage(runPage, `[...document.querySelectorAll('.col[data-col="0"] .row .nm')]
+        .some(e=>e.textContent===${JSON.stringify(row)})`);
+    };
+
+    await openRoot(a, 'alpha.md');
+    const savedA = await runPage(`(async()=>{
+      const wait=(ms)=>new Promise(r=>setTimeout(r,ms));
+      const row=(n)=>[...document.querySelectorAll('.col[data-col="0"] .row')]
+        .find(e=>e.querySelector('.nm').textContent===n);
+      const temp=()=>document.querySelector('.pane:not(.is-pinned)');
+      const paneOf=(n)=>[...document.querySelectorAll('.pane.is-pinned')]
+        .find(p=>p.querySelector('.pv-nm').textContent.trim()===n);
+      const pin=()=>temp().querySelector('[data-act="pin"]').click();
+      const waitTemp=(n)=>waitFor(()=>{const el=temp() && temp().querySelector('.pv-nm');
+        return el && el.textContent.trim()===n;});
+      const waitPins=(n)=>waitFor(()=>document.querySelectorAll('.pane.is-pinned').length===n);
+      const ev=(type,el,x,y)=>el.dispatchEvent(new PointerEvent(type,{
+        bubbles:true,cancelable:true,pointerId:21,button:0,
+        buttons:type==='pointerup'?0:1,clientX:x,clientY:y}));
+      const columns=()=>[...document.querySelectorAll('.pane-col')].filter(c=>!c.hidden)
+        .sort((x,y)=>x.getBoundingClientRect().left-y.getBoundingClientRect().left)
+        .map(c=>{
+          const ps=[...c.querySelectorAll('.pane')]
+            .sort((x,y)=>x.getBoundingClientRect().top-y.getBoundingClientRect().top);
+          const stack=c.querySelector('.pane-stack').getBoundingClientRect();
+          return {
+            names:ps.map(p=>p.querySelector('.pv-nm').textContent.trim()),
+            w:Math.round(c.getBoundingClientRect().width),
+            split:c.classList.contains('is-split'),
+            mode:ps[0].querySelector('.codeview')?'source':'preview',
+            ratio:c.classList.contains('is-split')
+              ? Math.round(ps[0].getBoundingClientRect().height/stack.height*100)/100 : null
+          };
+        });
+
+      row('alpha.md').click(); await waitTemp('alpha.md'); pin(); await waitPins(1);
+      row('beta.md').click(); await waitTemp('beta.md'); pin(); await waitPins(2);
+      paneOf('beta.md').querySelector('[data-mode="source"]').click();
+      await waitFor(()=>paneOf('beta.md').querySelector('.codeview'));
+      // 最左列往左拖：把 beta 这一列加宽
+      const col=paneOf('beta.md').closest('.pane-col');
+      const grip=col.querySelector('.pane-resize');
+      const gr=grip.getBoundingClientRect();
+      const panes=document.querySelector('#panes');
+      const x=Math.round(gr.left+2), y=Math.round(gr.top+gr.height/2);
+      ev('pointerdown',grip,x,y);
+      ev('pointermove',panes,x-40,y);
+      ev('pointerup',panes,x-40,y);
+      await wait(80);
+      return columns();
+    })()`);
+    eqJson('A 项目两列顺序为新固定在前', savedA.map((c) => c.names[0]), ['beta.md', 'alpha.md']);
+    eq('A 项目 beta 是源码模式', savedA[0].mode, 'source');
+
+    await openRoot(b, 'other.md');
+    const firstB = await runPage(`(async()=>{
+      const waitForPins=(n)=>waitFor(()=>document.querySelectorAll('.pane.is-pinned').length===n);
+      const pinned=()=>[...document.querySelectorAll('.pane.is-pinned')]
+        .map(p=>p.querySelector('.pv-nm').textContent.trim());
+      const before=pinned();
+      const row=[...document.querySelectorAll('.col[data-col="0"] .row')]
+        .find(e=>e.querySelector('.nm').textContent==='other.md');
+      row.click();
+      await waitFor(()=>{const n=document.querySelector('.pane:not(.is-pinned) .pv-nm');
+        return n && n.textContent.trim()==='other.md';});
+      document.querySelector('.pane:not(.is-pinned) [data-act="pin"]').click();
+      await waitForPins(1);
+      return { before: before, after: pinned() };
+    })()`);
+    eqJson('切到 B 时 A 的固定列先清掉', firstB.before, []);
+    eqJson('B 项目自己的固定列', firstB.after, ['other.md']);
+
+    await openRoot(a, 'alpha.md');
+    const backA = await runPage(`(async()=>{
+      const waitPins=(n)=>waitFor(()=>document.querySelectorAll('.pane.is-pinned').length===n);
+      const paneOf=(n)=>[...document.querySelectorAll('.pane.is-pinned')]
+        .find(p=>p.querySelector('.pv-nm').textContent.trim()===n);
+      const columns=()=>[...document.querySelectorAll('.pane-col')].filter(c=>!c.hidden)
+        .sort((x,y)=>x.getBoundingClientRect().left-y.getBoundingClientRect().left)
+        .map(c=>{
+          const ps=[...c.querySelectorAll('.pane')]
+            .sort((x,y)=>x.getBoundingClientRect().top-y.getBoundingClientRect().top);
+          return {
+            names:ps.map(p=>p.querySelector('.pv-nm').textContent.trim()),
+            w:Math.round(c.getBoundingClientRect().width),
+            split:c.classList.contains('is-split'),
+            mode:ps[0].querySelector('.codeview')?'source':'preview'
+          };
+        });
+      await waitPins(2);
+      await waitFor(()=>paneOf('beta.md').querySelector('.codeview'));
+      return columns();
+    })()`);
+    eqJson('切回 A 后固定列顺序恢复', backA.map((c) => c.names[0]), ['beta.md', 'alpha.md']);
+    ok('切回 A 后列宽恢复',
+      backA.length === savedA.length
+        && savedA.every((c, i) => Math.abs(c.w - backA[i].w) <= 1),
+      { saved: savedA.map((c) => c.w), restored: backA.map((c) => c.w) });
+    eq('切回 A 后 beta 仍是源码模式', backA[0].mode, 'source');
+
+    const splitA = await runPage(`(async()=>{
+      const wait=(ms)=>new Promise(r=>setTimeout(r,ms));
+      const paneOf=(n)=>[...document.querySelectorAll('.pane.is-pinned')]
+        .find(p=>p.querySelector('.pv-nm').textContent.trim()===n);
+      const ev=(type,el,x,y)=>el.dispatchEvent(new PointerEvent(type,{
+        bubbles:true,cancelable:true,pointerId:23,button:0,
+        buttons:type==='pointerup'?0:1,clientX:x,clientY:y}));
+      const columns=()=>[...document.querySelectorAll('.pane-col')].filter(c=>!c.hidden)
+        .map(c=>{
+          const ps=[...c.querySelectorAll('.pane')]
+            .sort((x,y)=>x.getBoundingClientRect().top-y.getBoundingClientRect().top);
+          const stack=c.querySelector('.pane-stack').getBoundingClientRect();
+          return {
+            names:ps.map(p=>p.querySelector('.pv-nm').textContent.trim()),
+            w:Math.round(c.getBoundingClientRect().width),
+            split:c.classList.contains('is-split'),
+            mode:ps[0].querySelector('.codeview')?'source':'preview',
+            ratio:c.classList.contains('is-split')
+              ? Math.round(ps[0].getBoundingClientRect().height/stack.height*100)/100 : null
+          };
+        });
+      const panes=document.querySelector('#panes');
+      const br=paneOf('beta.md').getBoundingClientRect();
+      const grip=paneOf('alpha.md').querySelector('.pv-grip');
+      const gr=grip.getBoundingClientRect();
+      ev('pointerdown',grip,gr.left+gr.width/2,gr.top+gr.height/2);
+      ev('pointermove',panes,gr.left+gr.width/2+8,gr.top+gr.height/2);
+      ev('pointermove',panes,br.left+br.width/2,br.top+br.height*0.85);
+      ev('pointerup',panes,br.left+br.width/2,br.top+br.height*0.85);
+      await waitFor(()=>document.querySelector('.pane-col.is-split'));
+      const splitEl=document.querySelector('.pane-col.is-split .pane-split');
+      const sr=splitEl.getBoundingClientRect();
+      const sx=Math.round(sr.left+sr.width/2), sy=Math.round(sr.top+sr.height/2);
+      ev('pointerdown',splitEl,sx,sy);
+      ev('pointermove',panes,sx,sy+50);
+      ev('pointerup',panes,sx,sy+50);
+      await wait(80);
+      return columns();
+    })()`);
+    eq('A 项目分屏后只留一列', splitA.length, 1);
+    eqJson('分屏上下顺序 beta / alpha', splitA[0].names, ['beta.md', 'alpha.md']);
+    ok('分屏比例已调整', splitA[0].ratio > 0.55, splitA[0]);
+
+    await openRoot(b, 'other.md');
+    const secondB = await runPage(`(async()=>{
+      await waitFor(()=>document.querySelectorAll('.pane.is-pinned').length===1);
+      return {
+        names:[...document.querySelectorAll('.pane.is-pinned')]
+          .map(p=>p.querySelector('.pv-nm').textContent.trim()),
+        split:!!document.querySelector('.pane-col.is-split')
+      };
+    })()`);
+    eqJson('B 项目没有被 A 的分屏影响', secondB.names, ['other.md']);
+    eq('B 项目仍是单列', secondB.split, false);
+
+    await openRoot(a, 'alpha.md');
+    const finalA = await runPage(`(async()=>{
+      const waitForPins=(n)=>waitFor(()=>document.querySelectorAll('.pane.is-pinned').length===n);
+      const paneOf=(n)=>[...document.querySelectorAll('.pane.is-pinned')]
+        .find(p=>p.querySelector('.pv-nm').textContent.trim()===n);
+      await waitForPins(2);
+      await waitFor(()=>document.querySelector('.pane-col.is-split'));
+      await waitFor(()=>paneOf('beta.md').querySelector('.codeview'));
+      const c=document.querySelector('.pane-col.is-split');
+      const ps=[...c.querySelectorAll('.pane')]
+        .sort((x,y)=>x.getBoundingClientRect().top-y.getBoundingClientRect().top);
+      const stack=c.querySelector('.pane-stack').getBoundingClientRect();
+      return {
+        names:ps.map(p=>p.querySelector('.pv-nm').textContent.trim()),
+        w:Math.round(c.getBoundingClientRect().width),
+        mode:ps[0].querySelector('.codeview')?'source':'preview',
+        ratio:Math.round(ps[0].getBoundingClientRect().height/stack.height*100)/100
+      };
+    })()`);
+    eqJson('切回 A 后分屏上下顺序恢复', finalA.names, ['beta.md', 'alpha.md']);
+    eq('切回 A 后 beta 仍是源码模式', finalA.mode, 'source');
+    eq('切回 A 后分屏列宽恢复', finalA.w, splitA[0].w);
+    ok('切回 A 后分屏比例恢复',
+      Math.abs(finalA.ratio - splitA[0].ratio) <= 0.02,
+      { saved: splitA[0].ratio, restored: finalA.ratio });
+  });
+
+  await run('P6', '关掉的临时预览列切项目回来仍保持关闭', async () => {
+    const a = freshDir('closed-a');
+    const b = freshDir('closed-b');
+    const runPage = await renderer();
+    ipcMain.removeHandler('fs:list');
+    ipcMain.handle('fs:list', (_e, dir) => {
+      const isA = path.basename(String(dir)).toLowerCase() === 'closed-a';
+      return { entries: (isA ? ['one.md'] : ['two.md']).map((name) => ({
+        name: name, path: path.join(dir, name), isDir: false, kind: 'md'
+      })) };
+    });
+    stubRead(() => ({ text: 'BODY', size: 4 }));
+
+    const openRoot = async (dir, row) => {
+      createdWin.webContents.send('workspace:opened', dir);
+      await waitPage(runPage, `[...document.querySelectorAll('.col[data-col="0"] .row .nm')]
+        .some(e=>e.textContent===${JSON.stringify(row)})`);
+    };
+
+    await openRoot(a, 'one.md');
+    const closed = await runPage(`(async()=>{
+      [...document.querySelectorAll('.col[data-col="0"] .row')]
+        .find(e=>e.querySelector('.nm').textContent==='one.md').click();
+      await waitFor(()=>{const n=document.querySelector('.pane:not(.is-pinned) .pv-nm');
+        return n && n.textContent.trim()==='one.md';});
+      document.querySelector('.pane:not(.is-pinned) [data-act="close"]').click();
+      await waitFor(()=>PV.pane.previewOpen()===false);
+      return { open: PV.pane.previewOpen(), hidden: !!document.querySelector('#preview').hidden };
+    })()`);
+    eq('关掉临时预览后状态是收起', closed.open, false);
+    ok('关掉后预览区隐藏', closed.hidden, closed);
+
+    await openRoot(b, 'two.md');
+    await openRoot(a, 'one.md');
+    const back = await runPage(`(async()=>{
+      await waitFor(()=>{const r=document.querySelector('.row.is-sel .nm');
+        return r && r.textContent==='one.md';});
+      return {
+        open: PV.pane.previewOpen(),
+        hidden: !!document.querySelector('#preview').hidden,
+        tempHidden: !!document.querySelector('.pane:not(.is-pinned)').hidden
+      };
+    })()`);
+    eq('切回 A 后仍是收起状态', back.open, false);
+    ok('切回 A 后预览区没有自己展开', back.hidden && back.tempHidden, back);
+
+    const reopened = await runPage(`(async()=>{
+      [...document.querySelectorAll('.col[data-col="0"] .row')]
+        .find(e=>e.querySelector('.nm').textContent==='one.md').click();
+      await waitFor(()=>PV.pane.previewOpen()
+        && !document.querySelector('#preview').hidden
+        && !document.querySelector('.pane:not(.is-pinned)').hidden);
+      return {
+        open: PV.pane.previewOpen(),
+        name: document.querySelector('.pane:not(.is-pinned) .pv-nm').textContent.trim()
+      };
+    })()`);
+    eq('用户主动点文件仍会打开临时预览', reopened.open, true);
+    eq('打开的还是选中的文件', reopened.name, 'one.md');
+  });
+
+  await run('W2', '网页读剪贴板按站点询问一次，允许后本次运行不再问', async () => {
+    // 必须排在 W1 前面：W1 会销毁同一分区的窗口，紧接着再开窗加载会 ERR_FAILED
+    const server = http.createServer((_req, res) => {
+      res.setHeader('content-type', 'text/html; charset=utf-8');
+      res.end('<!doctype html><button id="paste">paste</button>');
+    });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const origin = 'http://127.0.0.1:' + server.address().port;
+
+    const w = new BrowserWindow({
+      show: false,
+      width: 480,
+      height: 360,
+      webPreferences: {
+        partition: webViews.PARTITION, sandbox: true, contextIsolation: true, nodeIntegration: false
+      }
+    });
+    webViews.attachWindow(w);
+
+    const prompts = [];
+    const realBox = dialog.showMessageBox;
+    dialog.showMessageBox = async (_win, opts) => { prompts.push(opts); return { response: 0 }; };
+    const previous = await clipboard.readText();
+    await clipboard.writeText('CLIP_TOKEN');
+    const read = (gesture) => w.webContents.executeJavaScript(
+      `navigator.clipboard.readText().then(t=>'ok:'+t).catch(e=>'err:'+e.name)`, gesture);
+
+    try {
+      await w.loadURL(origin + '/');
+      w.webContents.focus();
+
+      // 页面用 permissions.query 判断要不要显示粘贴入口；这里报 granted，
+      // 但真正的读取仍会走 request handler 询问。
+      eq('网页看到的剪贴板权限是 granted',
+        await w.webContents.executeJavaScript(
+          `navigator.permissions.query({name:'clipboard-read'}).then(p=>p.state)`), 'granted');
+      eq('允许后能读到剪贴板', await read(true), 'ok:CLIP_TOKEN');
+      eq('首次读取只弹一次窗', prompts.length, 1);
+      ok('弹窗写明请求的站点',
+        !!(prompts[0] && String(prompts[0].detail).indexOf(origin) >= 0),
+        prompts[0] && prompts[0].detail);
+      eq('同一站点再次读取不再询问', await read(true), 'ok:CLIP_TOKEN');
+      eq('仍然只弹过一次', prompts.length, 1);
+    } finally {
+      dialog.showMessageBox = realBox;
+      await clipboard.writeText(previous);
+      w.destroy();
+      server.close();
+    }
   });
 
   await run('W1', '网页视图只接受 http(s)，移出同步列表即销毁', async () => {

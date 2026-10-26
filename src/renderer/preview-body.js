@@ -22,8 +22,9 @@
  * 网页预览（kind = 'web'）不在这里画页面：正文只放加载 / 失败卡片，真正的页面由
  * 主进程的 WebContentsView 覆盖在窗格正文上（见 webview.js 与 main/web-views.js）。
  *
- * 加载顺序：icons.js → highlight.js → markdown.js → vendor/docpreview.js →
- *           pane.js → preview-body.js → webview.js → svgedit.js → find.js → projects.js → app.js。
+ * 加载顺序：shared/contracts.js → paths.js → icons.js → highlight.js → markdown.js →
+ *           vendor/docpreview.js → pane.js → preview-body.js → webview.js → svgedit.js →
+ *           find.js → projects.js → app.js。
  */
 (function () {
   'use strict';
@@ -65,10 +66,7 @@
   function subPath(node) {
     const root = hooks.root();
     if (!root || !node) return '';
-    const base = root.replace(/[\\/]+$/, '');
-    const abs = node.path;
-    const rel = abs.toLowerCase().startsWith(base.toLowerCase()) ? abs.slice(base.length) : abs;
-    return rel.replace(/^[\\/]+/, '');
+    return PV.paths.relUnder(root, node.path);
   }
 
   /* ============================ 状态卡片与外壳 ============================ */
@@ -307,6 +305,30 @@
     hooks.loaded(pane, node, info || null);
   }
 
+  /**
+   * 图片解码失败（远程图挂了 / 文件其实不是图片）时换成占位，别在正文里
+   * 留一个碎图标。error 事件不冒泡，所以逐张挂；已经失败过的立刻换。
+   */
+  function markBrokenImages(pane) {
+    const swap = (img) => {
+      const src = img.getAttribute('src') || '';
+      const span = document.createElement('span');
+      span.className = 'md-img-missing';
+      span.title = '图片无法显示：' + src;
+      span.appendChild(document.createTextNode(img.alt || src || '图片无法显示'));
+      const why = document.createElement('span');
+      why.className = 'why';
+      why.textContent = '无法显示';
+      span.appendChild(why);
+      // 晚到的错误可能来自已经被换掉的旧正文：没有父节点时 replaceWith 是空操作
+      img.replaceWith(span);
+    };
+    for (const img of pane.body.querySelectorAll('.prose img')) {
+      if (img.complete && !img.naturalWidth) swap(img);
+      else img.addEventListener('error', () => swap(img), { once: true });
+    }
+  }
+
   async function renderPaneBody(pane, node, mode, key, task) {
     // node 为 null：临时预览列被清空（换工作区），正文回到「未选择文件」
     if (!node) { task.write(emptyState()); return; }
@@ -360,10 +382,19 @@
     const noticeHtml = notice.length ? '<div class="notice">' + notice.join(' · ') + '</div>' : '';
 
     if (node.kind === 'md' && mode === 'preview') {
+      // 本地图片先由主进程解析成 pv:// 地址再渲染：正文是整块替换，
+      // 晚到的解析结果会被 task.write 的归属检查丢掉，不用另做一套。
+      const images = new Map();
+      const srcs = PV.markdown.imageSources(res.text);
+      if (srcs.length) {
+        const resolved = await pv.resolveImages(node.path, srcs);
+        for (const item of (resolved && resolved.items) || []) images.set(item.src, item);
+      }
       if (!task.write(noticeHtml + '<div class="prose-wrap"><article class="prose">'
-        + mdToHtml(res.text) + '</article></div>')) return;
+        + mdToHtml(res.text, images) + '</article></div>')) return;
       noteLoaded(pane, node, { size: res.size, mtime: res.mtime }, task);
       PV.highlight.highlightFences(pane.body.querySelector('.prose'));
+      markBrokenImages(pane);
       return;
     }
 
@@ -480,9 +511,7 @@
     if (!entries) {
       const res = await pv.list(dir);
       entries = res && res.entries ? res.entries.slice() : [];
-      entries.sort((a, b) => (a.isDir !== b.isDir)
-        ? (a.isDir ? -1 : 1)
-        : a.name.localeCompare(b.name, 'zh-Hans-CN', { numeric: true }));
+      entries.sort(PV.paths.compareNodes);
     }
     return entries.filter(PV.pane.isImageNode);
   }

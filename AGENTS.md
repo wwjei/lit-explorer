@@ -2,17 +2,21 @@
 
 lit explorer：Electron 写的本地项目文件浏览器（多栏目录导航 + 内嵌预览）。
 
-未做的事分四个池子，别混：想做的功能与要拍板的决策在
+**先找入口**：[CODEMAP.md](CODEMAP.md) 按业务组件列出文件、关键方法与可搜索关键字，
+比从头翻源码快；改业务组件、关键方法、IPC / DOM 约定时同步维护它。
+
+未做的事分三个池子，别混：想做的功能与要拍板的决策在
 [further_notes.md](further_notes.md)；小 bug 与顺手清理在 [PENDING.md](PENDING.md)
 （**发版前必须清空**）；已知但无可行修法的依赖 / 安全问题在
-[docs/security-debt.md](docs/security-debt.md)；已排期与明确不做的都在
-[FEATURES.md](FEATURES.md)（第 8 节 / 第 2 节）。产品行为定义在
+[docs/security-debt.md](docs/security-debt.md)。明确不做的在
+[FEATURES.md](FEATURES.md) 第 2 节。产品行为定义在
 [FEATURES.md](FEATURES.md)，用法在 [README.md](README.md)。
 
 ## 按场景读
 
 | 你的场景 | 读这个 |
 | --- | --- |
+| 想知道某个功能在哪个文件 / 方法，或该搜什么关键字 | [CODEMAP.md](CODEMAP.md) |
 | 增删依赖，或在 `dependencies` / `devDependencies` 之间挪包 | [docs/agents/dependencies.md](docs/agents/dependencies.md) |
 | 改 `src/renderer/` 下的界面代码（含 pane / preview-body / find / projects / app 的分层）、动构建脚本或图标 | [docs/agents/build.md](docs/agents/build.md) |
 | 加文件系统能力，改 preload / IPC / 自定义协议 | [docs/agents/security.md](docs/agents/security.md) |
@@ -34,11 +38,9 @@ lit explorer：Electron 写的本地项目文件浏览器（多栏目录导航 +
 3. `dist` 脚本里的 `--publish never` 不能去掉，发布统一交给 CI。
 4. 没有明确要求时不要打 tag；**打 tag 前 [PENDING.md](PENDING.md) 必须是空的**。
 5. **新增一类信息（新文档、新测试、新待办池）要同步上面那张索引**——下一个会话是从
-   这张表进门的，索引里没有的东西等于不存在。
+   这张表进门的，索引里没有的东西等于不存在。`docs/` 下的文档漏登记（或改名后留下
+   死链）会让 CI 的 `npm run check:docs` 失败。
 6. 不要动用户正在运行的应用：跑起来验证一律用独立的 `--user-data-dir`（`npm run probe`
    已经默认这么做），也不要结束你自己没起的进程。
 7. 加依赖之后要重跑 `npm run notices`（`predist` 里已经串上），否则随包分发的第三方
    许可声明会漏掉新引入的包。
-8. **同一件事只放一个池子。** 功能进 further_notes，小问题进 PENDING，依赖债进
-   security-debt，排期进 FEATURES 第 8 节——两边都写一遍，改了一边忘了另一边，
-   下一个会话就会照着过期的那份做事。

@@ -11,8 +11,9 @@
  *
  * 选择器约定（改界面结构时先看这里，别在探针里硬编码）：
  *   .col[data-col="0"] > .col-list .row   第 N 栏的行；行名在 .nm 里
- *   .panes > .pane                        预览列；.is-pinned 是固定列，hidden 是收起
- *   .pane .pv-nm / .pv-sub                列头里的文件名 / 副标题
+ *   .panes > .pane-col                    预览列；hidden 是收起，.is-split 是列内上下分屏
+ *   .pane-col > .pane-stack > .pane       列里的窗格（1–2 个）；.is-pinned 是固定窗格
+ *   .pane .pv-nm / .pv-sub                窗格头里的文件名 / 副标题
  *   [data-act="..."]                      列头按钮：pin / close / reload / copy /
  *                                         reveal / external / zoom-in / zoom-out /
  *                                         zoom-reset / seq
@@ -33,17 +34,31 @@
     q: (s) => document.querySelector(s),
     qa,
 
-    /** 可见的预览列，按从左到右排 */
+    /** 可见的预览窗格：先按列从左到右，同列再按上到下排 */
     vis() {
-      return qa('.panes > .pane')
-        .filter((p) => !p.hidden)
+      return qa('.panes .pane')
+        .filter((p) => {
+          const col = p.closest('.pane-col');
+          return !p.hidden && col && !col.hidden;
+        })
+        .sort((a, b) => {
+          const ca = a.closest('.pane-col').getBoundingClientRect();
+          const cb = b.closest('.pane-col').getBoundingClientRect();
+          const dx = ca.left - cb.left;
+          return dx || (a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+        });
+    },
+    /** 可见的列（每列 1–2 个窗格），按从左到右排 */
+    cols() {
+      return qa('.panes > .pane-col')
+        .filter((c) => !c.hidden)
         .sort((a, b) => a.getBoundingClientRect().left - b.getBoundingClientRect().left);
     },
-    /** 临时预览列（最左那一列） */
+    /** 临时预览列里的窗格 */
     temp() {
       return H.vis().filter((p) => !p.classList.contains('is-pinned'))[0];
     },
-    /** 固定列，按从左到右排 */
+    /** 固定窗格，按视觉顺序排 */
     pins() {
       return H.vis().filter((p) => p.classList.contains('is-pinned'));
     },

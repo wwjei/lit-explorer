@@ -11,13 +11,14 @@
  *
  * 持久化直接走 pv.setState({ projects })，写入由主进程防抖。
  *
- * 加载顺序：icons.js → highlight.js → markdown.js → vendor/docpreview.js →
- *           pane.js → preview-body.js → webview.js → svgedit.js → find.js → projects.js → app.js
+ * 加载顺序：shared/contracts.js → paths.js → icons.js → highlight.js → markdown.js →
+ *           vendor/docpreview.js → pane.js → preview-body.js → webview.js → svgedit.js →
+ *           find.js → projects.js → app.js
  */
 (function () {
   'use strict';
 
-  const MAX = 5;
+  const MAX = PV.contracts.MAX_PROJECTS;
 
   /* ------------------------------------------------------------------ *
    * 图标目录：只表达项目类型，不放 pin / 文件夹 / 收藏 / 分支这类操作型图标。
@@ -92,8 +93,7 @@
 
   const MONO_COLORS = ['#9a7f6b', '#7f91a8', '#7f9a8b', '#a48a6f', '#8a97b0', '#7f9a94', '#8f8a9e', '#96809a'];
 
-  const esc = (s) => String(s == null ? '' : s).replace(/[&<>"]/g, (c) =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const esc = PV.highlight.escapeAttr;
 
   /* ------------------------------------------------------------------ *
    * 状态
@@ -109,6 +109,9 @@
   let popFor = null;
   let warnEl = null;
   let warnTimer = 0;
+  /** 切换项目时旧下划线的屏幕中心：新列表画好后从这里滑到新项目 */
+  let lineFrom = null;
+  let lineFromTimer = 0;
 
   const hooks = {
     switchTo: function () {},
@@ -116,18 +119,8 @@
     toast: function () {}
   };
 
-  function normPath(p) {
-    return String(p || '').replace(/\\/g, '/').replace(/\/+$/, '');
-  }
-  function samePath(a, b) {
-    const x = normPath(a);
-    const y = normPath(b);
-    return pv.platform === 'win32' ? x.toLowerCase() === y.toLowerCase() : x === y;
-  }
-  function baseName(p) {
-    const s = String(p || '').replace(/[\\/]+$/, '');
-    return s.split(/[\\/]/).pop() || s;
-  }
+  const samePath = PV.paths.same;
+  const baseName = PV.paths.baseName;
   function isActive(p) { return activePath ? samePath(p, activePath) : false; }
   function find(path) { return projects.find((p) => samePath(p.path, path)) || null; }
   function isFull() { return projects.length >= MAX; }
@@ -153,6 +146,10 @@
     if (icon.type === 'image' && typeof icon.data === 'string' && /^data:image\//.test(icon.data)) {
       return { type: 'image', data: icon.data };
     }
+    if (icon.type === 'text' && typeof icon.text === 'string') {
+      const text = Array.from(icon.text.replace(/[\r\n\t]/g, ' ').trim()).slice(0, 2).join('').trim();
+      return text ? { type: 'text', text: text } : null;
+    }
     return null;
   }
 
@@ -166,6 +163,10 @@
       return '<svg class="pj-glyph" width="' + size + '" height="' + size + '" viewBox="0 0 24 24" fill="none" '
         + 'stroke="' + g.color + '" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" '
         + 'aria-hidden="true">' + g.path + '</svg>';
+    }
+    if (icon && icon.type === 'text') {
+      return '<span class="proj-mono proj-text' + (Array.from(icon.text).length > 1 ? ' is-two' : '')
+        + '" style="color:' + hashColor(p.name) + '">' + esc(icon.text) + '</span>';
     }
     return '<span class="proj-mono" style="color:' + hashColor(p.name) + '">' + esc(initials(p.name)) + '</span>';
   }
@@ -197,7 +198,7 @@
         nav: p.nav && typeof p.nav === 'object' ? p.nav : null
       }))
       .filter((p) => {
-        const k = normPath(p.path).toLowerCase();
+        const k = PV.paths.key(p.path);
         if (seen.has(k)) return false;
         seen.add(k);
         return true;
@@ -208,29 +209,29 @@
   }
 
   function setActive(root) {
-    activePath = root || '';
+    markActive(root);
     render();
   }
 
   /** 打开了一个工作区：已在列表里就更新名字；还有空位就追加；满了只记录为当前。 */
   function noteOpened(root) {
     if (!root) return { project: null, added: false, full: false };
-    if (!ready) { activePath = root; return { project: null, added: false, full: false, pending: true }; }
+    if (!ready) { markActive(root); return { project: null, added: false, full: false, pending: true }; }
     const existing = find(root);
     if (existing) {
       existing.name = baseName(root);
-      activePath = root;
+      markActive(root);
       render();
       return { project: existing, added: false, full: false };
     }
     if (isFull()) {
-      activePath = root;
+      markActive(root);
       render();
       return { project: null, added: false, full: true };
     }
     const p = { path: root, name: baseName(root), icon: null, nav: null };
     projects.push(p);
-    activePath = root;
+    markActive(root);
     persist();
     render();
     return { project: p, added: true, full: false };
@@ -251,6 +252,62 @@
   /* ------------------------------------------------------------------ *
    * 切换条
    * ------------------------------------------------------------------ */
+
+  /** 活跃项目下划线当前的屏幕中心；动画进行中时取当前帧，而不是目标位置 */
+  function lineCenter() {
+    if (!dockEl) return null;
+    const tile = dockEl.querySelector('.proj-tile.is-on');
+    if (!tile) return null;
+    const r = tile.getBoundingClientRect();
+    let x = r.left + r.width / 2;
+    const tr = getComputedStyle(tile, '::after').transform;
+    const m = tr && tr !== 'none' ? /^matrix\(([^)]+)\)$/.exec(tr) : null;
+    if (m) {
+      const tx = Number(m[1].split(',')[4]);
+      if (Number.isFinite(tx)) x += tx;
+    }
+    return x;
+  }
+
+  /** 活跃项目要变了：先记住旧下划线在哪，新列表渲染后从那里滑过去 */
+  function rememberLine() {
+    if (!dockEl || !dockEl.isConnected) return;
+    const x = lineCenter();
+    if (x == null) return;
+    lineFrom = x;
+    clearTimeout(lineFromTimer);
+    lineFromTimer = setTimeout(() => { lineFrom = null; }, 400);
+  }
+
+  function markActive(next) {
+    const path = next || '';
+    if (samePath(path, activePath)) return;
+    rememberLine();
+    activePath = path;
+  }
+
+  /** 新列表已经画好：让新活跃项目的那条线从旧位置滑到现在的位置 */
+  function applyLineMove() {
+    if (lineFrom == null || !dockEl || !dockEl.isConnected) return;
+    const tile = dockEl.querySelector('.proj-tile.is-on');
+    if (!tile) return;
+    const r = tile.getBoundingClientRect();
+    const delta = Math.round(lineFrom - (r.left + r.width / 2));
+    if (Math.abs(delta) < 1) return;
+    tile.style.setProperty('--proj-line-from', delta + 'px');
+    tile.classList.add('is-line-move');
+    const done = () => {
+      tile.classList.remove('is-line-move');
+      tile.style.removeProperty('--proj-line-from');
+    };
+    tile.addEventListener('animationend', (e) => {
+      if (e.pseudoElement && e.pseudoElement !== '::after') return;
+      done();
+    }, { once: true });
+    // 系统关掉动画时不会有 animationend，兜底把类收掉
+    setTimeout(done, 400);
+  }
+
   function renderDock() {
     if (!dockEl) return;
     dockEl.innerHTML = projects.map((p) =>
@@ -260,6 +317,7 @@
     ).join('') + '<button type="button" class="proj-add" aria-label="打开工作区" title="打开工作区">'
       + '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" '
       + 'stroke-linecap="round" aria-hidden="true"><path d="M12 5v14"/><path d="M5 12h14"/></svg></button>';
+    applyLineMove();
   }
 
   function render() {
@@ -268,7 +326,10 @@
 
   function mount(el) {
     dockEl = el;
-    renderDock();
+    // app.js 先把 dock 建好再挂进左栏；没进文档时读不到图标位置，
+    // 等这一轮任务结束、DOM 接上之后再画，这样切项目时的下划线起点是准的
+    if (el.isConnected) renderDock();
+    else queueMicrotask(() => { if (dockEl === el && el.isConnected) renderDock(); });
     if (el.dataset.bound) return;
     el.dataset.bound = '1';
 
@@ -287,9 +348,12 @@
     });
 
     el.addEventListener('contextmenu', (e) => {
+      // 项目切换条在根目录栏里面，事件会继续冒泡到 #cols 的「空目录」右键菜单；
+      // 那里只有一项「重新扫描目录」，出现在项目图标菜单旁边既多余又容易误点。
+      e.preventDefault();
+      e.stopPropagation();
       const tile = e.target.closest('.proj-tile');
       if (!tile) return;
-      e.preventDefault();
       hideTip();
       const p = find(tile.dataset.path);
       if (p) openPicker(tile, p);
@@ -386,6 +450,11 @@
       + '<svg class="pj-chev" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" '
       + 'stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
       + '<path d="M9.5 6.5 15 12l-5.5 5.5"/></svg></button>'
+      + '<div class="pj-text"><span class="pj-label">文字</span>'
+      + '<input class="pj-text-in" type="text" maxlength="2" placeholder="最多 2 个字符" '
+      + 'aria-label="文字图标，最多两个字符" autocomplete="off" spellcheck="false" value="'
+      + esc(p.icon && p.icon.type === 'text' ? p.icon.text : '') + '">'
+      + '<button type="button" class="pj-text-ok" data-act="text">应用</button></div>'
       + '<div class="pj-sep"></div>'
       + '<button type="button" class="pj-item" data-act="reveal">' + PV.icons.icon('reveal', '', 14)
       + '在资源管理器中显示</button>'
@@ -511,6 +580,8 @@
         setIcon(popFor, null);
       } else if (a === 'image') {
         pickImage();
+      } else if (a === 'text') {
+        applyTextIcon();
       }
     });
 
@@ -521,6 +592,28 @@
         cell.hidden = !!q && cell.dataset.key.toLowerCase().indexOf(q) < 0;
       });
     });
+
+    popEl.addEventListener('keydown', (e) => {
+      if (e.key !== 'Enter' || !e.target.classList.contains('pj-text-in')) return;
+      e.preventDefault();
+      e.stopPropagation();
+      applyTextIcon();
+    });
+  }
+
+  /** 用 1–2 个字符做项目图标；输入里的空白会去掉 */
+  function applyTextIcon() {
+    if (!popEl) return;
+    const input = popEl.querySelector('.pj-text-in');
+    if (!input) return;
+    const text = Array.from(input.value.replace(/[\r\n\t]/g, ' ').trim()).slice(0, 2).join('').trim();
+    if (!text) {
+      hooks.toast('请输入 1–2 个字符');
+      input.focus();
+      return;
+    }
+    input.value = text;
+    setIcon(popFor, { type: 'text', text: text });
   }
 
   async function pickImage() {

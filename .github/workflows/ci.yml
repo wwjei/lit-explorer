@@ -39,6 +39,11 @@ jobs:
         # 手工搬动依赖而忘了同步锁文件是这个项目出过三次的事故，别再绕过这一步。
         run: npm ci
 
+      - name: 文档索引与链接
+        # 新文档没进 AGENTS.md / CODEMAP.md，或者改名后留下死链，都在这里失败。
+        # 只读 .md，不依赖构建产物。
+        run: npm run check:docs
+
       - name: 构建渲染进程产物
         # 集成测试跑的是真实构建产物（src/renderer/vendor/），不先构建会测到空文件
         run: npm run build
