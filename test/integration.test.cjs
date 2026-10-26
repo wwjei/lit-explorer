@@ -18,6 +18,7 @@
  *   P2     晚到的旧图片请求不污染缩放状态
  *   P3     拖动抓手换位置；临时列拖到右侧自动固定
  *   P4     拖到列的下 1/3 分屏；取消分屏里的一格恢复单格；临时列也能直接分屏
+ *   P5     切到别的项目再回来：固定列、列宽、分屏比例与模式都按项目恢复
  *   E1     SVG 编辑：改字、拖动、矩形缩放、删除（连框内文字）、撤销与自动保存
  *   E2     SVG 保存边界：只写工作区内已存在的 .svg，版本冲突不覆盖
  *   E3     含脚本 / 事件属性 / javascript: 链接的 SVG 只读显示，不执行也不保存
@@ -72,6 +73,14 @@ async function waitStubbedRows(runPage) {
   const want = JSON.stringify(stubbedEntries.slice().sort());
   await waitPage(runPage, `JSON.stringify([...document.querySelectorAll('.col[data-col="0"] .row .nm')]
     .map(e=>e.textContent.trim()).sort()) === ${JSON.stringify(want)}`);
+}
+
+/**
+ * 这些段落共用 prepare() 建出来的工作区：固定列会作为项目布局存下来，
+ * 下一段重开同一根时会恢复上一段的 pin。段末清掉，避免夹具互相污染。
+ */
+async function clearPinnedColumns(runPage) {
+  await runPage('(()=>{PV.pane.clearPins(); PV.pane.renderPreview(); return true;})()');
 }
 
 /** 页内条件等待：所有 executeJavaScript 片段共用这一个全局函数 */
@@ -314,6 +323,7 @@ async function main() {
     })()`);
     ok('固定列显示正文而不是「读取中…」',
       c1.length === 1 && c1[0].indexOf('LOADED_MARKER') >= 0, c1);
+    await clearPinnedColumns(runPage);
   });
 
   await run('C2', '旧文档解析失败不覆盖新文件的预览', async () => {
@@ -452,6 +462,7 @@ async function main() {
     ok('切到代码视图后查找条自动关闭', f1.closedOnCode && f1.codeView, f1);
     ok('固定时查询词跟到新列', f1.carried, f1);
     eq('固定列里的命中重新落上', f1.pinHits, 2);
+    await clearPinnedColumns(runPage);
   });
 
   await run('F2', '代码块异步高亮不吞掉查找命中', async () => {
@@ -934,6 +945,7 @@ async function main() {
     eqJson('临时列拖到右侧后固定成最后一列', p3.final, ['alpha.md', 'beta.md', 'gamma.md']);
     ok('自动固定后临时列收起', p3.tempHidden, p3);
     ok('提示已固定临时列', p3.toastText.indexOf('已固定：gamma.md') >= 0, p3.toastText);
+    await clearPinnedColumns(runPage);
   });
 
   await run('P4', '拖到列的下 1/3 分屏；取消一格后恢复单格；临时列也能分屏', async () => {
@@ -1024,6 +1036,208 @@ async function main() {
     eqJson('临时列拖到 alpha 下 1/3 后上下分屏', p4.tempSplit.map((p) => p.name), ['alpha.md', 'gamma.md']);
     ok('临时列分屏后收起', p4.tempHidden, p4);
     ok('提示已分屏', p4.toastText.indexOf('已分屏：gamma.md') >= 0, p4.toastText);
+    await clearPinnedColumns(runPage);
+  });
+
+  await run('P5', '切项目再回来：固定列、宽度、分屏比例与模式都恢复', async () => {
+    const a = freshDir('layout-a');
+    const b = freshDir('layout-b');
+    const runPage = await renderer();
+    // 同一个窗口里切换两个工作区；列表按目录返回不同文件，读内容用桩
+    ipcMain.removeHandler('fs:list');
+    ipcMain.handle('fs:list', (_e, dir) => {
+      const isA = path.basename(String(dir)).toLowerCase() === 'layout-a';
+      const files = isA ? ['alpha.md', 'beta.md'] : ['other.md'];
+      return { entries: files.map((name) => ({
+        name: name, path: path.join(dir, name), isDir: false, kind: 'md'
+      })) };
+    });
+    stubRead((_e, p) => ({ text: path.basename(String(p)).toUpperCase(), size: 10 }));
+    createdWin.setSize(1200, 820);
+    await sleep(80);
+
+    const openRoot = async (dir, row) => {
+      createdWin.webContents.send('workspace:opened', dir);
+      await waitPage(runPage, `[...document.querySelectorAll('.col[data-col="0"] .row .nm')]
+        .some(e=>e.textContent===${JSON.stringify(row)})`);
+    };
+
+    await openRoot(a, 'alpha.md');
+    const savedA = await runPage(`(async()=>{
+      const wait=(ms)=>new Promise(r=>setTimeout(r,ms));
+      const row=(n)=>[...document.querySelectorAll('.col[data-col="0"] .row')]
+        .find(e=>e.querySelector('.nm').textContent===n);
+      const temp=()=>document.querySelector('.pane:not(.is-pinned)');
+      const paneOf=(n)=>[...document.querySelectorAll('.pane.is-pinned')]
+        .find(p=>p.querySelector('.pv-nm').textContent.trim()===n);
+      const pin=()=>temp().querySelector('[data-act="pin"]').click();
+      const waitTemp=(n)=>waitFor(()=>{const el=temp() && temp().querySelector('.pv-nm');
+        return el && el.textContent.trim()===n;});
+      const waitPins=(n)=>waitFor(()=>document.querySelectorAll('.pane.is-pinned').length===n);
+      const ev=(type,el,x,y)=>el.dispatchEvent(new PointerEvent(type,{
+        bubbles:true,cancelable:true,pointerId:21,button:0,
+        buttons:type==='pointerup'?0:1,clientX:x,clientY:y}));
+      const columns=()=>[...document.querySelectorAll('.pane-col')].filter(c=>!c.hidden)
+        .sort((x,y)=>x.getBoundingClientRect().left-y.getBoundingClientRect().left)
+        .map(c=>{
+          const ps=[...c.querySelectorAll('.pane')]
+            .sort((x,y)=>x.getBoundingClientRect().top-y.getBoundingClientRect().top);
+          const stack=c.querySelector('.pane-stack').getBoundingClientRect();
+          return {
+            names:ps.map(p=>p.querySelector('.pv-nm').textContent.trim()),
+            w:Math.round(c.getBoundingClientRect().width),
+            split:c.classList.contains('is-split'),
+            mode:ps[0].querySelector('.codeview')?'source':'preview',
+            ratio:c.classList.contains('is-split')
+              ? Math.round(ps[0].getBoundingClientRect().height/stack.height*100)/100 : null
+          };
+        });
+
+      row('alpha.md').click(); await waitTemp('alpha.md'); pin(); await waitPins(1);
+      row('beta.md').click(); await waitTemp('beta.md'); pin(); await waitPins(2);
+      paneOf('beta.md').querySelector('[data-mode="source"]').click();
+      await waitFor(()=>paneOf('beta.md').querySelector('.codeview'));
+      // 最左列往左拖：把 beta 这一列加宽
+      const col=paneOf('beta.md').closest('.pane-col');
+      const grip=col.querySelector('.pane-resize');
+      const gr=grip.getBoundingClientRect();
+      const panes=document.querySelector('#panes');
+      const x=Math.round(gr.left+2), y=Math.round(gr.top+gr.height/2);
+      ev('pointerdown',grip,x,y);
+      ev('pointermove',panes,x-40,y);
+      ev('pointerup',panes,x-40,y);
+      await wait(80);
+      return columns();
+    })()`);
+    eqJson('A 项目两列顺序为新固定在前', savedA.map((c) => c.names[0]), ['beta.md', 'alpha.md']);
+    eq('A 项目 beta 是源码模式', savedA[0].mode, 'source');
+
+    await openRoot(b, 'other.md');
+    const firstB = await runPage(`(async()=>{
+      const waitForPins=(n)=>waitFor(()=>document.querySelectorAll('.pane.is-pinned').length===n);
+      const pinned=()=>[...document.querySelectorAll('.pane.is-pinned')]
+        .map(p=>p.querySelector('.pv-nm').textContent.trim());
+      const before=pinned();
+      const row=[...document.querySelectorAll('.col[data-col="0"] .row')]
+        .find(e=>e.querySelector('.nm').textContent==='other.md');
+      row.click();
+      await waitFor(()=>{const n=document.querySelector('.pane:not(.is-pinned) .pv-nm');
+        return n && n.textContent.trim()==='other.md';});
+      document.querySelector('.pane:not(.is-pinned) [data-act="pin"]').click();
+      await waitForPins(1);
+      return { before: before, after: pinned() };
+    })()`);
+    eqJson('切到 B 时 A 的固定列先清掉', firstB.before, []);
+    eqJson('B 项目自己的固定列', firstB.after, ['other.md']);
+
+    await openRoot(a, 'alpha.md');
+    const backA = await runPage(`(async()=>{
+      const waitPins=(n)=>waitFor(()=>document.querySelectorAll('.pane.is-pinned').length===n);
+      const paneOf=(n)=>[...document.querySelectorAll('.pane.is-pinned')]
+        .find(p=>p.querySelector('.pv-nm').textContent.trim()===n);
+      const columns=()=>[...document.querySelectorAll('.pane-col')].filter(c=>!c.hidden)
+        .sort((x,y)=>x.getBoundingClientRect().left-y.getBoundingClientRect().left)
+        .map(c=>{
+          const ps=[...c.querySelectorAll('.pane')]
+            .sort((x,y)=>x.getBoundingClientRect().top-y.getBoundingClientRect().top);
+          return {
+            names:ps.map(p=>p.querySelector('.pv-nm').textContent.trim()),
+            w:Math.round(c.getBoundingClientRect().width),
+            split:c.classList.contains('is-split'),
+            mode:ps[0].querySelector('.codeview')?'source':'preview'
+          };
+        });
+      await waitPins(2);
+      await waitFor(()=>paneOf('beta.md').querySelector('.codeview'));
+      return columns();
+    })()`);
+    eqJson('切回 A 后固定列顺序恢复', backA.map((c) => c.names[0]), ['beta.md', 'alpha.md']);
+    ok('切回 A 后列宽恢复',
+      backA.length === savedA.length
+        && savedA.every((c, i) => Math.abs(c.w - backA[i].w) <= 1),
+      { saved: savedA.map((c) => c.w), restored: backA.map((c) => c.w) });
+    eq('切回 A 后 beta 仍是源码模式', backA[0].mode, 'source');
+
+    const splitA = await runPage(`(async()=>{
+      const wait=(ms)=>new Promise(r=>setTimeout(r,ms));
+      const paneOf=(n)=>[...document.querySelectorAll('.pane.is-pinned')]
+        .find(p=>p.querySelector('.pv-nm').textContent.trim()===n);
+      const ev=(type,el,x,y)=>el.dispatchEvent(new PointerEvent(type,{
+        bubbles:true,cancelable:true,pointerId:23,button:0,
+        buttons:type==='pointerup'?0:1,clientX:x,clientY:y}));
+      const columns=()=>[...document.querySelectorAll('.pane-col')].filter(c=>!c.hidden)
+        .map(c=>{
+          const ps=[...c.querySelectorAll('.pane')]
+            .sort((x,y)=>x.getBoundingClientRect().top-y.getBoundingClientRect().top);
+          const stack=c.querySelector('.pane-stack').getBoundingClientRect();
+          return {
+            names:ps.map(p=>p.querySelector('.pv-nm').textContent.trim()),
+            w:Math.round(c.getBoundingClientRect().width),
+            split:c.classList.contains('is-split'),
+            mode:ps[0].querySelector('.codeview')?'source':'preview',
+            ratio:c.classList.contains('is-split')
+              ? Math.round(ps[0].getBoundingClientRect().height/stack.height*100)/100 : null
+          };
+        });
+      const panes=document.querySelector('#panes');
+      const br=paneOf('beta.md').getBoundingClientRect();
+      const grip=paneOf('alpha.md').querySelector('.pv-grip');
+      const gr=grip.getBoundingClientRect();
+      ev('pointerdown',grip,gr.left+gr.width/2,gr.top+gr.height/2);
+      ev('pointermove',panes,gr.left+gr.width/2+8,gr.top+gr.height/2);
+      ev('pointermove',panes,br.left+br.width/2,br.top+br.height*0.85);
+      ev('pointerup',panes,br.left+br.width/2,br.top+br.height*0.85);
+      await waitFor(()=>document.querySelector('.pane-col.is-split'));
+      const splitEl=document.querySelector('.pane-col.is-split .pane-split');
+      const sr=splitEl.getBoundingClientRect();
+      const sx=Math.round(sr.left+sr.width/2), sy=Math.round(sr.top+sr.height/2);
+      ev('pointerdown',splitEl,sx,sy);
+      ev('pointermove',panes,sx,sy+50);
+      ev('pointerup',panes,sx,sy+50);
+      await wait(80);
+      return columns();
+    })()`);
+    eq('A 项目分屏后只留一列', splitA.length, 1);
+    eqJson('分屏上下顺序 beta / alpha', splitA[0].names, ['beta.md', 'alpha.md']);
+    ok('分屏比例已调整', splitA[0].ratio > 0.55, splitA[0]);
+
+    await openRoot(b, 'other.md');
+    const secondB = await runPage(`(async()=>{
+      await waitFor(()=>document.querySelectorAll('.pane.is-pinned').length===1);
+      return {
+        names:[...document.querySelectorAll('.pane.is-pinned')]
+          .map(p=>p.querySelector('.pv-nm').textContent.trim()),
+        split:!!document.querySelector('.pane-col.is-split')
+      };
+    })()`);
+    eqJson('B 项目没有被 A 的分屏影响', secondB.names, ['other.md']);
+    eq('B 项目仍是单列', secondB.split, false);
+
+    await openRoot(a, 'alpha.md');
+    const finalA = await runPage(`(async()=>{
+      const waitForPins=(n)=>waitFor(()=>document.querySelectorAll('.pane.is-pinned').length===n);
+      const paneOf=(n)=>[...document.querySelectorAll('.pane.is-pinned')]
+        .find(p=>p.querySelector('.pv-nm').textContent.trim()===n);
+      await waitForPins(2);
+      await waitFor(()=>document.querySelector('.pane-col.is-split'));
+      await waitFor(()=>paneOf('beta.md').querySelector('.codeview'));
+      const c=document.querySelector('.pane-col.is-split');
+      const ps=[...c.querySelectorAll('.pane')]
+        .sort((x,y)=>x.getBoundingClientRect().top-y.getBoundingClientRect().top);
+      const stack=c.querySelector('.pane-stack').getBoundingClientRect();
+      return {
+        names:ps.map(p=>p.querySelector('.pv-nm').textContent.trim()),
+        w:Math.round(c.getBoundingClientRect().width),
+        mode:ps[0].querySelector('.codeview')?'source':'preview',
+        ratio:Math.round(ps[0].getBoundingClientRect().height/stack.height*100)/100
+      };
+    })()`);
+    eqJson('切回 A 后分屏上下顺序恢复', finalA.names, ['beta.md', 'alpha.md']);
+    eq('切回 A 后 beta 仍是源码模式', finalA.mode, 'source');
+    eq('切回 A 后分屏列宽恢复', finalA.w, splitA[0].w);
+    ok('切回 A 后分屏比例恢复',
+      Math.abs(finalA.ratio - splitA[0].ratio) <= 0.02,
+      { saved: splitA[0].ratio, restored: finalA.ratio });
   });
 
   await run('W2', '网页读剪贴板按站点询问一次，允许后本次运行不再问', async () => {

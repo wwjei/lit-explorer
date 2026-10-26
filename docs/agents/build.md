@@ -37,7 +37,7 @@ icons.js → highlight.js → markdown.js → vendor/docpreview.js
 | `webview.js`（`PV.web`） | 内嵌网页的几何同步：把每个网页预览列当前该占的矩形声明给主进程（`web:sync`），用 rAF 合并拖动与缩放；弹层打开时先 `setOccluded(true)`、拖动列 / 分隔条 / 窗格时先 `setDragHidden(true)` 把原生视图藏起来（松手后按新矩形回来） |
 | `svgedit.js`（`PV.svgedit`） | SVG 编辑模式的正文：解析与安全清洗、选择、拖动（矩形带框内文字）、矩形八向缩放、文字单行编辑、删除、撤销重做、自动保存；它自己管 `pane.view.destroy` 清理监听与 ResizeObserver |
 | `find.js`（`PV.find`） | 预览内查找：查找条、命中标记、在命中之间跳转 |
-| `projects.js`（`PV.projects`） | 项目切换条：最多 5 个项目、图标目录与图标选择、每项目浏览位置的持久化；打开 / 切换由 `app.js` 通过 `PV.projects.init()` 注入 |
+| `projects.js`（`PV.projects`） | 项目切换条：最多 5 个项目、图标目录与图标选择、每项目浏览位置与固定列布局的持久化；打开 / 切换由 `app.js` 通过 `PV.projects.init()` 注入 |
 | `app.js` | 目录导航（多栏、虚拟滚动、快速访问与网页条目）、键盘 / 指针 / 主进程事件接线，以及把上面几个模块接起来 |
 
 分层是为了把「异步任务与界面归属」收在一处：正文**只能通过任务对象写**

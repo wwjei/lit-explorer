@@ -649,6 +649,7 @@
     await loadColumn(0);
     if (nav) {
       await restoreNav(nav);
+      PV.pane.restoreLayout(nav.layout);
       navRestored = true;
     }
     scheduleSaveNav();
@@ -698,7 +699,9 @@
     return {
       path: state.path.map((f) => f.path),
       sel: state.sel ? state.sel.node.path : null,
-      mode: state.mode
+      mode: state.mode,
+      // 固定列、列宽、分屏比例都跟着项目走：切走时一起存，切回来原样恢复
+      layout: PV.pane.layoutSnapshot()
     };
   }
 
@@ -1615,7 +1618,9 @@
     renderHead: PV.body.head,
     renderBody: PV.body.render,
     bodyKey: PV.body.key,
-    afterLayout: function () { if (PV.web) PV.web.schedule(); }
+    afterLayout: function () { if (PV.web) PV.web.schedule(); },
+    layoutChanged: function () { scheduleSaveNav(); },
+    allowPinnedPath: function (path) { return partsUnderRoot(path) !== null; }
   });
   PV.projects.init({
     toast: toast,
@@ -1699,7 +1704,10 @@
       PV.projects.noteOpened(state.root);
       const nav = navRestored ? null : PV.projects.navOf(state.root);
       render();
-      if (nav) await restoreNav(nav);
+      if (nav) {
+        await restoreNav(nav);
+        PV.pane.restoreLayout(nav.layout);
+      }
     }
     if (st.previewWidth > 0) PV.pane.setTempWidth(st.previewWidth);
     applyMaximized(await pv.isMaximized());

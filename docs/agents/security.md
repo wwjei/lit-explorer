@@ -19,7 +19,9 @@
   不能直接 `store.patch(changes)`：`state.window` 会在下次启动时当 `BrowserWindow` 参数，
   `projects[].path` 会在下次启动时被 `offerRoot`。窗口只取 `{x,y,width,height}`，
   项目路径必须 `isOfferedRoot()`，其余字段逐个校验类型与范围。新增可持久化字段时，
-  同时改 `sanitizePatch()` 与测试（单测 S6）。
+  同时改 `sanitizePatch()` 与测试（单测 S6）。`projects[].nav.layout` 里的固定列路径
+  同样不是授权依据：恢复时渲染进程只保留当前工作区内的路径（`partsUnderRoot`），
+  实际读取仍过 `assertAllowed()`；网页格只接受规范化后的 `http(s)`。
 - 不要在 `preload.js` 暴露通用的写、删除、移动或执行任意命令的接口；目前只有
   `writeSvg()` 这一个写入口，不要再加「写任意文件」的变体；
 - 授权决策留在主进程。渲染进程只能打开主进程**给过**的目录（`fs-api.js` 的

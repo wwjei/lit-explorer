@@ -224,6 +224,44 @@ function loadRenderer() {
     eq('网页条目不带 path（不能借它注入路径）',
       list.filter((f) => f.kind === 'web' && Object.prototype.hasOwnProperty.call(f, 'path')).length, 0);
     eq('文件条目照常保留', list[0].path, 'C:\\ws\\a.md');
+
+    // 每个项目记住的固定列布局：结构、数量与数值都要收敛
+    const nav = san.sanitizeNav({
+      path: ['C:\\ws'],
+      sel: 'C:\\ws\\a.md',
+      mode: 'source',
+      layout: {
+        mainFloor: 99999,
+        pins: [
+          { w: 100, split: 2, panes: [
+            { path: 'C:\\ws\\a.md', name: 'a.md', kind: 'md', mode: 'source', zoom: 99, continuous: true },
+            { kind: 'web', url: ' HTTP://EXAMPLE.com/doc ', name: '文档' },
+            { path: 'C:\\ws\\third.md', kind: 'md' }
+          ] },
+          { w: 500, split: 0.4, panes: [] },
+          { w: 500, split: 0.4, panes: [{ path: 'C:\\ws\\b.md', kind: 'evil' }] },
+          { w: 500, split: 0.4, panes: [{ path: 'C:\\ws\\c.md', kind: 'md' }] },
+          { w: 500, split: 0.4, panes: [{ path: 'C:\\ws\\d.md', kind: 'md' }] }
+        ]
+      }
+    });
+    eq('固定列最多 3 列', nav.layout.pins.length, 3);
+    eq('空列被丢掉、每列最多 2 格', nav.layout.pins[0].panes.length, 2);
+    eq('宽度 / 分屏比例 / 主栏下限都有界',
+      [nav.layout.pins[0].w, nav.layout.pins[0].split, nav.layout.mainFloor].join('|'),
+      '240|0.8|10000');
+    eq('文件格保留模式、缩放与连续预览',
+      [nav.layout.pins[0].panes[0].mode, nav.layout.pins[0].panes[0].zoom,
+        nav.layout.pins[0].panes[0].continuous].join('|'),
+      'source|8|true');
+    eq('网页格只留规范化后的 http(s) 地址',
+      [nav.layout.pins[0].panes[1].url, nav.layout.pins[0].panes[1].path,
+        nav.layout.pins[0].panes[1].kind].join('|'),
+      'http://example.com/doc|http://example.com/doc|web');
+    eq('未知文件类型退回 txt', nav.layout.pins[1].panes[0].kind, 'txt');
+    eq('只有非法网页的布局整份丢弃',
+      san.sanitizeNav({ layout: { pins: [{ panes: [{ kind: 'web', url: 'javascript:alert(1)' }] }] } }).layout,
+      undefined);
   });
 
   done();

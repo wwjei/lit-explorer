@@ -20,6 +20,11 @@ const MAX_NAV_LEVELS = 16;
 const MAX_PATH_CHARS = 4096;
 const MAX_FAV_KEYS = 200;
 const MAX_FAV_ITEMS = 500;
+const MAX_LAYOUT_PINS = 3;
+const MAX_LAYOUT_PANES = 2;
+/** 与渲染进程 pane.js 的 PANE_KINDS 保持一致；web 单独按 URL 校验 */
+const PINNED_KINDS = new Set(['html', 'md', 'docx', 'pptx', 'pdf', 'js', 'json', 'css',
+  'svg', 'image', 'txt']);
 
 function isFiniteNumber(v) {
   return typeof v === 'number' && Number.isFinite(v);
@@ -67,6 +72,66 @@ function sanitizeIcon(icon) {
   return null;
 }
 
+/** 固定列里的一格：文件只认 path/kind，网页只认 http(s) URL */
+function sanitizePinnedPane(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const mode = raw.mode === 'source' ? 'source' : 'preview';
+  const zoom = isFiniteNumber(raw.zoom) ? Math.min(8, Math.max(0, raw.zoom)) : 0;
+  const continuous = raw.continuous === true;
+  if (raw.kind === 'web' || raw.url) {
+    const url = webUrl.normalizeWebUrl(raw.url || raw.path);
+    if (!url) return null;
+    return {
+      path: url,
+      name: shortText(raw.name, 120) || webUrl.webHost(url) || url,
+      kind: 'web',
+      url: url,
+      mode: mode,
+      zoom: zoom,
+      continuous: continuous
+    };
+  }
+  const p = typeof raw.path === 'string' ? raw.path.slice(0, MAX_PATH_CHARS) : '';
+  if (!p) return null;
+  const kind = shortText(raw.kind, 24);
+  return {
+    path: p,
+    name: shortText(raw.name, 255) || p.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || p,
+    kind: PINNED_KINDS.has(kind) ? kind : 'txt',
+    mode: mode,
+    zoom: zoom,
+    continuous: continuous
+  };
+}
+
+/** 每个项目的固定列布局：顺序、宽度、分屏比例、每格内容；越界值一律收敛 */
+function sanitizeLayout(layout) {
+  if (!layout || typeof layout !== 'object') return null;
+  const pins = [];
+  const cols = Array.isArray(layout.pins) ? layout.pins : [];
+  for (const raw of cols) {
+    if (pins.length >= MAX_LAYOUT_PINS) break;
+    if (!raw || typeof raw !== 'object') continue;
+    const panes = [];
+    const saved = Array.isArray(raw.panes) ? raw.panes : [];
+    for (const p of saved) {
+      if (panes.length >= MAX_LAYOUT_PANES) break;
+      const one = sanitizePinnedPane(p);
+      if (one) panes.push(one);
+    }
+    if (!panes.length) continue;
+    pins.push({
+      w: isFiniteNumber(raw.w) ? Math.min(10000, Math.max(240, Math.round(raw.w))) : 0,
+      split: isFiniteNumber(raw.split) ? Math.min(0.8, Math.max(0.2, raw.split)) : 0.5,
+      panes: panes
+    });
+  }
+  const mainFloor = isFiniteNumber(layout.mainFloor)
+    ? Math.min(10000, Math.max(0, Math.round(layout.mainFloor))) : 0;
+  if (!pins.length && !mainFloor) return null;
+  return { mainFloor: mainFloor, pins: pins };
+}
+
 /** 项目上次的浏览位置：只用于重开时导航，越权路径由 fs-api 再挡一次 */
 function sanitizeNav(nav) {
   if (!nav || typeof nav !== 'object') return null;
@@ -75,7 +140,10 @@ function sanitizeNav(nav) {
       .slice(0, MAX_NAV_LEVELS)
     : [];
   const sel = typeof nav.sel === 'string' && nav.sel.length <= MAX_PATH_CHARS ? nav.sel : null;
-  return { path: dirs, sel: sel, mode: nav.mode === 'source' ? 'source' : 'preview' };
+  const out = { path: dirs, sel: sel, mode: nav.mode === 'source' ? 'source' : 'preview' };
+  const layout = sanitizeLayout(nav.layout);
+  if (layout) out.layout = layout;
+  return out;
 }
 
 function sanitizeProjects(value, isOfferedRoot) {

@@ -37,6 +37,8 @@
   const MAIN_HARD_MIN = 260;   // 栏区的绝对下限（约一栏宽），手动拖动也不越过
   const SPLIT_MIN = 0.2;       // 上下分屏时上面那一格的最小占比
   const SPLIT_MAX = 0.8;
+  /** 允许从设置里恢复的预览类型；web 单独处理，不能靠 path 当文件读 */
+  const PANE_KINDS = new Set(['html', 'md', 'docx', 'pptx', 'pdf', 'js', 'json', 'css', 'svg', 'image', 'txt']);
 
   /**
    * app.js 注入的接口：本文件只管「什么时候」，画成什么样由它们决定。
@@ -54,7 +56,11 @@
     renderHead: function () { return ''; },
     renderBody: function () { return null; },
     bodyKey: function () { return ''; },
-    afterLayout: function () {}
+    afterLayout: function () {},
+    /** 用户改了固定列 / 宽度 / 分屏比例：app.js 用它把布局记进当前项目 */
+    layoutChanged: function () {},
+    /** 从设置恢复固定列时，只接受当前工作区内的文件路径 */
+    allowPinnedPath: function () { return true; }
   };
 
   /** 临时预览列是否显示（固定列不受它影响） */
@@ -252,6 +258,7 @@
   function clearPins() {
     for (const col of pins.slice()) destroyColumn(col);
     pins = [];
+    mainFloor = 0;
   }
 
   /** 换工作区：临时预览列清空（正文与内容身份一起复位） */
@@ -668,6 +675,7 @@
     // 正文是搬过来的，没有走重渲染那条路，高亮在这里补落一次
     if (made.carried) PV.find.refresh();
     hooks.toast('已固定：' + made.pane.node.name);
+    noteLayout();
   }
 
   function adoptPaneBody(to, from) {
@@ -696,6 +704,100 @@
     else layoutColumn(col);
     renderPreview();
     hooks.toast('已取消固定：' + ((pane.node && pane.node.name) || ''));
+    noteLayout();
+  }
+
+  /* ============================ 项目布局快照 ============================ */
+
+  /** 固定列的数据形态：顺序、宽度、上下比例、每格的内容与模式 */
+  function savedPaneData(pane) {
+    const node = pane.node;
+    if (!node || typeof node.path !== 'string' || !node.path) return null;
+    const item = {
+      path: node.path,
+      kind: node.kind || 'txt',
+      mode: modeOf(pane),
+      zoom: pane.zoom || 0,
+      continuous: !!pane.continuous
+    };
+    // 文件名从路径现取，改名后不会留下旧标题；网页的名字是用户起的，得存
+    if (node.kind === 'web') {
+      item.name = node.name || '';
+      item.url = node.url || node.path;
+    }
+    return item;
+  }
+
+  function layoutSnapshot() {
+    return {
+      mainFloor: Math.round(mainFloor || 0),
+      pins: pins.map((col) => ({
+        w: Math.round(col.w || 0),
+        split: col.split,
+        panes: col.panes.map(savedPaneData).filter(Boolean)
+      })).filter((col) => col.panes.length)
+    };
+  }
+
+  /** 用户改了固定列 / 宽度 / 分屏比例：交给 app.js 记进当前项目 */
+  function noteLayout() {
+    hooks.layoutChanged();
+  }
+
+  function clampSavedWidth(w) {
+    return Math.min(10000, Math.max(PANE_MIN, Math.round(w)));
+  }
+
+  function nodeFromSaved(saved) {
+    if (!saved || typeof saved !== 'object') return null;
+    if (saved.kind === 'web') {
+      const url = typeof saved.url === 'string' ? saved.url : '';
+      if (!/^https?:\/\//i.test(url)) return null;
+      return { name: saved.name || url, kind: 'web', url: url, path: url, isDir: false };
+    }
+    const filePath = typeof saved.path === 'string' ? saved.path : '';
+    if (!filePath || !hooks.allowPinnedPath(filePath)) return null;
+    const name = saved.name || filePath.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || filePath;
+    const kind = PANE_KINDS.has(saved.kind) ? saved.kind : 'txt';
+    return { path: filePath, name: name, isDir: false, kind: kind };
+  }
+
+  /** 恢复一个项目的固定列；调用前固定列已清空，这里按保存顺序重建 */
+  function restoreLayout(layout) {
+    if (!layout || typeof layout !== 'object') return;
+    if (Number.isFinite(layout.mainFloor)) {
+      mainFloor = Math.min(10000, Math.max(0, Math.round(layout.mainFloor)));
+    }
+    const savedCols = Array.isArray(layout.pins) ? layout.pins.slice(0, MAX_PINS) : [];
+    for (const data of savedCols) {
+      if (!data || typeof data !== 'object') continue;
+      const made = [];
+      const savedPanes = Array.isArray(data.panes) ? data.panes.slice(0, MAX_PANES_PER_COL) : [];
+      for (const saved of savedPanes) {
+        const node = nodeFromSaved(saved);
+        if (!node) continue;
+        made.push(createPane({
+          pinned: true,
+          node: node,
+          mode: saved.mode === 'source' ? 'source' : 'preview',
+          zoom: Number.isFinite(saved.zoom) ? saved.zoom : 0,
+          continuous: !!saved.continuous
+        }));
+      }
+      if (!made.length) continue;
+      const col = createColumn({
+        pane: made[0],
+        w: Number.isFinite(data.w) ? clampSavedWidth(data.w) : defaultColumnWidth()
+      });
+      if (made[1]) addPaneToColumn(col, made[1]);
+      if (Number.isFinite(data.split)) {
+        col.split = Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, data.split));
+        layoutColumn(col);
+      }
+      pins.push(col);
+    }
+    // pins 按保存顺序 push，[0] 就是最左；渲染一次把正文与宽度落下去
+    if (pins.length) renderPreview();
   }
 
   /* ============================ 滚动位置 ============================ */
@@ -786,6 +888,7 @@
     drag.col.grip.classList.remove('is-drag');
     document.body.classList.remove('resizing');
     if (drag.webHidden) setWebDrag(false);
+    noteLayout();
   }
 
   panesEl.addEventListener('pointerdown', (e) => {
@@ -868,6 +971,7 @@
     splitDrag = null;
     document.body.classList.remove('resizing-v');
     if (drag.webHidden) setWebDrag(false);
+    noteLayout();
   }
 
   panesEl.addEventListener('pointerdown', (e) => {
@@ -1026,6 +1130,7 @@
       renderPreview();
       if (keep) restorePaneTop(pane, keep);
       hooks.toast('已分屏：' + pane.node.name);
+      noteLayout();
       return;
     }
 
@@ -1036,6 +1141,7 @@
     if (made.keep) restorePaneTop(made.pane, made.keep);
     if (made.carried) PV.find.refresh();
     hooks.toast('已分屏：' + made.pane.node.name);
+    noteLayout();
   }
 
   /** 新开一列插到固定列的指定位置；临时列的内容会在这里固定 */
@@ -1055,6 +1161,7 @@
       if (made.keep) restorePaneTop(made.pane, made.keep);
       if (made.carried) PV.find.refresh();
       hooks.toast('已固定：' + made.pane.node.name);
+      noteLayout();
       return;
     }
 
@@ -1067,6 +1174,7 @@
       pins.splice(from, 1);
       pins.splice(info.index, 0, src);
       renderPreview();
+      noteLayout();
       return;
     }
 
@@ -1081,6 +1189,7 @@
     renderPreview();
     if (keep) restorePaneTop(pane, keep);
     hooks.toast('已移到新列：' + pane.node.name);
+    noteLayout();
   }
 
   function endHeadDrag(commit) {
@@ -1170,6 +1279,10 @@
     setTempWidth: function (w) { tempCol.w = Math.max(PANE_MIN, w); },
     resetTemp: resetTemp,
     clearPins: clearPins,
+    /** 当前项目的固定列布局（顺序 / 宽度 / 分屏比例 / 内容） */
+    layoutSnapshot: layoutSnapshot,
+    /** 切换项目后按保存的布局重建固定列 */
+    restoreLayout: restoreLayout,
 
     /* 固定 / 取消固定 */
     pinCurrent: pinCurrent,
