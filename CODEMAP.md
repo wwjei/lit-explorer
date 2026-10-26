@@ -23,7 +23,7 @@
 | --- | --- | --- | --- |
 | 窗口、标题栏、原生菜单、文件右键菜单 | `src/main/main.js`、`src/renderer/app.js` | `createWindow()`、`showContextMenu()`、`showAppMenu()`、`ui:context-menu` | `app:rescan`、`window:minimize`、`showItemInFolder` |
 | 打开工作区、路径授权边界 | `main.js`、`src/main/fs-api.js` | `openWorkspace()`、`offerRoot()`、`allowRoot()`、`assertAllowed()`、`isInsideAnyRoot()` | `EACCES_ROOT`、`NOT_OFFERED`、`workspace:open`、`workspace:opened` |
-| 文件列表、多栏导航、虚拟滚动 | `src/renderer/app.js` | `loadColumn()`、`buildColumn()`、`renderColumns()`、`renderColumnWindow()`、`selectNode()`、`itemsOf()` | `state.path`、`state.cols`、`.col-list`、`.row`、`ensureVisible` |
+| 文件列表、多栏导航、虚拟滚动 | `src/renderer/app.js` | `loadColumn()`、`buildColumn()`、`renderColumns()`、`renderColumnWindow()`、`selectNode()`、`itemsOf()`、`restoreNav()` | `state.path`、`state.cols`、`nav`、`revealPreview`、`.col-list`、`.row`、`ensureVisible` |
 | 预览区布局、宽度、固定列、分屏、项目布局快照 | `src/renderer/pane.js`、`src/renderer/styles.css` | `createColumn()`、`layoutColumn()`、`renderPreview()`、`pinCurrent()`、`makePinPaneFromTemp()`、`applySplit()`、`applyInsert()`、`dropInfo()`、`paneBudget()`、`unpinPane()`、`layoutSnapshot()`、`restoreLayout()` | `bodyKey`、`reqId`、`pending`、`MAX_PINS`、`MAX_PANES_PER_COL`、`nav.layout`、`mainFloor`、`.pane-col`、`.pane-stack`、`.pane-split`、`.pv-grip` |
 | 预览正文按类型分派、头部按钮 | `src/renderer/preview-body.js` | `renderPaneBody()`、`bodyKeyFor()`、`paneHeadHtml()`、`webHeadHtml()`、`noteLoaded()` | `PV.body`、`pane.mode`、`pane.svgEdit`、`loadingState`、`fallbackCard` |
 | Markdown 渲染、链接白名单 | `src/renderer/markdown.js` | `toHtml()`、`safeHref()` | `javascript:`、`markdown`、`inline()` |

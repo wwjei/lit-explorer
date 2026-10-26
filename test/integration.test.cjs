@@ -19,6 +19,7 @@
  *   P3     拖动抓手换位置；临时列拖到右侧自动固定
  *   P4     拖到列的下 1/3 分屏；取消分屏里的一格恢复单格；临时列也能直接分屏
  *   P5     切到别的项目再回来：固定列、列宽、分屏比例与模式都按项目恢复
+ *   P6     关掉的临时预览列不会因为切项目被重新打开
  *   E1     SVG 编辑：改字、拖动、矩形缩放、删除（连框内文字）、撤销与自动保存
  *   E2     SVG 保存边界：只写工作区内已存在的 .svg，版本冲突不覆盖
  *   E3     含脚本 / 事件属性 / javascript: 链接的 SVG 只读显示，不执行也不保存
@@ -1238,6 +1239,67 @@ async function main() {
     ok('切回 A 后分屏比例恢复',
       Math.abs(finalA.ratio - splitA[0].ratio) <= 0.02,
       { saved: splitA[0].ratio, restored: finalA.ratio });
+  });
+
+  await run('P6', '关掉的临时预览列切项目回来仍保持关闭', async () => {
+    const a = freshDir('closed-a');
+    const b = freshDir('closed-b');
+    const runPage = await renderer();
+    ipcMain.removeHandler('fs:list');
+    ipcMain.handle('fs:list', (_e, dir) => {
+      const isA = path.basename(String(dir)).toLowerCase() === 'closed-a';
+      return { entries: (isA ? ['one.md'] : ['two.md']).map((name) => ({
+        name: name, path: path.join(dir, name), isDir: false, kind: 'md'
+      })) };
+    });
+    stubRead(() => ({ text: 'BODY', size: 4 }));
+
+    const openRoot = async (dir, row) => {
+      createdWin.webContents.send('workspace:opened', dir);
+      await waitPage(runPage, `[...document.querySelectorAll('.col[data-col="0"] .row .nm')]
+        .some(e=>e.textContent===${JSON.stringify(row)})`);
+    };
+
+    await openRoot(a, 'one.md');
+    const closed = await runPage(`(async()=>{
+      [...document.querySelectorAll('.col[data-col="0"] .row')]
+        .find(e=>e.querySelector('.nm').textContent==='one.md').click();
+      await waitFor(()=>{const n=document.querySelector('.pane:not(.is-pinned) .pv-nm');
+        return n && n.textContent.trim()==='one.md';});
+      document.querySelector('.pane:not(.is-pinned) [data-act="close"]').click();
+      await waitFor(()=>PV.pane.previewOpen()===false);
+      return { open: PV.pane.previewOpen(), hidden: !!document.querySelector('#preview').hidden };
+    })()`);
+    eq('关掉临时预览后状态是收起', closed.open, false);
+    ok('关掉后预览区隐藏', closed.hidden, closed);
+
+    await openRoot(b, 'two.md');
+    await openRoot(a, 'one.md');
+    const back = await runPage(`(async()=>{
+      await waitFor(()=>{const r=document.querySelector('.row.is-sel .nm');
+        return r && r.textContent==='one.md';});
+      return {
+        open: PV.pane.previewOpen(),
+        hidden: !!document.querySelector('#preview').hidden,
+        tempHidden: !!document.querySelector('.pane:not(.is-pinned)').hidden
+      };
+    })()`);
+    eq('切回 A 后仍是收起状态', back.open, false);
+    ok('切回 A 后预览区没有自己展开', back.hidden && back.tempHidden, back);
+
+    const reopened = await runPage(`(async()=>{
+      [...document.querySelectorAll('.col[data-col="0"] .row')]
+        .find(e=>e.querySelector('.nm').textContent==='one.md').click();
+      await waitFor(()=>PV.pane.previewOpen()
+        && !document.querySelector('#preview').hidden
+        && !document.querySelector('.pane:not(.is-pinned)').hidden);
+      return {
+        open: PV.pane.previewOpen(),
+        name: document.querySelector('.pane:not(.is-pinned) .pv-nm').textContent.trim()
+      };
+    })()`);
+    eq('用户主动点文件仍会打开临时预览', reopened.open, true);
+    eq('打开的还是选中的文件', reopened.name, 'one.md');
   });
 
   await run('W2', '网页读剪贴板按站点询问一次，允许后本次运行不再问', async () => {

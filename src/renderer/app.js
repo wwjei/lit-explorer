@@ -260,12 +260,13 @@
   /**
    * 网页快速访问：不参与目录导航，直接把它作为预览列的内容。
    * 列号取当前最后一栏，只为让 ↑↓ 还有「从哪一栏继续」可依。
+   * reveal=false 用于切项目恢复：用户关掉的临时预览列不要被重新展开。
    */
-  function openWebFavorite(fav) {
+  function openWebFavorite(fav, reveal) {
     const node = webNodeFromFav(fav);
     state.sel = { col: Math.max(0, state.path.length - 1), node };
     state.mode = 'preview';
-    if (!PV.pane.previewOpen()) setPreviewVisible(true);
+    if (!PV.pane.previewOpen() && reveal !== false) setPreviewVisible(true);
     render();
     scheduleSaveNav();
   }
@@ -735,14 +736,15 @@
       if (col && col.state === 'ready' && col.entries) {
         const node = col.entries.find((e) => !e.isDir && PV.projects.samePath(e.path, nav.sel));
         if (node) {
-          await selectNode(node, ci, { scroll: false, revealPreview: true });
+          // 恢复选中不等于用户点了文件：临时预览列关着就别强行展开
+          await selectNode(node, ci, { scroll: false });
           restored = true;
         }
       }
       // 上次选中的是一条网页快捷方式：它不是目录里的条目，按地址找回收藏
       if (!restored) {
         const fav = state.favs.find((f) => isWebFav(f) && f.url === nav.sel);
-        if (fav) openWebFavorite(fav);
+        if (fav) openWebFavorite(fav, false);
       }
     }
     if (nav && nav.mode === 'source' && !(state.sel && state.sel.node.kind === WEB_KIND)) {
