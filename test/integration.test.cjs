@@ -19,6 +19,7 @@
  *   E1     SVG 编辑：改字、拖动、矩形缩放、删除（连框内文字）、撤销与自动保存
  *   E2     SVG 保存边界：只写工作区内已存在的 .svg，版本冲突不覆盖
  *   E3     含脚本 / 事件属性 / javascript: 链接的 SVG 只读显示，不执行也不保存
+ *   E4     真实鼠标双击文字能打开输入框（指针捕获不能吞掉 dblclick）
  *   W1     网页视图只接受 http(s)，移出同步列表即销毁
  *   S6     并发切换工作区只留一个授权根
  *
@@ -747,6 +748,50 @@ async function main() {
     ok('只读模式下 Delete 不删形状', e3.rectStill, e3);
     ok('脚本没有执行', e3.pwned === undefined || e3.pwned === null, e3.pwned);
     eq('只读模式不会写文件', writes.length, 0);
+  });
+
+  await run('E4', '真实鼠标双击文字能打开输入框', async () => {
+    const f = await prepare();
+    const runPage = await renderer();
+    const source = '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200" viewBox="0 0 400 200">'
+      + '<rect width="400" height="200" fill="#fff"/>'
+      + '<text x="200" y="100" text-anchor="middle" font-size="20" fill="#111">Alpha</text>'
+      + '</svg>';
+    stubList(f.ws, ['dbl.svg']);
+    stubRead(() => ({ text: source, size: source.length, mtime: 1 }));
+    ipcMain.removeHandler('fs:preview-url');
+    ipcMain.handle('fs:preview-url', () => ({ url: 'data:image/svg+xml,%3Csvg%2F%3E' }));
+    createdWin.webContents.send('workspace:opened', f.ws);
+    await sleep(200);
+    const pt = await runPage(`(async()=>{
+      const wait=(ms)=>new Promise(r=>setTimeout(r,ms));
+      [...document.querySelectorAll('.row')].find(e=>e.textContent.includes('dbl.svg')).click();
+      await wait(500);
+      document.querySelector('.pane:not(.is-pinned) [data-act="svg-edit"]').click();
+      await wait(700);
+      const text=[...document.querySelectorAll('.svg-stage svg text')].find(t=>t.textContent==='Alpha');
+      if (!text) return { error: 'NO_TEXT' };
+      const r=text.getBoundingClientRect();
+      return { x:r.left+r.width/2, y:r.top+r.height/2, w:r.width, h:r.height };
+    })()`);
+    ok('找到可双击的文字', pt && !pt.error && pt.w > 0 && pt.h > 0, pt);
+    const x = Math.round(pt.x);
+    const y = Math.round(pt.y);
+    const ev = (type, clickCount) => createdWin.webContents.sendInputEvent({
+      type: type, x: x, y: y, button: 'left', clickCount: clickCount
+    });
+    ev('mouseDown', 1); ev('mouseUp', 1);
+    await sleep(50);
+    ev('mouseDown', 2); ev('mouseUp', 2);
+    await sleep(250);
+    const dbl = await runPage(`(() => {
+      const i=document.querySelector('.svg-textinput');
+      return { input:!!i, value:i?i.value:null,
+        active:document.activeElement?document.activeElement.className:null };
+    })()`);
+    ok('真实双击打开输入框', dbl.input, dbl);
+    eq('输入框带着原文', dbl.value, 'Alpha');
+    eq('焦点在输入框上', dbl.active, 'svg-textinput');
   });
 
   await run('P3', '拖动固定列头部换位置；拖临时预览列只提示先固定', async () => {
