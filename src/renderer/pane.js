@@ -21,7 +21,7 @@
  * 引用，与加载顺序无关。
  *
  * 加载顺序：shared/contracts.js → paths.js → icons.js → highlight.js → markdown.js →
- *           vendor/docpreview.js → pane.js → preview-body.js → webview.js → svgedit.js →
+ *           pane.js → preview-body.js → webview.js → svgedit.js →
  *           find.js → projects.js → app.js。
  */
 (function () {
@@ -48,6 +48,7 @@
    *   renderHead(pane, node)  头部 HTML
    *   renderBody(...)         正文渲染，返回 Promise（见 renderPane 的调用处）
    *   bodyKey(pane,node,mode) 内容身份
+   *   capabilities(node,mode) 这个节点能做什么（图片 / 连续预览 / SVG 编辑 / 源码）
    *   afterLayout()           布局变了：网页视图的矩形要跟着重算（webview.js）
    */
   const hooks = {
@@ -57,6 +58,9 @@
     renderHead: function () { return ''; },
     renderBody: function () { return null; },
     bodyKey: function () { return ''; },
+    capabilities: function () {
+      return { image: false, continuous: false, svgEdit: false, source: false };
+    },
     afterLayout: function () {},
     /** 用户改了固定列 / 宽度 / 分屏比例：app.js 用它把布局记进当前项目 */
     layoutChanged: function () {},
@@ -555,14 +559,17 @@
       pane.changed = false;
       pane.known = null;
     }
+    // SVG 编辑 / 连续预览只对特定类型有意义：类型知识统一问 PV.body，
+    // 布局模块不再认 node.kind
+    const mode = modeOf(pane);
+    const caps = node ? hooks.capabilities(node, mode) : null;
     // SVG 编辑只属于「当初进入编辑的那个文件 + 预览模式」；换文件或切源码就退出
-    if (pane.svgEdit && (!node || node.kind !== 'svg'
-      || node.path !== pane.svgEditPath || modeOf(pane) !== 'preview')) {
+    if (pane.svgEdit && (!node || !caps.svgEdit || node.path !== pane.svgEditPath)) {
       pane.svgEdit = false;
       pane.svgEditPath = '';
     }
     // 连续预览只对「图片 + 预览模式」有意义，切到别的文件/源码视图时自动退出
-    if (pane.continuous && !(node && modeOf(pane) === 'preview' && isImageNode(node))) {
+    if (pane.continuous && !(caps && caps.continuous)) {
       pane.continuous = false;
     }
     pane.head.innerHTML = node ? hooks.renderHead(pane, node) : '';
@@ -580,7 +587,6 @@
       return;
     }
 
-    const mode = modeOf(pane);
     const key = hooks.bodyKey(pane, node, mode);
     if (!force && key === pane.bodyKey) return;
     pane.bodyKey = key;
@@ -852,11 +858,6 @@
       if (at) { sc.scrollTop = Math.max(0, at.offsetTop - sc.offsetTop - keep.off); return; }
     }
     sc.scrollTop = keep.top;
-  }
-
-  /** 连续预览只对「图片 + 预览模式」有意义 */
-  function isImageNode(node) {
-    return !!node && !node.isDir && (node.kind === 'image' || node.kind === 'svg');
   }
 
   /**
@@ -1289,7 +1290,6 @@
     allPanes: allPanes,
     modeOf: modeOf,
     visiblePanes: visiblePanes,
-    isImageNode: isImageNode,
     scrollPaneBy: scrollPaneBy
   };
 })();

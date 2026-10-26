@@ -11,7 +11,8 @@
 - `highlight/worker.js` → Shiki 分词 Worker。用 `--splitting` 切成按需 chunk，
   保持「只加载用到的那一种语言」。
 - `docpreview.js` → docx / pptx 预览。打成 IIFE 挂到 `window.PV.docpreview`，
-  由 `index.html` 直接 `<script>` 加载。
+  由 `preview-body.js` 在第一次打开文档时按需注入 `<script>`（约 1.4 MB，不占启动时间）；
+  构建缺失或加载失败时该类型落兜底卡片。
 
 图标源文件是 `assets/icon-source.png`（正方形、8 位 RGBA、非交错 PNG），
 README 与界面直接使用它。`scripts/build-icons.mjs` 自带 PNG 解码、预乘 alpha 的面积缩放
@@ -24,9 +25,11 @@ README 与界面直接使用它。`scripts/build-icons.mjs` 自带 PNG 解码、
 
 ```
 src/shared/contracts.js（主进程 require，渲染进程先加载）
-paths.js → icons.js → highlight.js → markdown.js → vendor/docpreview.js
+paths.js → icons.js → highlight.js → markdown.js
          → pane.js → preview-body.js → webview.js → svgedit.js → find.js → projects.js → app.js
 ```
+
+`vendor/docpreview.js` 不在这条链上：它是按需加载的产物，第一次打开 docx / pptx 才注入。
 
 **加载顺序是契约**：后加载的文件可以在函数体里引用前面的（`PV.pane` / `PV.body` /
 `PV.web` / `PV.svgedit` / `PV.find` / `PV.projects`），反过来只在运行时引用、不在加载时引用。
@@ -36,7 +39,7 @@ paths.js → icons.js → highlight.js → markdown.js → vendor/docpreview.js
 | `src/shared/contracts.js` | 两个进程必须一致的数量上限与可固定类型白名单。主进程 `require`，渲染进程由 `index.html` 先加载成 `PV.contracts`；两边读同一份，避免上限 / 类型名单各写一遍后漂移 |
 | `paths.js`（`PV.paths`） | 界面层的路径比较与展示：Windows 大小写不敏感、`\` 与 `/` 等价、相对工作区根的各段与副标题。主进程 `fs-api.js` 的真实路径校验是另一件事，不要合并 |
 | `pane.js`（`PV.pane`） | 预览窗格作为一个单元的全部事情：内容身份 `bodyKey`、渲染任务身份 `reqId` / `pending`、创建与销毁、固定 / 分屏时的正文迁移、列模型（一列 1–2 个窗格，列宽与上下比例）、抓手换位 / 下 1/3 分屏 / 临时列右拖自动固定 |
-| `preview-body.js`（`PV.body`） | 正文与头部**画成什么样**：按类型分派（Markdown / 代码视图 / 图片与连续预览 / HTML 迷你浏览器 / PDF / docx / pptx / 网页 / SVG 编辑）、头部副标题与元信息、缩放档位 |
+| `preview-body.js`（`PV.body`） | 正文与头部**画成什么样**：一张有序 `RENDERERS` 表按 `match` 分派（Markdown / 代码视图 / 图片与连续预览 / HTML 迷你浏览器 / PDF / docx / pptx / 网页 / SVG 编辑），`bodyKeyFor()` 用同一张表算内容身份；`capabilities()` 告诉窗格与头部按钮「这个节点能做什么」，类型知识不再漏回 `pane.js`；渲染器抛错只坏当前窗格。docx / pptx 的 1.4 MB 解析器在第一次打开文档时按需加载 |
 | `webview.js`（`PV.web`） | 内嵌网页的几何同步：把每个网页预览列当前该占的矩形声明给主进程（`web:sync`），用 rAF 合并拖动与缩放；弹层打开时先 `setOccluded(true)`、拖动列 / 分隔条 / 窗格时先 `setDragHidden(true)` 把原生视图藏起来（松手后按新矩形回来） |
 | `svgedit.js`（`PV.svgedit`） | SVG 编辑模式的正文：解析与安全清洗、选择、拖动（矩形带框内文字）、矩形八向缩放、文字单行编辑、删除、撤销重做、自动保存；它自己管 `pane.view.destroy` 清理监听与 ResizeObserver |
 | `find.js`（`PV.find`） | 预览内查找：查找条、命中标记、在命中之间跳转 |

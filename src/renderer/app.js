@@ -8,7 +8,7 @@
  *   - 键盘、指针、顶部按钮、主进程事件，以及把上面几个模块接起来
  *
  * 加载顺序：shared/contracts.js → paths.js → icons.js → highlight.js → markdown.js →
- *           vendor/docpreview.js → pane.js → preview-body.js → webview.js → svgedit.js →
+ *           pane.js → preview-body.js → webview.js → svgedit.js →
  *           find.js → projects.js → app.js。
  */
 (function () {
@@ -1232,7 +1232,8 @@
     if (act === 'zoom-reset') { if (node) PV.body.setZoom(pane, 0); return; }
     if (act === 'seq') { if (node) PV.body.toggleSeq(pane); return; }
     if (act === 'svg-edit') {
-      if (!node || node.kind !== 'svg') return;
+      // 能不能编辑问正文模块：类型知识只在 preview-body.js 里维护
+      if (!node || !PV.body.capabilities(node, PV.pane.modeOf(pane)).svgEdit) return;
       pane.svgEdit = !pane.svgEdit;
       pane.svgEditPath = pane.svgEdit ? node.path : '';
       // 编辑模式接管正文，连续预览让位
@@ -1617,6 +1618,7 @@
     renderHead: PV.body.head,
     renderBody: PV.body.render,
     bodyKey: PV.body.key,
+    capabilities: PV.body.capabilities,
     afterLayout: function () { if (PV.web) PV.web.schedule(); },
     layoutChanged: function () { scheduleSaveNav(); },
     allowPinnedPath: function (path) { return PV.paths.partsUnder(state.root, path) !== null; }

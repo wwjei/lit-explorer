@@ -11,7 +11,7 @@
  * 用 requestAnimationFrame 合并，拖动分界线时不会每像素一次 IPC。
  *
  * 加载顺序：shared/contracts.js → paths.js → icons.js → highlight.js → markdown.js →
- *           vendor/docpreview.js → pane.js → preview-body.js → webview.js → svgedit.js →
+ *           pane.js → preview-body.js → webview.js → svgedit.js →
  *           find.js → projects.js → app.js。
  */
 (function () {

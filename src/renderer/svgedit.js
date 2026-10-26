@@ -18,7 +18,7 @@
  * 每次带上读取时的 size / mtime；磁盘上已经变了就停在「保存冲突」，不覆盖别人的修改。
  *
  * 加载顺序：shared/contracts.js → paths.js → icons.js → highlight.js → markdown.js →
- *           vendor/docpreview.js → pane.js → preview-body.js → webview.js → svgedit.js →
+ *           pane.js → preview-body.js → webview.js → svgedit.js →
  *           find.js → projects.js → app.js。
  */
 (function () {

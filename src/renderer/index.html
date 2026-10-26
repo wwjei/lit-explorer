@@ -91,8 +91,8 @@
 <script src="icons.js"></script>
 <script src="highlight.js"></script>
 <script src="markdown.js"></script>
-<!-- docx / pptx 预览（npm run build 生成，缺失时该类型回落到兜底卡片） -->
-<script src="vendor/docpreview.js"></script>
+<!-- docx / pptx 预览（npm run build 生成的 1.4 MB 产物）不在这里：
+     preview-body.js 首次打开文档时按需注入，缺失或失败时该类型落兜底卡片 -->
 <!-- 窗格（PV.pane）、正文渲染（PV.body）、网页视图同步（PV.web）、
      SVG 编辑器（PV.svgedit）、预览内查找（PV.find）先就位，项目切换条
      （PV.projects）再进来，app.js 负责导航与接线 -->
