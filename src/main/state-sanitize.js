@@ -45,7 +45,7 @@ function windowBounds(value) {
   return out;
 }
 
-/** 图标只认内置 glyph id 或主进程生成过的图片 data URL */
+/** 图标只认内置 glyph id、1–2 个字符的文字，或主进程生成过的图片 data URL */
 function sanitizeIcon(icon) {
   if (!icon || typeof icon !== 'object') return null;
   if (icon.type === 'glyph') {
@@ -58,6 +58,11 @@ function sanitizeIcon(icon) {
     return /^data:image\/(?:png|jpeg|webp|gif|bmp|x-icon|vnd\.microsoft\.icon);base64,[A-Za-z0-9+/=]+$/.test(data)
       ? { type: 'image', data: data }
       : null;
+  }
+  if (icon.type === 'text') {
+    const raw = shortText(icon.text, 32).replace(/[\r\n\t]/g, ' ').trim();
+    const text = Array.from(raw).slice(0, 2).join('').trim();
+    return text ? { type: 'text', text: text } : null;
   }
   return null;
 }

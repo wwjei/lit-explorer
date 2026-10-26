@@ -103,9 +103,11 @@ CI（[.github/workflows/ci.yml](../../.github/workflows/ci.yml)）在**开 PR �
 窗口的 `document.hidden` 必须为 `false` 且窗口要有焦点（轮询在窗口不可见、或连续 10 分钟
 没有回到前台时会暂停）。
 
-项目切换条（5 个项目上限、悬停路径、图标选择、切换后恢复目录与选中文件）目前靠探针验证：
-在独立 `--user-data-dir` 的 `state.json` 里预置 5 个项目，启动后按 `.proj-tile` /
-`.pj-cell` 等选择器驱动并截图；要进回归网，得按 F1 的方式把 IPC 桩换成可控的
+项目切换条（5 个项目上限、悬停路径、图标选择、切换后恢复目录与选中文件、当前项下方的
+灰色短线与切换动画、右键不弹目录菜单、文字图标最多两个字符）目前靠探针验证：在独立
+`--user-data-dir` 的 `state.json` 里预置 5 个项目，启动后按 `.proj-tile` / `.pj-cell` /
+`.pj-text-in` 等选择器驱动并截图；动画可以看 `is-line-move` 与 `::after` 的
+`getComputedStyle` 变换。要进回归网，得按 F1 的方式把 IPC 桩换成可控的
 `workspace:open` 与 `getState`。
 
 ## 界面探针

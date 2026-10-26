@@ -182,7 +182,8 @@ function loadRenderer() {
       projects: [
         { path: 'C:\\ok', name: 'ok', icon: { type: 'glyph', id: 'code' } },
         { path: 'C:\\Windows', name: 'bad' },
-        { path: 'C:\\ok', icon: { type: 'image', data: 'data:text/html,<script>' } }
+        { path: 'C:\\ok', icon: { type: 'image', data: 'data:text/html,<script>' } },
+        { path: 'C:\\ok', icon: { type: 'text', text: ' 中文A ' } }
       ]
     }, (p) => offered.has(p));
 
@@ -192,10 +193,11 @@ function loadRenderer() {
     eq('普通偏好照常保存', patch.theme, 'dark');
     eq('previewWidth 有上限', patch.previewWidth, 10000);
     eq('leftSplitRatio 有范围', patch.leftSplitRatio, 0.92);
-    eq('只保留主进程给过的项目', patch.projects.length, 2);
+    eq('只保留主进程给过的项目', patch.projects.length, 3);
     eq('未授权的项目路径被丢弃',
       patch.projects.some((p) => p.path === 'C:\\Windows'), false);
     eq('非图片 data URL 的图标被丢弃', patch.projects[1].icon, null);
+    eqJson('文字图标去掉空白并只留两个字符', patch.projects[2].icon, { type: 'text', text: '中文' });
 
     // 网页快捷方式：只认 http(s)，且不能借网页条目把 path 写进设置
     const webUrl = require(path.join(ROOT, 'src/main/web-url.js'));

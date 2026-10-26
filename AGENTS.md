@@ -2,6 +2,9 @@
 
 lit explorer：Electron 写的本地项目文件浏览器（多栏目录导航 + 内嵌预览）。
 
+**先找入口**：[CODEMAP.md](CODEMAP.md) 按业务组件列出文件、关键方法与可搜索关键字，
+比从头翻源码快；改业务组件、关键方法、IPC / DOM 约定时同步维护它。
+
 未做的事分四个池子，别混：想做的功能与要拍板的决策在
 [further_notes.md](further_notes.md)；小 bug 与顺手清理在 [PENDING.md](PENDING.md)
 （**发版前必须清空**）；已知但无可行修法的依赖 / 安全问题在
@@ -13,6 +16,7 @@ lit explorer：Electron 写的本地项目文件浏览器（多栏目录导航 +
 
 | 你的场景 | 读这个 |
 | --- | --- |
+| 想知道某个功能在哪个文件 / 方法，或该搜什么关键字 | [CODEMAP.md](CODEMAP.md) |
 | 增删依赖，或在 `dependencies` / `devDependencies` 之间挪包 | [docs/agents/dependencies.md](docs/agents/dependencies.md) |
 | 改 `src/renderer/` 下的界面代码（含 pane / preview-body / find / projects / app 的分层）、动构建脚本或图标 | [docs/agents/build.md](docs/agents/build.md) |
 | 加文件系统能力，改 preload / IPC / 自定义协议 | [docs/agents/security.md](docs/agents/security.md) |
