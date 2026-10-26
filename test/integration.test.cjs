@@ -12,6 +12,7 @@
  *   C2     旧文档解析失败不覆盖新文件的预览
  *   C3     高亮 Worker 并发初始化不丢语言
  *   C4     重新读取时晚到的旧响应不能覆盖新内容
+ *   M1     Markdown 图片：相对地址走 pv://，越界与缺失落成占位
  *   F1     预览内查找（命中、切到不支持查找的列时自动关、固定时跟过去）
  *   F2     代码块异步高亮后查找命中不丢
  *   P1     图片列（连续预览列出同目录图片、缩放档位、切到非图片时退出）
@@ -398,6 +399,59 @@ async function main() {
     })()`);
     ok('重新读取后显示新内容', c4.before.indexOf('LATEST_CONTENT') >= 0, c4.before);
     ok('旧响应晚到时仍是新内容', c4.after.indexOf('LATEST_CONTENT') >= 0, c4.after);
+  });
+
+  await run('M1', 'Markdown 图片：相对地址渲染，越界与缺失落成占位', async () => {
+    const f = await prepare();
+    // 前面的段可能切过工作区（S4 会打开示例项目），这里把夹具重新登记回来
+    await fsApi.allowRoot(f.ws);
+    const runPage = await renderer();
+    const figures = path.join(f.ws, 'figures');
+    fs.mkdirSync(figures, { recursive: true });
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+      'base64');
+    fs.writeFileSync(path.join(figures, 'ok.png'), png);
+    fs.writeFileSync(path.join(f.outside, 'secret.png'), png);
+
+    stubList(f.ws, ['doc.md']);
+    stubRead(() => ({
+      text: [
+        '![本地](figures/ok.png)',
+        '![越界](../outside/secret.png)',
+        '![缺失](figures/nope.png)'
+      ].join('\n\n'),
+      size: 64
+    }));
+    // 真实的解析实现，测的是接线（授权判断仍在主进程里）
+    ipcMain.removeHandler('fs:resolve-images');
+    ipcMain.handle('fs:resolve-images', mainCtx.handlers['fs:resolve-images']);
+    createdWin.webContents.send('workspace:opened', f.ws);
+    await waitStubbedRows(runPage);
+
+    const m1 = await runPage(`(async()=>{
+      const pane=()=>document.querySelector('.pane:not(.is-pinned)');
+      [...document.querySelectorAll('.row')].find(e=>e.textContent.includes('doc.md')).click();
+      await waitFor(()=>pane().querySelector('.prose'));
+      await waitFor(()=>{
+        const imgs=[...pane().querySelectorAll('.prose img')];
+        const missing=pane().querySelectorAll('.md-img-missing').length;
+        return (imgs.length && imgs.every(i=>i.complete)) || missing===3;
+      });
+      const imgs=[...pane().querySelectorAll('.prose img')];
+      return {
+        imgs: imgs.map(i=>[i.getAttribute('src'), i.naturalWidth]),
+        missing: [...pane().querySelectorAll('.md-img-missing')].map(e=>e.textContent)
+      };
+    })()`);
+    eq('三张里只有本地那张生成 <img>', m1.imgs.length, 1);
+    ok('本地图片走 pv:// 并真的解码出来',
+      /^pv:\/\/local\/.+figures\/ok\.png\?v=\d+-\d+$/.test(m1.imgs[0] ? m1.imgs[0][0] : '')
+      && m1.imgs[0][1] > 0, m1.imgs);
+    eq('越界与缺失各落成一个占位', m1.missing.length, 2);
+    ok('占位写明原因（不在工作区内 / 文件不存在）',
+      /不在工作区内/.test(m1.missing.join('|')) && /文件不存在/.test(m1.missing.join('|')),
+      m1.missing);
   });
 
   await run('F1', '预览内查找：命中、切走自动关、固定时跟过去', async () => {

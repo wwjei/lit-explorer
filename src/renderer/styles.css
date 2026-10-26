@@ -662,6 +662,12 @@ kbd{
 .prose th{background:var(--panel-2);font-weight:500;color:var(--text-2)}
 .prose tbody tr:hover{background:var(--panel-2)}
 .prose del{color:var(--muted)}
+/* 正文图片：限宽、圆角；白底让深色主题下的透明 PNG / SVG 也能看清 */
+.prose img{max-width:100%;height:auto;border-radius:8px;border:1px solid var(--line-soft);background:#fff}
+/* 图片没加载出来的占位：显示 alt 与原因，不留碎图标 */
+.md-img-missing{display:inline-flex;align-items:baseline;gap:6px;padding:2px 8px;
+  border:1px dashed var(--line-strong);border-radius:6px;color:var(--muted);font-size:12px}
+.md-img-missing .why{opacity:.75}
 .md-table-wrap{overflow-x:auto}
 
 /* ============ 项目切换条（左栏底部） ============ */

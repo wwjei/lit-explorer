@@ -53,8 +53,56 @@ function loadRenderer() {
     ok('查询串里的 & 没有被破坏', good.indexOf('y=1&amp;z=2') >= 0, good);
 
     ok('原始 HTML 仍被转义', toHtml('<img src=x onerror=1>').indexOf('&lt;img') >= 0);
-    eq('渲染器不产出 <img>（图片语法与内嵌 HTML 都不支持）',
-      (toHtml('![a](b.png)\n\n<img src="c.png">').match(/<img/g) || []).length, 0);
+
+    // 图片：地址由主进程解析成 pv://；没有解析结果就落成占位，渲染器不猜路径
+    const md = loadRenderer().PV.markdown;
+    const imgMap = new Map([['figures/a b.png', {
+      src: 'figures/a b.png', url: 'pv://local/C%3A/p/figures/a%20b.png?v=1-2'
+    }]]);
+    const img = md.toHtml('![分层 × 出包](<figures/a b.png> "图 <&>")', imgMap);
+    ok('图片渲染成 <img>，地址用主进程给的 pv://',
+      /<img src="pv:\/\/local\/[^"]+\?v=1-2"/.test(img), img);
+    ok('alt 与标题都进了属性并转义',
+      img.indexOf('alt="分层 × 出包"') >= 0 && img.indexOf('title="图 &lt;&amp;&gt;"') >= 0, img);
+    ok('图片带懒加载', img.indexOf('loading="lazy"') >= 0, img);
+    ok('不残留 !', img.indexOf('!') < 0, img);
+
+    const remote = md.toHtml('![x](https://e.example/a.png?x=1&y=2)', imgMap);
+    ok('远程图片直接用原地址（& 转义）',
+      remote.indexOf('src="https://e.example/a.png?x=1&amp;y=2"') >= 0, remote);
+
+    const protoRel = md.toHtml('![x](//host/x.png)');
+    ok('协议相对地址按 https 处理（file:// 宿主里不会变成 file://主机名）',
+      protoRel.indexOf('src="https://host/x.png"') >= 0, protoRel);
+
+    for (const bad of ['javascript:1', 'data:image/png;base64,AA', 'file:///etc/passwd', 'vbscript:1']) {
+      const html = md.toHtml('![x](' + bad + ')');
+      ok('不生成图片：' + bad, html.indexOf('<img') < 0, html);
+      ok('也不留下半截链接：' + bad, html.indexOf('<a ') < 0, html);
+    }
+
+    const miss = md.toHtml('![缺失](figures/nope.png)');
+    ok('没有解析结果时落成占位（不产出 <img>）',
+      miss.indexOf('<img') < 0 && miss.indexOf('md-img-missing') >= 0, miss);
+    ok('占位里写明原因', miss.indexOf('无法读取') >= 0, miss);
+    const gone = md.toHtml('![没了](figures/gone.png)',
+      new Map([['figures/gone.png', { src: 'figures/gone.png', error: 'ENOENT' }]]));
+    ok('主进程报 ENOENT 时占位写「文件不存在」', gone.indexOf('文件不存在') >= 0, gone);
+    const denied = md.toHtml('![越界](../outside/x.png)',
+      new Map([['../outside/x.png', { src: '../outside/x.png', error: 'EACCES_ROOT' }]]));
+    ok('越界图片的占位写明不在工作区内', denied.indexOf('不在工作区内') >= 0, denied);
+
+    const linkedImg = md.toHtml('[![a](<figures/a b.png>)](https://e.example)', imgMap);
+    ok('图片可以嵌在链接文字里',
+      /<a href="https:\/\/e\.example"[^>]*><img /.test(linkedImg), linkedImg);
+    ok('行内代码里的图片语法不会变成图片',
+      md.toHtml('`![a](<figures/a b.png>)`', imgMap).indexOf('<img') < 0);
+
+    eqJson('imageSources 只收本地地址、去重、跳过代码块', md.imageSources([
+      '![a](x.png)', '![](https://e.example/y.png)', '',
+      '```', '![](skip.png)', '```', '',
+      '![a](x.png)', '![b](<my fig.png>)'
+    ].join('\n')), ['x.png', 'my fig.png']);
 
     const rich = toHtml([
       '# H', '', '**粗** *斜* `码` ~~删~~', '',
@@ -71,7 +119,7 @@ function loadRenderer() {
     ok('围栏代码块', rich.indexOf('md-code') >= 0);
     ok('链接文字里的行内样式仍然生效',
       toHtml('[**粗** 和 `码`](https://x.example)').indexOf('<code>码</code>') >= 0);
-    ok('占位符不漏进输出', !/[\u0000\u0001]/.test(rich + injected));
+    ok('占位符不漏进输出', !/[\u0000\u0001]/.test(rich + injected + img + miss + linkedImg));
 
     // 行内代码占位符不能落进 href：否则回填 <code> 时会把代码里的引号带进属性
     const codeInUrl = toHtml('[x](http://a`"onclick="window.__x=1//`)');
