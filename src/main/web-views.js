@@ -10,12 +10,13 @@
  * 安全边界（与 docs/agents/security.md 保持一致）：
  *   - 只接受 http(s)，地址一律过 normalizeWebUrl；
  *   - 独立 persist:web-docs 会话，不挂 preload，sandbox + contextIsolation；
- *   - 权限默认拒绝（只放行复制用的 clipboard-sanitized-write）；
+ *   - 权限默认拒绝；只放行复制用的 clipboard-sanitized-write，读取剪贴板
+ *     （在线文档的右键 / 粘贴按钮）按站点询问一次，决定只在本次运行内记住；
  *   - 页面里的新窗口交给系统浏览器，下载一律拦截；
  *   - file: / javascript: / 自定义协议不能导航。
  */
 
-const { WebContentsView, session, shell, Menu } = require('electron');
+const { WebContentsView, session, shell, Menu, dialog } = require('electron');
 const { normalizeWebUrl } = require('./web-url');
 
 const PARTITION = 'persist:web-docs';
@@ -31,15 +32,68 @@ function send(payload) {
   if (win && !win.isDestroyed()) win.webContents.send('web:state', payload);
 }
 
+/** 每个站点的剪贴板读取决定：只在本次运行内记住，重启后会重新询问 */
+const clipboardDecisions = new Map();
+const clipboardAsks = new Map();
+
+function clipboardOrigin(wc, details) {
+  const raw = (details && details.requestingUrl) || (wc && wc.getURL()) || '';
+  try {
+    const origin = new URL(raw).origin;
+    return origin && origin !== 'null' ? origin : '';
+  } catch {
+    return '';
+  }
+}
+
+function askClipboard(origin) {
+  if (!win || win.isDestroyed()) return Promise.resolve(false);
+  return dialog.showMessageBox(win, {
+    type: 'question',
+    title: '剪贴板权限',
+    message: '网页想读取剪贴板',
+    detail: origin + ' 请求读取剪贴板内容（用于右键粘贴或页面里的粘贴按钮）。'
+      + '允许后本次运行内不再询问该站点；拒绝后仍可用 Ctrl+V 粘贴。',
+    buttons: ['允许', '拒绝'],
+    defaultId: 0,
+    cancelId: 1,
+    noLink: true
+  }).then((res) => res.response === 0, () => false);
+}
+
+function clipboardAllowed(origin) {
+  if (!origin) return Promise.resolve(false);
+  if (clipboardDecisions.has(origin)) return Promise.resolve(clipboardDecisions.get(origin));
+  if (!clipboardAsks.has(origin)) {
+    clipboardAsks.set(origin, askClipboard(origin).then((allowed) => {
+      clipboardDecisions.set(origin, allowed);
+      clipboardAsks.delete(origin);
+      return allowed;
+    }, () => {
+      clipboardAsks.delete(origin);
+      return false;
+    }));
+  }
+  return clipboardAsks.get(origin);
+}
+
 function configureSession() {
   if (sessionConfigured) return;
   sessionConfigured = true;
   const ses = session.fromPartition(PARTITION);
-  // 在线文档的「复制」按钮走 clipboard-sanitized-write；其余（摄像头、定位、
-  // 通知、剪贴板读取…）一律拒绝
-  const allow = (permission) => permission === 'clipboard-sanitized-write';
-  ses.setPermissionRequestHandler((_wc, permission, callback) => callback(allow(permission)));
-  ses.setPermissionCheckHandler((_wc, permission) => allow(permission));
+  // 在线文档的「复制」按钮走 clipboard-sanitized-write；读取剪贴板按站点询问，
+  // 其余（摄像头、定位、通知…）一律拒绝
+  ses.setPermissionRequestHandler((wc, permission, callback, details) => {
+    if (permission === 'clipboard-sanitized-write') { callback(true); return; }
+    if (permission !== 'clipboard-read') { callback(false); return; }
+    clipboardAllowed(clipboardOrigin(wc, details)).then(callback, () => callback(false));
+  });
+  ses.setPermissionCheckHandler((_wc, permission) => {
+    // 页面用 permissions.query 决定显不显示粘贴入口。这里报 granted，否则在线文档
+    // 会认为剪贴板被禁用、直接不给粘贴按钮；真正的读取仍会走 request handler 询问
+    // （Electron 不会因为 check 通过就跳过 request）。
+    return permission === 'clipboard-sanitized-write' || permission === 'clipboard-read';
+  });
   // 网页视图与宿主不是同一个会话，pv:// 处理器不会挂到这里；再显式拦一次，
   // 防止将来有人把协议处理器挪到共享会话后，远程页面能顺着它读工作区
   ses.webRequest.onBeforeRequest({ urls: ['pv://*/*', 'file://*/*'] }, (_details, callback) => {

@@ -22,6 +22,7 @@
  *   E2     SVG 保存边界：只写工作区内已存在的 .svg，版本冲突不覆盖
  *   E3     含脚本 / 事件属性 / javascript: 链接的 SVG 只读显示，不执行也不保存
  *   E4     真实鼠标双击文字能打开输入框（指针捕获不能吞掉 dblclick）
+ *   W2     网页读剪贴板按站点询问一次，允许后本次运行不再问
  *   W1     网页视图只接受 http(s)，移出同步列表即销毁
  *   S6     并发切换工作区只留一个授权根
  *
@@ -35,9 +36,10 @@
  */
 
 const electron = require('electron');
-const { app, BrowserWindow, protocol, ipcMain, net, session } = electron;
+const { app, BrowserWindow, protocol, ipcMain, net, session, dialog, clipboard } = electron;
 const fs = require('node:fs');
 const path = require('node:path');
+const http = require('node:http');
 const vm = require('node:vm');
 const JSZip = require('jszip');
 const { ROOT, TMP, run, ok, eq, eqJson, done, freshDir, linkDir } = require('./helpers.cjs');
@@ -1022,6 +1024,57 @@ async function main() {
     eqJson('临时列拖到 alpha 下 1/3 后上下分屏', p4.tempSplit.map((p) => p.name), ['alpha.md', 'gamma.md']);
     ok('临时列分屏后收起', p4.tempHidden, p4);
     ok('提示已分屏', p4.toastText.indexOf('已分屏：gamma.md') >= 0, p4.toastText);
+  });
+
+  await run('W2', '网页读剪贴板按站点询问一次，允许后本次运行不再问', async () => {
+    // 必须排在 W1 前面：W1 会销毁同一分区的窗口，紧接着再开窗加载会 ERR_FAILED
+    const server = http.createServer((_req, res) => {
+      res.setHeader('content-type', 'text/html; charset=utf-8');
+      res.end('<!doctype html><button id="paste">paste</button>');
+    });
+    await new Promise((r) => server.listen(0, '127.0.0.1', r));
+    const origin = 'http://127.0.0.1:' + server.address().port;
+
+    const w = new BrowserWindow({
+      show: false,
+      width: 480,
+      height: 360,
+      webPreferences: {
+        partition: webViews.PARTITION, sandbox: true, contextIsolation: true, nodeIntegration: false
+      }
+    });
+    webViews.attachWindow(w);
+
+    const prompts = [];
+    const realBox = dialog.showMessageBox;
+    dialog.showMessageBox = async (_win, opts) => { prompts.push(opts); return { response: 0 }; };
+    const previous = await clipboard.readText();
+    await clipboard.writeText('CLIP_TOKEN');
+    const read = (gesture) => w.webContents.executeJavaScript(
+      `navigator.clipboard.readText().then(t=>'ok:'+t).catch(e=>'err:'+e.name)`, gesture);
+
+    try {
+      await w.loadURL(origin + '/');
+      w.webContents.focus();
+
+      // 页面用 permissions.query 判断要不要显示粘贴入口；这里报 granted，
+      // 但真正的读取仍会走 request handler 询问。
+      eq('网页看到的剪贴板权限是 granted',
+        await w.webContents.executeJavaScript(
+          `navigator.permissions.query({name:'clipboard-read'}).then(p=>p.state)`), 'granted');
+      eq('允许后能读到剪贴板', await read(true), 'ok:CLIP_TOKEN');
+      eq('首次读取只弹一次窗', prompts.length, 1);
+      ok('弹窗写明请求的站点',
+        !!(prompts[0] && String(prompts[0].detail).indexOf(origin) >= 0),
+        prompts[0] && prompts[0].detail);
+      eq('同一站点再次读取不再询问', await read(true), 'ok:CLIP_TOKEN');
+      eq('仍然只弹过一次', prompts.length, 1);
+    } finally {
+      dialog.showMessageBox = realBox;
+      await clipboard.writeText(previous);
+      w.destroy();
+      server.close();
+    }
   });
 
   await run('W1', '网页视图只接受 http(s)，移出同步列表即销毁', async () => {
