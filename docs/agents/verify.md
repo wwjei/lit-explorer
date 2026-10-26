@@ -17,10 +17,10 @@ npm run test:integration  # 只跑集成套件
   （加载中固定、旧文档解析失败、同文件重新读取、晚到的旧图片请求不污染缩放）、
   预览内查找（命中与计数、切到不支持查找的列时自动关、固定时查询词跟到新列、
   代码块异步高亮后命中不丢）、固定列拖动排序（落位与临时列提示）、SVG 编辑
-  （改字、拖动带框内文字、矩形缩放、删除与撤销、自动保存走 `fs:write-svg` 桩）、
-  含脚本 SVG 的只读清洗、高亮 Worker 并发初始化、并发切换工作区只留一个授权根、
-  `pv://` 协议边界，以及网页视图的生命周期（只接受 `http(s)`、不可见时保留、
-  移出同步列表即销毁）。
+  （改字、拖动带框内文字、矩形缩放、删除与撤销、自动保存走 `fs:write-svg` 桩、
+  `sendInputEvent` 的真实双击能打开输入框）、含脚本 SVG 的只读清洗、高亮 Worker
+  并发初始化、并发切换工作区只留一个授权根、`pv://` 协议边界，以及网页视图的
+  生命周期（只接受 `http(s)`、不可见时保留、移出同步列表即销毁）。
 
 两个套件都用 `.tmp/test/` 下的临时夹具与独立 `userData`，不碰用户正在用的实例。
 `test/` 不在 `electron-builder` 的 `files` 里，不进安装包。
@@ -39,6 +39,7 @@ npm run test:integration -- --only=C4      # 改了预览渲染 / 异步归属
 npm run test:integration -- --only=F1      # 改了预览内查找
 npm run test:integration -- --only=E1,E3   # 改了 SVG 编辑 / 清洗
 npm run test:integration -- --only=E2      # 改了 SVG 保存通道
+npm run test:integration -- --only=E4      # 改了 SVG 双击 / 指针手势
 npm run test:integration -- --only=P3      # 改了固定列 / 头部拖动
 npm run test:integration -- --only=W1      # 改了内嵌网页视图
 npm run test:integration -- --skip=C1,C2   # 其余都跑，跳过这两段
@@ -83,9 +84,10 @@ CI（[.github/workflows/ci.yml](../../.github/workflows/ci.yml)）在**开 PR �
 连续预览、项目切换条、预览变更提示**完全没进断言，**固定列换位置**进了顺序与临时列
 提示（P3），**图片缩放**进了档位与晚到请求（P1/P2），**查找**进了开关、计数、固定迁移
 与代码高亮后的命中（F1/F2），**SVG 编辑**进了改字 / 拖动 / 缩放 / 删除 / 撤销与保存
-内容（E1）、真实磁盘上的写入边界与冲突（E2）、不安全 SVG 的只读清洗（E3），但选中框、
-手柄手感、文字输入框对齐仍要靠探针看。高亮配色、滚动到视口中间这些观感同样要靠看。
-`npm test` 全绿不等于可以发版。
+内容（E1）、真实磁盘上的写入边界与冲突（E2）、不安全 SVG 的只读清洗（E3）、
+`sendInputEvent` 的真实双击（E4——合成 `dblclick` 测不出指针捕获把点击目标改掉的问题），
+但选中框、手柄手感、文字输入框对齐仍要靠探针看。高亮配色、滚动到视口中间这些观感
+同样要靠看。`npm test` 全绿不等于可以发版。
 
 内嵌网页的**实际页面内容不在截图里**：`capturePage()` 只拍宿主页面，拍不到叠在上面的
 `WebContentsView`。W1 只钉住视图的创建 / 保留 / 销毁与地址白名单；网页列的观感、
