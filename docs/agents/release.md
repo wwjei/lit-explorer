@@ -47,7 +47,8 @@ tag 名里带连字符（`-alpha` / `-beta`）会被自动标记为预发布。*
 | `SHA256SUMS.txt` | 上面四个 exe 的校验和 |
 
 两个版本可以并存：安装目录、卸载项与用户数据目录各自独立
-（Electron 用 `Lit Explorer`，MyGo 用 `Lit Explorer MyGo`）。Release 正文里说明了
+（用户数据分别在 `%APPDATA%\lit-explorer` 与 `%APPDATA%\Lit Explorer MyGo`）。
+Release 正文里说明了
 WebView2 依赖与两者的区别；改产物命名时要同步改正文和
 [`scripts/build-checksums.mjs`](../../scripts/build-checksums.mjs) 的版本过滤。
 

@@ -17,7 +17,7 @@
 | 内存（工作集 / 私有） | 473 MB / 392 MB | 602 MB / 400 MB |
 
 两个版本可以并存：安装目录、卸载项与用户数据目录各自独立
-（Electron 用 `Lit Explorer`，MyGo 用 `Lit Explorer MyGo`）。
+（Electron 的数据在 `%APPDATA%\lit-explorer`，MyGo 在 `%APPDATA%\Lit Explorer MyGo`）。
 
 ## 构建
 
