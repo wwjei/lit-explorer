@@ -5,7 +5,8 @@
  *    浏览器无法直接解析，必须打包；用 splitting 把每个按需 import() 的语言/主题
  *    切成独立 chunk，保持"只加载用到的那一种语言"。
  * 2. docx / pptx 预览：docx-preview、pptx-preview 同样是裸模块名，
- *    打成 IIFE 挂到 window.PV.docpreview 上由 index.html 直接加载。
+ *    打成 IIFE 挂到 window.PV.docpreview 上；preview-body.js 第一次打开文档时
+ *    才注入 <script>，不占启动时间。
  *
  * 用法：node scripts/build-renderer.mjs [--watch]
  */
@@ -39,7 +40,7 @@ const options = {
   metafile: true
 };
 
-/** docx / pptx 预览：打成单个 IIFE，由 index.html 用 <script> 直接加载 */
+/** docx / pptx 预览：打成单个 IIFE，由 preview-body.js 按需注入 */
 const docOptions = {
   entryPoints: [path.join(root, 'src/renderer/docpreview.js')],
   outfile: path.join(outdir, 'docpreview.js'),

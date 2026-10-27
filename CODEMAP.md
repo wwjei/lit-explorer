@@ -15,8 +15,9 @@
 - `src/shared/contracts.js`：主进程与渲染进程共用的数量上限与可固定类型白名单
   （`MAX_PINS`、`MAX_PROJECTS`、`MAX_FAV_ITEMS`、`MAX_URL_CHARS`、`PINNED_KINDS`…）。
 - `src/renderer/index.html` → `app.js`：界面编排。模块是 IIFE + `window.PV`，加载顺序是契约：
-  `shared/contracts → paths → icons → highlight → markdown → vendor/docpreview → pane →
-  preview-body → webview → svgedit → find → projects → app`。
+  `shared/contracts → paths → icons → highlight → markdown → pane → preview-body → webview →
+  svgedit → find → projects → app`。`vendor/docpreview` 不在这条链上，由 `PV.body.loadDocPreview()`
+  在第一次打开 docx / pptx 时按需注入。
 - `src/renderer/vendor/`、`build/icons/`、`build/notices/` 是生成物，不手改。
 
 ## 2. 按任务找入口
@@ -29,10 +30,10 @@
 | 预览区布局、宽度、固定列、分屏、项目布局快照 | `src/renderer/pane.js`、`src/renderer/styles.css` | `createColumn()`、`layoutColumn()`、`renderPreview()`、`pinCurrent()`、`makePinPaneFromTemp()`、`applySplit()`、`applyInsert()`、`dropInfo()`、`paneBudget()`、`unpinPane()`、`layoutSnapshot()`、`restoreLayout()` | `bodyKey`、`reqId`、`pending`、`MAX_PINS`、`MAX_PANES_PER_COL`、`nav.layout`、`mainFloor`、`.pane-col`、`.pane-stack`、`.pane-split`、`.pv-grip` |
 | 路径比较 / 相对工作区的显示路径 | `src/renderer/paths.js` | `same()`、`within()`、`partsUnder()`、`relUnder()`、`compareNodes()`、`baseName()` | `PV.paths` |
 | 跨进程上限与可固定类型 | `src/shared/contracts.js` | `MAX_PINS`、`MAX_PANES_PER_COL`、`MAX_PROJECTS`、`MAX_FAV_ITEMS`、`MAX_URL_CHARS`、`MAX_MD_IMAGES`、`PINNED_KINDS` | `PV.contracts` |
-| 预览正文按类型分派、头部按钮 | `src/renderer/preview-body.js` | `renderPaneBody()`、`bodyKeyFor()`、`paneHeadHtml()`、`webHeadHtml()`、`noteLoaded()` | `PV.body`、`pane.mode`、`pane.svgEdit`、`loadingState`、`fallbackCard` |
+| 预览正文按类型分派、头部按钮 | `src/renderer/preview-body.js` | `RENDERERS`、`pickRenderer()`、`capabilities()`、`renderPaneBody()`、`bodyKeyFor()`、`paneHeadHtml()`、`webHeadHtml()`、`loadDocPreview()`、`noteLoaded()` | `PV.body`、`RENDERERS`、`match`、`capabilities`、`pane.mode`、`pane.svgEdit`、`loadingState`、`fallbackCard` |
 | Markdown 渲染、链接与图片白名单 | `src/renderer/markdown.js` | `toHtml()`、`imageSources()`、`safeHref()`、`safeImgSrc()` | `javascript:`、`markdown`、`inline()`、`md-img-missing` |
 | 代码高亮、降级与 Worker | `src/renderer/highlight.js`、`src/renderer/highlight/` | `mount()`、`plan()`、`tokenize()`、`tokenHtml()`、`highlightFences()` | `PV.highlight`、`shiki`、`cacheGet`、`getWorker` |
-| Word / PPT 内嵌预览 | `src/renderer/docpreview.js`、`preview-body.js` | `renderDocx()`、`renderPptx()`、`renderDocPreview()`、`sanitizeDocDom()` | `docx-preview`、`pptx-preview`、`altChunk`、`PV.docpreview` |
+| Word / PPT 内嵌预览 | `src/renderer/docpreview.js`、`preview-body.js` | `renderDocx()`、`renderPptx()`、`renderDocPreview()`、`loadDocPreview()`、`sanitizeDocDom()` | `docx-preview`、`pptx-preview`、`altChunk`、`PV.docpreview`、按需加载 |
 | 图片 / HTML / PDF 的协议预览地址 | `src/main/main.js`、`preview-body.js` | `toPreviewUrl()`、`registerPreviewProtocol()`、`resolveImageTargets()`、`renderImageView()`、`renderImageSeq()` | `pv://local`、`fs:preview-url`、`fs:resolve-images`、`?v=<mtime>-<size>`、`cache-control: no-store` |
 | 图片缩放、连续预览 | `preview-body.js`、`pane.js` | `renderImageView()`、`renderImageSeq()`、`setZoom()`、`toggleSeq()`、`paneScrollKeep()` | `pane.zoom`、`pane.continuous`、`.imgseq`、`.img-wrap` |
 | 网页快速访问 / 内嵌网页 | `app.js`、`src/renderer/webview.js`、`src/main/web-views.js`、`src/main/web-url.js` | `openWebFavorite()`、`openWebForm()`、`handleWebState()`、`PV.web.sync()`、`webViews.sync()`、`normalizeWebUrl()`、`configureSession()`、`clipboardAllowed()`、`askClipboard()` | `web:sync`、`WebContentsView`、`favs`、`pane.webCurrentUrl`、`setOccluded`、`setDragHidden`、`clipboard-read`、`clipboard-sanitized-write`、`permissions.query` |

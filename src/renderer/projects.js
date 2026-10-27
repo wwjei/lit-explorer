@@ -12,7 +12,7 @@
  * 持久化直接走 pv.setState({ projects })，写入由主进程防抖。
  *
  * 加载顺序：shared/contracts.js → paths.js → icons.js → highlight.js → markdown.js →
- *           vendor/docpreview.js → pane.js → preview-body.js → webview.js → svgedit.js →
+ *           pane.js → preview-body.js → webview.js → svgedit.js →
  *           find.js → projects.js → app.js
  */
 (function () {

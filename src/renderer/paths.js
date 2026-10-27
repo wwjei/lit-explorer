@@ -7,7 +7,7 @@
  * 用来守工作区边界，和这里不是同一件事，也不要合并。
  *
  * 加载顺序：shared/contracts.js → paths.js → icons.js → highlight.js → markdown.js →
- *           vendor/docpreview.js → pane.js → preview-body.js → webview.js →
+ *           pane.js → preview-body.js → webview.js →
  *           svgedit.js → find.js → projects.js → app.js。
  */
 (function () {

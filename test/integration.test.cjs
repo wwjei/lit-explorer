@@ -238,6 +238,7 @@ async function main() {
     const runPage = await renderer();
     const bytes = await maliciousDocx();
     const s1 = await runPage(`(async()=>{
+      await PV.body.loadDocPreview();
       const host=document.createElement('div'); document.body.append(host);
       let err=null;
       try { await PV.docpreview.renderDocx(new Uint8Array(${JSON.stringify([...bytes])}), host); }
@@ -336,6 +337,8 @@ async function main() {
     stubRead(() => ({ text: 'NEW_PREVIEW', size: 11 }));
     ipcMain.removeHandler('fs:read-bytes');
     ipcMain.handle('fs:read-bytes', () => ({ data: new Uint8Array([1, 2, 3]) }));
+    // docx 解析器现在按需加载；先把它取进来，下面的桩才装在真正的模块上
+    await runPage('(async()=>{ await PV.body.loadDocPreview(); })()');
     await runPage(`void(PV.docpreview.renderDocx=async()=>{await new Promise(r=>setTimeout(r,${DELAY.parse}));window.__oldDocFailed=1; throw new Error('OLD_DOC_FAILURE')})`);
     createdWin.webContents.send('workspace:opened', f.ws);
     await waitStubbedRows(runPage);

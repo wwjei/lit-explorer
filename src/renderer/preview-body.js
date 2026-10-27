@@ -5,11 +5,13 @@
  * （task.write / task.replace）：晚到的旧响应写不进去，所以下面每个分支都不用自己
  * 检查「我是不是还属于当前那次」。
  *
- * 分派的类型：
+ * 分派是一张有序的 RENDERERS 表（见「正文分派」）：每个渲染器声明 match / key /
+ * render，正文与内容身份都从同一处判断。pane.js 与头部按钮只问 capabilities()，
+ * 不再自己认 node.kind；加一种格式只改本文件。
  *   Markdown → 手写渲染器（markdown.js），源码视图走代码视图
  *   HTML / PDF / 图片 / SVG → 交给 pv:// 协议地址，直接由 iframe 或 <img> 渲染
  *   SVG 编辑模式 → 交给 svgedit.js（可编辑 DOM、自动保存）
- *   docx / pptx → 整份字节读进渲染进程，交给 vendor/docpreview.js 的纯前端解析器
+ *   docx / pptx → 首次打开时按需加载 vendor/docpreview.js（约 1.4 MB），再整份字节解析
  *   其余 → 代码视图（分词在 Worker 里做，主线程只渲染可见窗口）
  *
  * 需要外面提供的东西（都是「本模块不该自己拿主意」的）：
@@ -23,8 +25,8 @@
  * 主进程的 WebContentsView 覆盖在窗格正文上（见 webview.js 与 main/web-views.js）。
  *
  * 加载顺序：shared/contracts.js → paths.js → icons.js → highlight.js → markdown.js →
- *           vendor/docpreview.js → pane.js → preview-body.js → webview.js → svgedit.js →
- *           find.js → projects.js → app.js。
+ *           pane.js → preview-body.js → webview.js → svgedit.js → find.js → projects.js → app.js。
+ *           vendor/docpreview.js 不在这里：第一次打开 docx / pptx 时由 loadDocPreview() 注入。
  */
 (function () {
   'use strict';
@@ -44,6 +46,25 @@
 
   /** 路径 -> { size, mtime }，由主进程异步补发 */
   const meta = new Map();
+
+  /* ============================ 类型能力 ============================ *
+   * 窗格（pane.js）与头部按钮只问「这个节点能做什么」，不再自己判断 node.kind。
+   * 加一种格式时只改这里和下面的 RENDERERS，别让类型知识再漏回布局模块。
+   * ------------------------------------------------------------------ */
+  function isImageNode(node) {
+    return !!node && !node.isDir && (node.kind === 'image' || node.kind === 'svg');
+  }
+
+  function capabilities(node, mode) {
+    const preview = mode === 'preview';
+    const kind = node && !node.isDir ? node.kind : '';
+    return {
+      image: isImageNode(node),
+      continuous: preview && isImageNode(node),
+      svgEdit: preview && kind === 'svg',
+      source: kind === 'html' || kind === 'md' || kind === 'svg'
+    };
+  }
 
   /* ============================ 格式化 ============================ */
   const UNITS = ['B', 'KB', 'MB', 'GB', 'TB'];
@@ -122,13 +143,42 @@
 
   /* ============================ docx / pptx ============================ */
 
-  /** docx / pptx：整份字节读进渲染进程，交给 vendor/docpreview.js 里的纯前端解析器 */
+  /**
+   * vendor/docpreview.js 是 1.4 MB 的打包产物。它不是每次启动都需要：
+   * 第一次真的打开 Word / PPT 时再注入 <script>，之后共用同一个 Promise。
+   * 构建缺失或加载失败时返回 null，调用方落兜底卡片。
+   */
+  let docPreviewLoading = null;
+
+  function loadDocPreview() {
+    if (PV.docpreview) return Promise.resolve(PV.docpreview);
+    if (docPreviewLoading) return docPreviewLoading;
+    docPreviewLoading = new Promise((resolve) => {
+      const s = document.createElement('script');
+      s.src = 'vendor/docpreview.js';
+      s.async = true;
+      // 失败后允许下次再试（开发时先开文档、后跑 build 的常见顺序）
+      s.onload = () => {
+        if (PV.docpreview) { resolve(PV.docpreview); return; }
+        docPreviewLoading = null;
+        resolve(null);
+      };
+      s.onerror = () => { docPreviewLoading = null; resolve(null); };
+      document.head.appendChild(s);
+    });
+    return docPreviewLoading;
+  }
+
+  /** docx / pptx：整份字节读进渲染进程，交给按需加载的纯前端解析器 */
   async function renderDocPreview(pane, node, kind, task) {
-    if (!PV.docpreview) {
+    task.write(loadingState('正在解析 ' + (kind === 'docx' ? 'Word' : 'PowerPoint') + ' 文档…'));
+    const docpreview = await loadDocPreview();
+    if (!docpreview) {
       task.write(fallbackCard(node, '预览组件未构建：请先运行 npm run build'));
       return;
     }
-    task.write(loadingState('正在解析 ' + (kind === 'docx' ? 'Word' : 'PowerPoint') + ' 文档…'));
+    // 等脚本的这段时间里用户可能已经切走了，别再白读整份文件
+    if (task.stale) return;
     const res = await pv.readBytes(node.path);
     if (res.error) { task.write(fallbackCard(node, '读取失败：' + res.error)); return; }
     if (res.tooLarge) {
@@ -145,8 +195,8 @@
     wrap.className = 'docview';
     if (!task.replace(wrap)) return;
     try {
-      if (kind === 'docx') await PV.docpreview.renderDocx(buf, wrap);
-      else await PV.docpreview.renderPptx(buf, wrap);
+      if (kind === 'docx') await docpreview.renderDocx(buf, wrap);
+      else await docpreview.renderPptx(buf, wrap);
     } catch (err) {
       console.error('[docpreview]', err);
       // 失败卡片也要先看这次渲染是不是已经被取代：用户可能已经切走了，
@@ -226,7 +276,8 @@
     if (pane.continuous) facts.push('连续预览');
 
     const mode = PV.pane.modeOf(pane);
-    const canSource = ['html', 'md', 'svg'].indexOf(node.kind) >= 0;
+    const caps = capabilities(node, mode);
+    const canSource = caps.source;
     const seg = canSource
       ? '<div class="pv-seg"><div class="seg">'
         + '<button data-mode="preview" class="' + (mode === 'preview' ? 'is-on' : '') + '">预览</button>'
@@ -236,7 +287,7 @@
 
     // 图片：− [适应/150%] + 的缩放档位，以及进入连续预览的向下箭头
     // （SVG 进入编辑模式后正文是可编辑 DOM，缩放 / 连续预览让位）
-    const imageBar = (mode === 'preview' && !pane.svgEdit && PV.pane.isImageNode(node))
+    const imageBar = (caps.continuous && !pane.svgEdit)
       ? '<div class="pv-zoom">'
         + '<button data-act="zoom-out" title="缩小（也可 Ctrl+滚轮）" aria-label="缩小">'
         + icon('zoomOut', '', 13) + '</button>'
@@ -252,7 +303,7 @@
       : '';
 
     // SVG 可以进编辑模式：改文字、拖动、缩放矩形、删除形状（编辑模式会自己保存）
-    const svgBtn = (node.kind === 'svg' && mode === 'preview')
+    const svgBtn = caps.svgEdit
       ? '<button class="iconbtn svgbtn' + (pane.svgEdit ? ' is-on' : '') + '" data-act="svg-edit" title="'
         + (pane.svgEdit ? '完成编辑' : '编辑文字与形状') + '" aria-label="编辑 SVG">'
         + icon('pencil', '', 15) + '</button>'
@@ -285,13 +336,12 @@
    * 前后两次请求——那件事交给窗格的任务身份（reqId）。
    */
   function bodyKeyFor(pane, node, mode) {
-    // 网页的内容身份只有地址：加载失败 / 重新加载都靠强制重渲染，不靠 key 变化
-    if (node.kind === 'web') return 'web\u0001' + node.url;
-    const prefs = hooks.previewPrefs();
-    return [node.path, mode, pane.continuous ? 'seq' : '',
-      node.kind === 'svg' && pane.svgEdit ? 'svg-edit' : '',
-      node.kind === 'docx' && !prefs.docx ? 'docx-off' : '',
-      node.kind === 'pptx' && !prefs.pptx ? 'pptx-off' : ''].join('\u0001');
+    // 谁来渲染也属于内容身份：设置里换了解析方式（如 docx 回落到代码视图）必须重渲染
+    const renderer = pickRenderer(pane, node, mode);
+    if (!renderer) return [node.path, mode, 'none'].join('\u0001');
+    // 网页的身份只有地址：加载失败 / 重新加载都靠强制重渲染，不靠 key 变化
+    if (renderer.key) return renderer.key(pane, node, mode);
+    return [node.path, mode, renderer.id, pane.continuous ? 'seq' : ''].join('\u0001');
   }
 
   /* ============================ 正文分派 ============================ */
@@ -329,77 +379,58 @@
     }
   }
 
-  async function renderPaneBody(pane, node, mode, key, task) {
-    // node 为 null：临时预览列被清空（换工作区），正文回到「未选择文件」
-    if (!node) { task.write(emptyState()); return; }
+  /* ============================ 正文分派 ============================ *
+   * 一张有序表：match 决定接不接，key 决定内容身份，render 决定画什么。
+   * 顺序就是优先级；最后一个 text 渲染器兜底，所以它永远接得住。
+   * ------------------------------------------------------------------ */
 
-    // 网页：正文只是加载 / 失败卡片，真实页面由主进程的 WebContentsView 盖在上面
-    if (node.kind === 'web') {
-      if (node.webError) { task.write(webErrorCard(node)); return; }
-      task.write(loadingState('正在打开网页…'));
-      return;
-    }
-
-    // SVG 编辑模式：正文是可交互的 SVG DOM（解析、清洗、保存都在 svgedit.js）
-    if (mode === 'preview' && node.kind === 'svg' && pane.svgEdit) {
-      return PV.svgedit.mount(pane, node, task, { toast: hooks.toast, noteSaved: noteLoaded });
-    }
-
-    // 交给协议地址直接渲染的类型：HTML 迷你浏览器 / 图片 / PDF 内置阅读器
-    if (mode === 'preview' && ['html', 'image', 'svg', 'pdf'].indexOf(node.kind) >= 0) {
-      task.write(loadingState());
-      const res = await pv.previewUrl(node.path);
-      if (!res.url) { task.write(fallbackCard(node, '无法生成预览地址')); return; }
-      // 这几类不走 fs:read，拿不到读取时的 size / mtime，交给外部补一次 stat
-      noteLoaded(pane, node, null, task);
-      if (node.kind === 'html') { task.write(browserChrome(node, res.url)); return; }
-      if (node.kind === 'pdf') { task.write(pdfFrame(node, res.url)); return; }
-      if (pane.continuous) { await renderImageSeq(pane, node, task); return; }
-      renderImageView(pane, node, res.url, task);
-      return;
-    }
-
-    // 设置里关掉时不再内嵌解析，走下面的通用分支落到兜底卡片
-    const prefs = hooks.previewPrefs();
-    if (node.kind === 'docx' && prefs.docx) { await renderDocPreview(pane, node, 'docx', task); return; }
-    if (node.kind === 'pptx' && prefs.pptx) { await renderDocPreview(pane, node, 'pptx', task); return; }
-
+  /** 读文本类内容；失败 / 二进制直接落卡片并返回 null，调用方不用各写一遍 */
+  async function readTextNode(ctx) {
+    const { node, task } = ctx;
     task.write(loadingState());
     const res = await pv.read(node.path);
-
     if (res.error) {
       task.write(fallbackCard(node, res.error === 'IS_DIR' ? '这是一个目录' : '读取失败：' + res.error));
-      return;
+      return null;
     }
     if (res.binary) {
       task.write(fallbackCard(node, '该类型暂不支持内嵌预览'));
-      return;
+      return null;
     }
-
     const notice = [];
     if (res.truncated) notice.push('文件较大，仅显示前 5 MB');
     if (res.lossy) notice.push('编码无法识别，可能存在乱码');
-    const noticeHtml = notice.length ? '<div class="notice">' + notice.join(' · ') + '</div>' : '';
+    res.noticeHtml = notice.length ? '<div class="notice">' + notice.join(' · ') + '</div>' : '';
+    return res;
+  }
 
-    if (node.kind === 'md' && mode === 'preview') {
-      // 本地图片先由主进程解析成 pv:// 地址再渲染：正文是整块替换，
-      // 晚到的解析结果会被 task.write 的归属检查丢掉，不用另做一套。
-      const images = new Map();
-      const srcs = PV.markdown.imageSources(res.text);
-      if (srcs.length) {
-        const resolved = await pv.resolveImages(node.path, srcs);
-        for (const item of (resolved && resolved.items) || []) images.set(item.src, item);
-      }
-      if (!task.write(noticeHtml + '<div class="prose-wrap"><article class="prose">'
-        + mdToHtml(res.text, images) + '</article></div>')) return;
-      noteLoaded(pane, node, { size: res.size, mtime: res.mtime }, task);
-      PV.highlight.highlightFences(pane.body.querySelector('.prose'));
-      markBrokenImages(pane);
-      return;
+  async function renderMarkdown(ctx) {
+    const { pane, node, task } = ctx;
+    const res = await readTextNode(ctx);
+    if (!res) return;
+
+    // 本地图片先由主进程解析成 pv:// 地址再渲染：正文是整块替换，
+    // 晚到的解析结果会被 task.write 的归属检查丢掉，不用另做一套。
+    const images = new Map();
+    const srcs = PV.markdown.imageSources(res.text);
+    if (srcs.length) {
+      const resolved = await pv.resolveImages(node.path, srcs);
+      for (const item of (resolved && resolved.items) || []) images.set(item.src, item);
     }
+    if (!task.write(res.noticeHtml + '<div class="prose-wrap"><article class="prose">'
+      + mdToHtml(res.text, images) + '</article></div>')) return;
+    noteLoaded(pane, node, { size: res.size, mtime: res.mtime }, task);
+    PV.highlight.highlightFences(pane.body.querySelector('.prose'));
+    markBrokenImages(pane);
+  }
+
+  async function renderText(ctx) {
+    const { pane, node, mode, task } = ctx;
+    const res = await readTextNode(ctx);
+    if (!res) return;
 
     // 其余一律走代码视图：分词在 Worker 里做，主线程只渲染可见窗口
-    if (!task.write(noticeHtml)) return;
+    if (!task.write(res.noticeHtml)) return;
     noteLoaded(pane, node, { size: res.size, mtime: res.mtime }, task);
     pane.view = PV.highlight.mount(pane.body, {
       text: res.text,
@@ -408,6 +439,92 @@
       path: node.path,
       lang: langForNode(node, mode)
     });
+  }
+
+  function renderWeb(ctx) {
+    const { node, task } = ctx;
+    // 正文只是加载 / 失败卡片，真实页面由主进程的 WebContentsView 盖在上面
+    if (node.webError) { task.write(webErrorCard(node)); return; }
+    task.write(loadingState('正在打开网页…'));
+  }
+
+  /** 交给 pv:// 协议地址直接渲染的几种类型共用这一步 */
+  async function previewUrlFor(ctx) {
+    const { pane, node, task } = ctx;
+    task.write(loadingState());
+    const res = await pv.previewUrl(node.path);
+    if (!res.url) { task.write(fallbackCard(node, '无法生成预览地址')); return ''; }
+    // 这几类不走 fs:read，拿不到读取时的 size / mtime，交给外部补一次 stat
+    noteLoaded(pane, node, null, task);
+    return res.url;
+  }
+
+  async function renderHtml(ctx) {
+    const url = await previewUrlFor(ctx);
+    if (url) ctx.task.write(browserChrome(ctx.node, url));
+  }
+
+  async function renderPdf(ctx) {
+    const url = await previewUrlFor(ctx);
+    if (url) ctx.task.write(pdfFrame(ctx.node, url));
+  }
+
+  async function renderImage(ctx) {
+    const { pane, node, task } = ctx;
+    const url = await previewUrlFor(ctx);
+    if (!url) return;
+    if (pane.continuous) { await renderImageSeq(pane, node, task); return; }
+    renderImageView(pane, node, url, task);
+  }
+
+  function renderSvgEdit(ctx) {
+    // 正文是可交互的 SVG DOM（解析、清洗、保存都在 svgedit.js）
+    return PV.svgedit.mount(ctx.pane, ctx.node, ctx.task, {
+      toast: hooks.toast,
+      noteSaved: noteLoaded
+    });
+  }
+
+  function renderDocx(ctx) { return renderDocPreview(ctx.pane, ctx.node, 'docx', ctx.task); }
+  function renderPptx(ctx) { return renderDocPreview(ctx.pane, ctx.node, 'pptx', ctx.task); }
+
+  const RENDERERS = [
+    { id: 'web', match: function (p, n) { return n.kind === 'web'; },
+      key: function (p, n) { return 'web\u0001' + n.url; }, render: renderWeb },
+    { id: 'svg-edit', match: function (p, n, m) { return m === 'preview' && n.kind === 'svg' && p.svgEdit; },
+      render: renderSvgEdit },
+    { id: 'html', match: function (p, n, m) { return m === 'preview' && n.kind === 'html'; }, render: renderHtml },
+    { id: 'pdf', match: function (p, n, m) { return m === 'preview' && n.kind === 'pdf'; }, render: renderPdf },
+    { id: 'image', match: function (p, n, m) { return m === 'preview' && isImageNode(n); }, render: renderImage },
+    { id: 'docx', match: function (p, n) { return n.kind === 'docx' && hooks.previewPrefs().docx; },
+      render: renderDocx },
+    { id: 'pptx', match: function (p, n) { return n.kind === 'pptx' && hooks.previewPrefs().pptx; },
+      render: renderPptx },
+    { id: 'markdown', match: function (p, n, m) { return n.kind === 'md' && m === 'preview'; },
+      render: renderMarkdown },
+    // 兜底：二进制会由 readTextNode 落成兜底卡片，源码视图也走这里
+    { id: 'text', match: function () { return true; }, render: renderText }
+  ];
+
+  function pickRenderer(pane, node, mode) {
+    for (let i = 0; i < RENDERERS.length; i++) {
+      if (RENDERERS[i].match(pane, node, mode)) return RENDERERS[i];
+    }
+    return null;
+  }
+
+  async function renderPaneBody(pane, node, mode, key, task) {
+    // node 为 null：临时预览列被清空（换工作区），正文回到「未选择文件」
+    if (!node) { task.write(emptyState()); return; }
+    const renderer = pickRenderer(pane, node, mode);
+    if (!renderer) { task.write(fallbackCard(node, '该类型暂不支持内嵌预览')); return; }
+    try {
+      await renderer.render({ pane: pane, node: node, mode: mode, key: key, task: task });
+    } catch (err) {
+      // 单个渲染器失败只坏这一个窗格：换成带原因的兜底卡片，其他窗格继续
+      console.error('[preview] ' + renderer.id, err);
+      task.write(fallbackCard(node, '预览失败：' + ((err && err.message) || err)));
+    }
   }
 
   /* ============================ 图片：缩放与连续预览 ============================ *
@@ -513,7 +630,7 @@
       entries = res && res.entries ? res.entries.slice() : [];
       entries.sort(PV.paths.compareNodes);
     }
-    return entries.filter(PV.pane.isImageNode);
+    return entries.filter(isImageNode);
   }
 
   async function renderImageSeq(pane, node, task) {
@@ -588,6 +705,12 @@
     head: paneHeadHtml,
     render: renderPaneBody,
     key: bodyKeyFor,
+
+    /** 窗格与头部按钮问「这个节点能做什么」，不要自己判断 node.kind */
+    capabilities: capabilities,
+
+    /** 按需加载 docx / pptx 解析器（首次打开文档时才会真正注入） */
+    loadDocPreview: loadDocPreview,
 
     /* 顶部按钮分派用 */
     setZoom: setZoom,
