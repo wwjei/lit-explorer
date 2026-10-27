@@ -68,7 +68,8 @@ func loadStateLocked() map[string]any {
 	for k, v := range saved {
 		out[k] = v
 	}
-	out["projects"] = sanitizeProjects(out["projects"])
+	// 启动稍后才从这些项目登记 offered 根；磁盘加载只收敛结构，不按会话权限过滤。
+	out["projects"] = sanitizeProjects(out["projects"], nil)
 	out["favorites"] = sanitizeFavorites(out["favorites"])
 	return out
 }
@@ -121,7 +122,7 @@ func patchFromPage(changes map[string]any) map[string]any {
 		state["leftSplitRatio"] = clamp(v, 0.08, 0.92)
 	}
 	if _, ok := changes["projects"]; ok {
-		state["projects"] = sanitizeProjects(changes["projects"])
+		state["projects"] = sanitizeProjects(changes["projects"], isOfferedRoot)
 	}
 	if _, ok := changes["favorites"]; ok {
 		state["favorites"] = sanitizeFavorites(changes["favorites"])
@@ -130,7 +131,8 @@ func patchFromPage(changes map[string]any) map[string]any {
 	return state
 }
 
-func sanitizeProjects(value any) []any {
+// 磁盘项目只校验结构；页面提交还必须通过主进程提供的路径权限检查。
+func sanitizeProjects(value any, pathAllowed func(string) bool) []any {
 	list, ok := value.([]any)
 	if !ok {
 		return []any{}
@@ -145,7 +147,7 @@ func sanitizeProjects(value any) []any {
 			continue
 		}
 		path, _ := p["path"].(string)
-		if path == "" || len(path) > maxPathChars || !isOfferedRoot(path) {
+		if path == "" || len(path) > maxPathChars || (pathAllowed != nil && !pathAllowed(path)) {
 			continue
 		}
 		name, _ := p["name"].(string)

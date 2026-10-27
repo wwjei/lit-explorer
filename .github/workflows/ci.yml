@@ -54,13 +54,18 @@ jobs:
           go-version-file: mygo/go.mod
           cache-dependency-path: mygo/go.sum
 
-      - name: MyGo 前端资源与编译检查
+      - name: MyGo 前端资源与许可声明
         # 两个 shell 共用 src/renderer；staging 之后 go test / go build 才能过（go:embed）
-        run: |
-          node mygo/stage-frontend.mjs
-          cd mygo
-          go test ./...
-          go build ./...
+        run: node mygo/stage-frontend.mjs
+
+      # 每条原生命令单独一步，避免 PowerShell 用 go build 的成功覆盖 go test 的退出码。
+      - name: MyGo 单元测试
+        working-directory: mygo
+        run: go test ./...
+
+      - name: MyGo 编译检查
+        working-directory: mygo
+        run: go build ./...
 
       - name: 单元测试
         run: npm run test:unit

@@ -36,6 +36,11 @@ pptx-preview / jszip 都由 esbuild 打包进 `src/renderer/vendor/`，运行时
 `replace` 指向的 fork 时，要跑 `cd mygo && go mod tidy` 并提交 `go.sum`；CI 用
 `go-version-file: mygo/go.mod` 装 Go，缺 `go.sum` 条目会直接失败。
 
+MyGo 的 staging 会调用 `scripts/build-mygo-notices.mjs`，根据实际参与编译的包收集
+Go 模块（包括 `replace` 后的 fork）、Go 运行时与标准库内嵌依赖的许可，合并 npm 声明后
+写入 `mygo/frontend/notices/THIRD-PARTY-NOTICES.md`。缺少许可原文时 staging 失败。
+Electron 的 `npm run notices` 仍只处理 npm 依赖，不要求安装 Go。
+
 `replace github.com/egoist/mygo => github.com/wwjei/mygo v0.7.1-lit.2` 指向带
 `Window.NewChildWebView()` 的 fork（内嵌网页列）。这个 tag 不在 sum.golang.org 上，
 第一次拉取时需要 `GOPRIVATE=github.com/wwjei/mygo go mod tidy` 生成校验条目；之后

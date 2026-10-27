@@ -31,7 +31,11 @@ git push origin refs/tags/v<新版本>          # 推 tag 才触发 release.yml
 也不会建 Release。
 
 顺序不能反：`npm run dist` 里的 `scripts/clean-dist.mjs` 会清空 `dist/`，MyGo 产物必须在它
-之后构建（MyGo 脚本只写 `dist/`，不会再清）。
+之后构建（MyGo 脚本只写 `dist/`，不会再清）。MyGo 构建脚本在调用 CLI 前 staging 并生成
+Go 依赖许可，不能依赖其他 job 的生成目录；每个 job 都从独立检出开始。
+
+Windows CI 的 Go 测试与编译分别占一个步骤。PowerShell 多条原生命令共用一个步骤时，
+后面的成功退出码可能掩盖前面的失败，新增验证命令时保持独立步骤或显式检查退出码。
 
 tag 名里带连字符（`-alpha` / `-beta`）会被自动标记为预发布。**没有明确要求时不要打 tag。**
 

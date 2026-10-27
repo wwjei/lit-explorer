@@ -105,14 +105,18 @@ SMIL、事件属性、`javascript:` / 危险 `data:` 链接、`file:` / 相对�
 但它不能读工作区、不能调宿主 IPC；除了页面里的 `mailto:` 会交给系统邮件程序，
 不能启动本机程序。
 
-## MyGo 版的两处差异
+## MyGo 版的系统边界
 
 MyGo 版（`mygo/`）与 Electron 版共用渲染层，但系统边界要各自实现：
 
 - **文件与状态的白名单在 `mygo/fsapi.go` / `mygo/statefile.go`。** 它们对应
   `src/main/fs-api.js` / `state-sanitize.js`，同样做 `realpath` 后的根目录校验、
   读取上限、SVG 的 size+mtime 基线与状态字段白名单。新增文件系统能力时两份都要加，
-  不要只改 Electron 侧让 MyGo 版静默少一道校验。
+  不要只改 Electron 侧让 MyGo 版静默少一道校验。磁盘项目先校验结构、再登记候选根；
+  页面提交的项目仍须通过 `isOfferedRoot()`。切换工作区的序号检查与授权提交保持原子，
+  避免并发 RPC 把旧根重新登记。SVG 临时文件用同目录随机名称独占创建，写入失败时清理。
+- **系统打开交给 `mygo.Shell`。** 路径与 URL 中的 `&` 等字符可被命令解释器执行，
+  文件打开、外部链接与网页弹窗都直接调用系统 Shell API。
 - **HTML 预览走本机回环服务**（`startPreviewServer()`）：只绑 `127.0.0.1` 的随机端口，
   路径前缀是进程级 32 字节随机令牌，每个请求仍过 `assertAllowed()`。不要改成
   `0.0.0.0`、固定端口或固定令牌；令牌不要写进日志或持久化文件

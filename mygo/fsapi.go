@@ -493,12 +493,24 @@ func writeSvgFile(path, content string, expectedSize int64, expectedMtime float6
 	if st.Size() != expectedSize || absFloat(mtimeMs(st)-expectedMtime) > 0.5 {
 		return map[string]any{"error": "CONFLICT", "size": st.Size(), "mtime": mtimeMs(st)}
 	}
-	tmp := filepath.Join(filepath.Dir(abs), "."+filepath.Base(abs)+".tmp")
-	if err := os.WriteFile(tmp, []byte(content), 0o644); err != nil {
+	// 随机独占创建，避免覆盖已有临时文件或沿其硬链接写到工作区外。
+	tmp, err := os.CreateTemp(filepath.Dir(abs), "."+filepath.Base(abs)+".*.tmp")
+	if err != nil {
 		return map[string]any{"error": "EWRITE", "message": err.Error()}
 	}
-	if err := os.Rename(tmp, abs); err != nil {
-		os.Remove(tmp)
+	tmpPath := tmp.Name()
+	defer os.Remove(tmpPath)
+	n, err := tmp.WriteString(content)
+	if err == nil && n != len(content) {
+		err = io.ErrShortWrite
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return map[string]any{"error": "EWRITE", "message": err.Error()}
+	}
+	if err := os.Rename(tmpPath, abs); err != nil {
 		return map[string]any{"error": "EWRITE", "message": err.Error()}
 	}
 	after, err := os.Stat(abs)

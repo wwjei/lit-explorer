@@ -2,9 +2,7 @@ package main
 
 // lit explorer 的 MyGo 版：用系统 WebView2 承载同一份渲染层，
 // Go 侧重新实现 preload 暴露的那些能力（文件系统、状态、菜单、协议、窗口）。
-//
-// 能力屏蔽：内嵌网页（Electron 的 WebContentsView）在 MyGo 上没有对应物，
-// web 快捷访问改为交给系统浏览器打开，相关 pv.* 接口在 bridge.js 里是空实现。
+// 内嵌网页由 fork 的 ChildWebView 承载，状态与可见性在 UI 线程上同步。
 
 import (
 	"crypto/rand"
@@ -66,9 +64,8 @@ type App struct {
 	saveTim *time.Timer
 
 	// 网页窗格：按地址保活一个子 webview（对应 Electron 的 web-views.js）
-	webMu     sync.Mutex
-	webSyncMu sync.Mutex
-	webViews  map[string]*webViewRec
+	webMu    sync.Mutex
+	webViews map[string]*webViewRec
 }
 
 type webSyncRect struct {
@@ -84,9 +81,22 @@ type webSyncItem struct {
 	Rect    *webSyncRect `json:"rect"`
 }
 
+type webView interface {
+	SetRect(mygo.Rectangle)
+	SetVisible(bool)
+	Reload()
+	Destroy()
+}
+
 type webViewRec struct {
-	view   *mygo.ChildWebView
-	loaded atomic.Bool
+	view    webView
+	loaded  atomic.Bool // 只记录是否曾加载成功，用于区分 loaded / navigated
+	status  string
+	visible bool // 宿主希望显示；实际显示还取决于加载状态
+}
+
+func (rec *webViewRec) syncVisibility() {
+	rec.view.SetVisible(rec.visible && rec.status == "loaded")
 }
 
 var app = &App{}
@@ -162,7 +172,7 @@ func main() {
 		}
 		app.win.Page().OnDidFinishLoad(func() {
 			if root != "" {
-				if res := app.openWorkspace(root); res["error"] != nil {
+				if res := app.openWorkspace(root); res["error"] != nil && res["error"] != "SUPERSEDED" {
 					evNoWorkspace.Emit(app.win, struct{}{})
 				}
 			}
@@ -258,14 +268,30 @@ func (a *App) scheduleSaveBounds() {
 		a.saveTim.Stop()
 	}
 	a.saveTim = time.AfterFunc(300*time.Millisecond, func() {
-		if a.win == nil || a.win.IsDestroyed() || a.win.IsMinimized() {
-			return
-		}
-		b := a.win.Bounds()
-		patchInternal(map[string]any{"window": map[string]any{
-			"width": b.Width, "height": b.Height, "x": b.X, "y": b.Y,
-		}})
+		mygo.RunOnMain(func() {
+			if a.win != nil {
+				saveWindowBounds(a.win)
+			}
+		})
 	})
+}
+
+type windowGeometry interface {
+	IsDestroyed() bool
+	IsMinimized() bool
+	IsMaximized() bool
+	Bounds() mygo.Rectangle
+}
+
+// 在 UI 线程上一起检查状态和读取几何，避免最大化切入两者之间。
+func saveWindowBounds(win windowGeometry) {
+	if win.IsDestroyed() || win.IsMinimized() || win.IsMaximized() {
+		return
+	}
+	b := win.Bounds()
+	patchInternal(map[string]any{"window": map[string]any{
+		"width": b.Width, "height": b.Height, "x": b.X, "y": b.Y,
+	}})
 }
 
 func argValue(prefix string) string {
@@ -286,46 +312,74 @@ func appPathUserData() (string, error) {
  * ------------------------------------------------------------------ */
 
 func (a *App) openWorkspace(dir string) map[string]any {
+	return a.openWorkspaceWith(dir, resolveWorkspaceRoot, func(real string) {
+		if a.win != nil && !a.win.IsDestroyed() {
+			a.win.SetTitle(baseName(real) + " · lit explorer")
+			evOpenRoot.Emit(a.win, real)
+		}
+	})
+}
+
+func resolveWorkspaceRoot(dir string) (string, error) {
 	abs, err := filepath.Abs(dir)
 	if err != nil {
-		return map[string]any{"error": "NOT_A_DIRECTORY"}
+		return "", err
 	}
 	st, err := os.Stat(abs)
-	if err != nil || !st.IsDir() {
-		return map[string]any{"error": "NOT_A_DIRECTORY"}
-	}
-	real, err := realPath(abs)
 	if err != nil {
-		return map[string]any{"error": "NOT_A_DIRECTORY"}
+		return "", err
 	}
+	if !st.IsDir() {
+		return "", fmt.Errorf("not a directory: %s", abs)
+	}
+	return realPath(abs)
+}
 
+func (a *App) openWorkspaceWith(dir string, resolve func(string) (string, error), opened func(string)) map[string]any {
+	// 在任何文件系统等待之前登记次序，慢的旧请求不能成为最后一次切换。
 	a.seqMu.Lock()
 	a.seq++
 	seq := a.seq
 	a.seqMu.Unlock()
+	real, err := resolve(dir)
 
-	resetAllowedRoots()
-	allowResolvedRoot(real)
-	offerRoot(real)
-	if seq != a.seq {
-		return map[string]any{"error": "SUPERSEDED"}
-	}
+	var result map[string]any
+	commit := func() {
+		a.seqMu.Lock()
+		defer a.seqMu.Unlock()
+		if seq != a.seq {
+			result = map[string]any{"error": "SUPERSEDED"}
+			return
+		}
+		if err != nil {
+			result = map[string]any{"error": "NOT_A_DIRECTORY"}
+			return
+		}
 
-	state := loadState()
-	recent := []any{real}
-	if old, ok := state["recentRoots"].([]any); ok {
-		for _, r := range old {
-			if s, ok := r.(string); ok && !strings.EqualFold(s, real) && len(recent) < 8 {
-				recent = append(recent, s)
+		// 检查、授权、持久化和事件是一次提交；被取代的请求不能留下副作用。
+		resetAllowedRoots()
+		allowResolvedRoot(real)
+		offerRoot(real)
+		state := loadState()
+		recent := []any{real}
+		if old, ok := state["recentRoots"].([]any); ok {
+			for _, r := range old {
+				if s, ok := r.(string); ok && !strings.EqualFold(s, real) && len(recent) < 8 {
+					recent = append(recent, s)
+				}
 			}
 		}
+		patchInternal(map[string]any{"lastRoot": real, "recentRoots": recent})
+		opened(real)
+		result = map[string]any{"root": real}
 	}
-	patchInternal(map[string]any{"lastRoot": real, "recentRoots": recent})
-	if a.win != nil && !a.win.IsDestroyed() {
-		a.win.SetTitle(baseName(real) + " · lit explorer")
-		evOpenRoot.Emit(a.win, real)
+	if a.win != nil {
+		// 先到 UI 线程再取锁，避免菜单 / 拖放在 UI 线程等锁而提交又等 UI。
+		mygo.RunOnMain(commit)
+	} else {
+		commit()
 	}
-	return map[string]any{"root": real}
+	return result
 }
 
 func (a *App) OpenRoot(dir string) map[string]any {
@@ -617,7 +671,7 @@ func (a *App) OpenPath(path string) map[string]any {
 	if err != nil {
 		return map[string]any{"error": codeOf(err), "message": err.Error()}
 	}
-	if err := exec.Command("cmd", "/c", "start", "", abs).Start(); err != nil {
+	if err := mygo.Shell.OpenPath(abs); err != nil {
 		return map[string]any{"error": "OPEN_FAILED", "message": err.Error()}
 	}
 	return map[string]any{"ok": true}
@@ -646,9 +700,13 @@ const maxWebViews = 6
 // WebSync 对应 Electron 的 web:sync：按地址保活子 webview，并更新矩形 / 可见性。
 // 地址不在列表里的视图销毁；同一地址只留一份（与 web-views.js 一致）。
 func (a *App) WebSync(list []webSyncItem) map[string]any {
-	a.webSyncMu.Lock()
-	defer a.webSyncMu.Unlock()
+	var result map[string]any
+	mygo.RunOnMain(func() { result = a.syncWebViews(list) })
+	return result
+}
 
+// 与 OnState / WebReload 同在 UI 线程，状态改变与 SetVisible 不会交错。
+func (a *App) syncWebViews(list []webSyncItem) map[string]any {
 	desired := map[string]webSyncItem{}
 	for _, raw := range list {
 		if len(desired) >= maxWebViews {
@@ -683,18 +741,15 @@ func (a *App) WebSync(list []webSyncItem) map[string]any {
 	for url, want := range desired {
 		rec := existing[url]
 		if rec == nil {
-			rect := mygo.Rectangle{}
-			if want.Visible && want.Rect != nil {
-				rect = rectOf(*want.Rect)
-			}
-			view, err := a.win.NewChildWebView(mygo.ChildWebViewOptions{URL: url, Rect: rect})
+			// 先以空矩形创建，加载成功前不让原生窗口盖住宿主卡片。
+			view, err := a.win.NewChildWebView(mygo.ChildWebViewOptions{URL: url})
 			if err != nil {
 				evWebState.Emit(a.win, map[string]any{
 					"url": url, "status": "error", "code": "VIEW_FAILED", "desc": err.Error(),
 				})
 				continue
 			}
-			rec = &webViewRec{view: view}
+			rec = &webViewRec{view: view, status: "loading"}
 			view.OnState(func(st mygo.ChildWebViewState) { a.emitWebState(rec, st) })
 			a.webMu.Lock()
 			if a.webViews == nil {
@@ -703,12 +758,11 @@ func (a *App) WebSync(list []webSyncItem) map[string]any {
 			a.webViews[url] = rec
 			a.webMu.Unlock()
 		}
+		rec.visible = want.Visible
 		if want.Visible && want.Rect != nil {
 			rec.view.SetRect(rectOf(*want.Rect))
-			rec.view.SetVisible(true)
-		} else {
-			rec.view.SetVisible(false)
 		}
+		rec.syncVisibility()
 	}
 	return map[string]any{"ok": true}
 }
@@ -726,6 +780,15 @@ func (a *App) emitWebState(rec *webViewRec, st mygo.ChildWebViewState) {
 		openExternal(st.CurrentURL)
 		return
 	}
+	evWebState.Emit(a.win, rec.applyState(st))
+}
+
+func (rec *webViewRec) applyState(st mygo.ChildWebViewState) map[string]any {
+	switch st.Status {
+	case "loading", "loaded", "error", "gone":
+		rec.status = st.Status
+		rec.syncVisibility()
+	}
 	payload := map[string]any{"url": st.URL, "status": st.Status}
 	switch st.Status {
 	case "loaded":
@@ -739,18 +802,24 @@ func (a *App) emitWebState(rec *webViewRec, st mygo.ChildWebViewState) {
 	case "gone":
 		payload["reason"] = st.Desc
 	}
-	evWebState.Emit(a.win, payload)
+	return payload
 }
 
 func (a *App) WebReload(raw string) map[string]any {
-	a.webMu.Lock()
-	rec := a.webViews[raw]
-	a.webMu.Unlock()
-	if rec == nil {
-		return map[string]any{"ok": false}
-	}
-	rec.view.Reload()
-	return map[string]any{"ok": true}
+	result := map[string]any{"ok": false}
+	mygo.RunOnMain(func() {
+		a.webMu.Lock()
+		rec := a.webViews[raw]
+		a.webMu.Unlock()
+		if rec == nil {
+			return
+		}
+		// 主动清掉失败卡片，仍等 loaded 后再显示；loaded 不重置，保留 navigated 语义。
+		a.emitWebState(rec, mygo.ChildWebViewState{URL: raw, Status: "loading"})
+		rec.view.Reload()
+		result["ok"] = true
+	})
+	return result
 }
 
 func (a *App) OpenExternalURL(raw string) map[string]any {
@@ -758,7 +827,7 @@ func (a *App) OpenExternalURL(raw string) map[string]any {
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.User != nil {
 		return map[string]any{"error": "BAD_URL"}
 	}
-	if err := exec.Command("cmd", "/c", "start", "", u.String()).Start(); err != nil {
+	if err := mygo.Shell.OpenExternal(u.String()); err != nil {
 		return map[string]any{"error": err.Error()}
 	}
 	return map[string]any{"ok": true}
@@ -1012,7 +1081,7 @@ func (a *App) togglePreviewPref(key string) {
 }
 
 func openPath(path string) {
-	_ = exec.Command("cmd", "/c", "start", "", path).Start()
+	_ = mygo.Shell.OpenPath(path)
 }
 
 func reveal(path string) {
@@ -1025,6 +1094,6 @@ func copyText(text string) {
 
 func openExternal(raw string) {
 	if u, err := url.Parse(raw); err == nil && (u.Scheme == "http" || u.Scheme == "https") {
-		_ = exec.Command("cmd", "/c", "start", "", u.String()).Start()
+		_ = mygo.Shell.OpenExternal(u.String())
 	}
 }
