@@ -92,7 +92,29 @@
   AGENTS.md / CODEMAP.md，且相对链接没有死链；CI 在开 PR 与合并进 main 时跑。
 - 会受原生 `WebContentsView` 影响的网页列，`capturePage()` 拍不到页面内容；只截图宿主 UI。
 
-## 6. 文档地图
+## 6. MyGo shell（`mygo/`，随 Release 一起发布）
+
+用 Go + 系统 WebView2 承载同一份 `src/renderer`，只重写主进程能力。实测与能力对照见
+[docs/design/mygo-port.md](docs/design/mygo-port.md)，构建与差异见
+[mygo/README.md](mygo/README.md)。**两个 shell 共用界面代码：改 `src/renderer` 时
+要同时想一遍 Go 侧有没有对应实现。**
+
+| 要改什么 | 先看 | 关键入口 | 搜索关键字 |
+| --- | --- | --- | --- |
+| 窗口、菜单、单实例、预览服务 | `mygo/main.go` | `createWindow()`、`startPreviewServer()`、`OpenContextMenu()`、`OpenAppMenu()`、`App.*` 绑定方法 | `mygo.BindAs`、`previewBase`、`Frameless` |
+| 文件系统授权边界与 SVG 保存 | `mygo/fsapi.go` | `assertAllowed()`、`realPath()`、`listDir()`、`writeSvgFile()`、`kindFor()` | `EACCES_ROOT`、`CONFLICT`、`cachedError` |
+| 设置持久化与白名单 | `mygo/statefile.go` | `loadState()`、`patchFromPage()`、`sanitizeLayout()` | `state.json`、`kind: "web"` |
+| 渲染层桥接 | `mygo/bridge.js` | `window.pv`、`capabilities.webPane` | `mygo.call`、`on('pv:…')` |
+| 前端资源打包 | `mygo/stage-frontend.mjs` | 生成 `mygo/frontend/`（gitignore）供 `go:embed` | `stage-frontend` |
+| 安装包与产物命名 | `scripts/build-mygo.mjs` | `writeMygoConfig()`、CLI 调用、`dist/` 改名 | `MYGO_CLI`、`Lit-Explorer-MyGo` |
+| 网页窗格（内嵌网页） | `mygo/main.go`、`mygo/bridge.js` | `WebSync()`、`WebReload()`、`emitWebState()`、`pv:web-state` | `ChildWebView`、`webViewRec`、`maxWebViews` |
+
+网页窗格用 fork 的 `Window.NewChildWebView()`（`go.mod` 的 `replace` 指向
+`wwjei/mygo v0.7.1-lit.2`）：`App.WebSync` 按地址保活视图、`WebReload` 刷新、
+状态转成 `web:state`。`app.js` 的 `openWebFavorite()` 按
+`pv.capabilities.webPane` 决定是否内嵌（Electron 与 MyGo 都是 true，其他后端为 false）。
+
+## 7. 文档地图
 
 | 文档 | 用途 |
 | --- | --- |

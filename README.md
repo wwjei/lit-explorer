@@ -6,6 +6,10 @@
 
 只支持 **Windows**（x64），没有 macOS / Linux 的构建目标，也没有跨平台适配的计划。
 
+同一份界面有两个可发布版本：**Electron 版**（自带运行时，约 122 MB 安装包）与
+**MyGo 版**（Go + 系统 WebView2，约 5.5 MB 安装包）。两者功能一致、可并存，区别与
+取舍见 [发布](#发布) 与 [docs/design/mygo-port.md](docs/design/mygo-port.md)。
+
 图标以黑白灰层叠窗格表现多栏浏览与文件预览，使用透明背景的
 `assets/icon-source.png` 原图；`scripts/build-icons.mjs` 从它生成各尺寸 PNG 与 ICO。
 
@@ -119,8 +123,15 @@ project_viewer/
 │   ├── build-icons.mjs        # 由 SVG 母版生成各尺寸 ICO
 │   ├── build-notices.mjs      # 生成随包分发的第三方许可声明
 │   ├── build-checksums.mjs    # 生成发布产物的 SHA256SUMS.txt
+│   ├── build-mygo.mjs         # MyGo 版打包：stage → mygo build → 产物改名进 dist/
 │   ├── clean-dist.mjs         # 打包前清空 dist/，避免旧版本的包留在里面
 │   └── audit-report.mjs       # 漏洞扫描，按「进不进安装包」分开看
+├── mygo/                      # MyGo shell：Go 主进程 + 系统 WebView2，复用 src/renderer
+│   ├── main.go                # 窗口、菜单、单实例、预览服务、App.* 绑定
+│   ├── fsapi.go               # 对应 src/main/fs-api.js 的文件系统授权层
+│   ├── statefile.go           # 对应 store.js + state-sanitize.js 的设置持久化
+│   ├── bridge.js              # 注入页面的 window.pv（与 preload.js 同形）
+│   └── stage-frontend.mjs     # 生成 mygo/frontend/（go:embed 输入，gitignore）
 ├── src/
 │   ├── main/                  # 主进程：唯一的系统访问入口（读 + 受限的 SVG 保存）
 │   │   ├── main.js            # 无边框窗口、IPC、pv:// 协议、菜单
@@ -153,6 +164,11 @@ project_viewer/
 `preview-body.js` 管「这个东西怎么渲染」，`webview.js` 只管网页列该占哪块矩形，
 `svgedit.js` 管 SVG 编辑这一条独立的交互线，
 `find.js` 管查找。加功能前先看清该落在哪一层。
+
+`mygo/` 是第二个 shell：同一份 `src/renderer/` 由 Go 主进程承载，渲染层只依赖
+`window.pv`，所以界面代码不分叉；新增主进程能力要两边各实现一份（契约见
+`src/shared/contracts.js`）。MyGo 版需要 Go 1.27+ 才能构建，运行依赖系统的 WebView2
+Runtime（Windows 11 自带）。
 
 ### 构建
 
@@ -310,7 +326,7 @@ npm run shot -- --open="./sample-project" --shot=".tmp/shot.png" --shot-js=".tmp
 
 推送 `v` 开头的 tag 会触发 [.github/workflows/release.yml](.github/workflows/release.yml)：
 先在 `windows-latest` 上跑一遍 [.github/workflows/ci.yml](.github/workflows/ci.yml) 的测试，
-过了才构建 NSIS 安装包与免安装版，然后创建 Release 并上传产物。
+过了才构建 **Electron 与 MyGo 两个版本**的安装包 / 免安装版，然后创建 Release 并上传产物。
 tag 里带连字符（如 `v0.0.1-alpha`）会自动标记为预发布。
 
 ```bash
@@ -323,13 +339,20 @@ git push origin v0.0.5-alpha
 本地打包（产物在 `dist/`）：
 
 ```bash
-npm run dist      # predist 会先生成高亮 Worker、图标与第三方许可声明，dist/ 先清空再打包
+npm run dist       # Electron 版；predist 先生成 Worker、图标与许可声明，dist/ 先清空
+npm run dist:mygo  # MyGo 版；需要 Go 1.27+
+npm run dist:all   # 两个都出（MyGo 必须在 Electron 之后，否则会被清掉）
 node scripts/build-checksums.mjs   # 生成 SHA256SUMS.txt
 ```
 
-- `Lit-Explorer-Setup-<version>.exe` —— NSIS 安装包，可选安装目录
-- `Lit-Explorer-<version>-portable.exe` —— 免安装版
-- `SHA256SUMS.txt` —— 上面两个的校验和
+- `Lit-Explorer-Setup-<version>.exe` —— Electron NSIS 安装包，可选安装目录
+- `Lit-Explorer-<version>-portable.exe` —— Electron 免安装版
+- `Lit-Explorer-MyGo-Setup-<version>.exe` —— MyGo NSIS 安装包（约 5.5 MB）
+- `Lit-Explorer-MyGo-<version>-portable.exe` —— MyGo 免安装版（约 18 MB）
+- `SHA256SUMS.txt` —— 上面四个的校验和
+
+MyGo 版不打包 Chromium，使用系统 WebView2：Windows 11 自带，Windows 10 一般随 Edge
+提供。两个版本可以并存，安装目录、卸载项与应用数据各自独立。
 
 **未配置代码签名**，Windows SmartScreen 会提示「未知发布者」。下载后可以核对校验和：
 

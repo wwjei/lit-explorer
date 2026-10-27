@@ -76,4 +76,49 @@ SVG 编辑的写文件不在渲染进程：`PV.svgedit` 只调 `pv.writeSvg()`�
 
 `build.files` 只收 `src/**`、`assets/**`、`package.json`；`extraResources` 另外放
 `FEATURES.md`、`docs/**`、`sample-project/**` 供安装后查阅。
-`docs/agents/**` 是给贡献者的，已从 `extraResources` 排除，不要让它进安装包。
+`docs/agents/**` 与 `docs/design/**` 是给贡献者的，已从 `extraResources` 排除——后者
+带着截图（`docs/design/mygo-port/` 约 2 MB），放进去会白白撑大两个 exe。
+
+## 两个 shell：Electron 与 MyGo
+
+同一份 `src/renderer/` 由两个主进程承载，界面代码不分叉：
+
+```
+src/renderer/          ← 唯一一份界面（window.pv 契约）
+src/main/ + preload    ← Electron shell：IPC、pv://、WebContentsView
+mygo/                  ← MyGo shell：Go + 系统 WebView2，bridge.js 实现同形 window.pv
+```
+
+两边各自实现主进程能力，渲染层只认 `window.pv` 和
+`src/shared/contracts.js`。加能力时**先改契约，再两边各实现一份**；只改一边会让另一版
+在运行时静默降级（`pv.capabilities` 只用来表达确实做不到的能力，比如 MyGo 的
+`webPane` 由 fork 支持，其他后端为 false）。
+
+| 命令 | 产物 |
+| --- | --- |
+| `npm run dist` | Electron 版 NSIS + portable（`dist/` 先清空） |
+| `npm run dist:mygo` | MyGo 版 NSIS + portable（需要 Go 1.27+） |
+| `npm run dist:all` | 两个都出，顺序不能反：Electron 的 `clean-dist` 会清空 `dist/` |
+
+MyGo 版的前端资源不进 git：`mygo/stage-frontend.mjs` 从 `src/renderer`、`src/shared`、
+`assets`、`sample-project` 与根目录的 `FEATURES.md` / `LICENSE` / `README.md`、
+`build/notices/` 拷出 `mygo/frontend/`，再由 `go:embed` 编进 exe。`mygo/frontend/`、
+`mygo/mygo.json`、`mygo/mygo.ts` 都是生成物，已在 `.gitignore` 里。因此
+`go test ./...` / `go build ./...` 之前必须先跑一次 `node mygo/stage-frontend.mjs`
+（CI 里串好了），否则 `go:embed` 找不到文件。
+
+`scripts/build-mygo.mjs` 负责整套打包：读 `package.json` 的 version 写 `mygo/mygo.json`、
+调用 MyGo CLI、把产物改名为 `dist/Lit-Explorer-MyGo-Setup-<version>.exe` 与
+`dist/Lit-Explorer-MyGo-<version>-portable.exe`。CLI 默认用
+`go run github.com/egoist/mygo/cmd/mygo@v0.7.1`，本机已装 `mygo` 时可用
+`MYGO_CLI=mygo` 覆盖。缺 NSIS 时 CLI 会自己下载，离线环境可把 electron-builder 缓存里的
+`makensis.exe` 目录放进 `PATH`。
+
+MyGo 的 fork（`go.mod` 里 `replace github.com/egoist/mygo => github.com/wwjei/mygo
+v0.7.1-lit.2`）只加了 `Window.NewChildWebView()`，用于内嵌网页列。升级 MyGo 时要
+rebase 这个补丁并复测网页列的加载、DPI、销毁；不要直接把依赖改回上游 tag，否则
+`App.WebSync` 编译不过。
+
+MyGo 不打包 Chromium，依赖系统的 WebView2 Runtime（Windows 11 自带）。产物里没有
+Electron 的 `resources/`：`FEATURES.md` 与第三方许可声明编进 exe，菜单里「功能特性说明」
+「第三方许可」会在首次打开时解到用户数据目录再交给系统默认程序。

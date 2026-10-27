@@ -1,6 +1,7 @@
 # AGENTS.md
 
-lit explorer：Electron 写的本地项目文件浏览器（多栏目录导航 + 内嵌预览）。
+lit explorer：本地项目文件浏览器（多栏目录导航 + 内嵌预览）。同一份 `src/renderer`
+由两个 shell 承载：Electron（`src/main/`）与 MyGo（`mygo/`，Go + 系统 WebView2）。
 
 **先找入口**：[CODEMAP.md](CODEMAP.md) 按业务组件列出文件、关键方法与可搜索关键字，
 比从头翻源码快；改业务组件、关键方法、IPC / DOM 约定时同步维护它。
@@ -18,7 +19,8 @@ lit explorer：Electron 写的本地项目文件浏览器（多栏目录导航 +
 | --- | --- |
 | 想知道某个功能在哪个文件 / 方法，或该搜什么关键字 | [CODEMAP.md](CODEMAP.md) |
 | 增删依赖，或在 `dependencies` / `devDependencies` 之间挪包 | [docs/agents/dependencies.md](docs/agents/dependencies.md) |
-| 改 `src/renderer/` 下的界面代码（含 pane / preview-body / find / projects / app 的分层）、动构建脚本或图标 | [docs/agents/build.md](docs/agents/build.md) |
+| 改 `src/renderer/` 下的界面代码（含 pane / preview-body / find / projects / app 的分层）、动构建脚本或图标、改双 shell 的共用与分叉 | [docs/agents/build.md](docs/agents/build.md) |
+| 改 MyGo 版的主进程能力（`mygo/*.go`）、bridge、预览服务、fork 的 ChildWebView | [mygo/README.md](mygo/README.md)、[docs/design/mygo-port.md](docs/design/mygo-port.md) |
 | 加文件系统能力，改 preload / IPC / 自定义协议 | [docs/agents/security.md](docs/agents/security.md) |
 | 改版本号、打 tag、发 Release | [docs/agents/release.md](docs/agents/release.md) |
 | 跑测试、写界面探针、装包验证改动 | [docs/agents/verify.md](docs/agents/verify.md) |
@@ -28,13 +30,16 @@ lit explorer：Electron 写的本地项目文件浏览器（多栏目录导航 +
 | 已知的依赖 / 安全债，以及什么时候要重新看 | [docs/security-debt.md](docs/security-debt.md) |
 | 想弄清某个设计为什么是这样（如高亮的阈值） | [docs/highlighting.md](docs/highlighting.md) 这类设计文档 |
 | 看未实施功能的调研与方案 | [docs/design/](docs/design/) 下按主题分的文档 |
+| 看 MyGo 移植的实测数据与能力差异（体积、启动、内存、内嵌网页） | [docs/design/mygo-port.md](docs/design/mygo-port.md) |
 | 看历史审查记录（为什么有某些防御代码） | [docs/audits/](docs/audits/) 下按日期归档的记录 |
 | 改 CI、发版流程、依赖更新策略 | [.github/workflows/](.github/workflows/) 与 [.github/dependabot.yml](.github/dependabot.yml) |
 
 ## 红线
 
-1. 改依赖必须同步 `package-lock.json`，否则 CI 的 `npm ci` 会失败，而本地毫无异常。
-2. `src/renderer/vendor/`、`build/icons/`、`build/notices/` 是生成物，不要手改、不要提交。
+1. 改 npm 依赖必须同步 `package-lock.json`；改 MyGo 的依赖（`mygo/go.mod`）必须同步
+   `mygo/go.sum`。否则 CI 的 `npm ci` / `go build` 会失败，而本地毫无异常。
+2. `src/renderer/vendor/`、`build/icons/`、`build/notices/`、`mygo/frontend/` 是生成物，
+   不要手改、不要提交。
 3. `dist` 脚本里的 `--publish never` 不能去掉，发布统一交给 CI。
 4. 没有明确要求时不要打 tag；**打 tag 前 [PENDING.md](PENDING.md) 必须是空的**。
 5. **新增一类信息（新文档、新测试、新待办池）要同步上面那张索引**——下一个会话是从

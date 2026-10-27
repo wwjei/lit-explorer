@@ -35,7 +35,18 @@ jobs:
 
       - name: 构建安装包
         # predist 钩子会先生成高亮 Worker、图标与第三方许可声明，再交给 electron-builder
+        # 注意：dist 脚本会先清空 dist/，所以 MyGo 产物必须在它之后构建
         run: npm run dist
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: mygo/go.mod
+          cache-dependency-path: mygo/go.sum
+
+      - name: 构建 MyGo 安装包
+        # 共用 src/renderer；MyGo CLI 在缺少 NSIS 时会自己下载
+        run: node scripts/build-mygo.mjs
 
       - name: 生成校验和
         # 没有代码签名，SHA256SUMS.txt 是用户唯一能自己核对产物的手段
@@ -56,6 +67,18 @@ jobs:
           # generate_release_notes 开启时，body 会放在自动生成的说明前面；
           # append_body 是布尔开关（追加到已有 Release 正文），不能拿来装这段文字
           body: |
+            ### 两个 Windows 版本
+
+            | 文件 | 说明 |
+            | --- | --- |
+            | `Lit-Explorer-Setup-<版本>.exe` | Electron 版安装包，自带 Chromium 运行时（约 122 MB） |
+            | `Lit-Explorer-<版本>-portable.exe` | Electron 版免安装（约 111 MB） |
+            | `Lit-Explorer-MyGo-Setup-<版本>.exe` | MyGo 版安装包，使用系统 WebView2（约 5.5 MB） |
+            | `Lit-Explorer-MyGo-<版本>-portable.exe` | MyGo 版免安装（约 18 MB） |
+
+            MyGo 版需要 Windows 10/11 的 WebView2 Runtime（Windows 11 自带；Windows 10 一般
+            随 Edge 提供）。两个版本可以并存：安装目录、卸载项与应用数据各自独立。
+
             ### 校验下载
 
             本构建未配置代码签名，Windows SmartScreen 会提示「未知发布者」。下载后可以核对

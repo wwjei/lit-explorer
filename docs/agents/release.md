@@ -25,9 +25,13 @@ git push origin refs/tags/v<新版本>          # 推 tag 才触发 release.yml
 ```
 
 只有 `v*` 开头的 tag 会触发 [.github/workflows/release.yml](../../.github/workflows/release.yml)：
-先跑 [ci.yml](../../.github/workflows/ci.yml) 那套测试（单元 + 集成），**过了才**在
-`windows-latest` 上 `npm ci` → `npm run dist` → 生成校验和 → `softprops/action-gh-release`
-发布 Release。测试挂了就不会产出安装包，也不会建 Release。
+先跑 [ci.yml](../../.github/workflows/ci.yml) 那套测试（单元 + 集成 + MyGo 的 `go test`），
+**过了才**在 `windows-latest` 上 `npm ci` → `npm run dist` → `node scripts/build-mygo.mjs`
+→ 生成校验和 → `softprops/action-gh-release` 发布 Release。测试挂了就不会产出安装包，
+也不会建 Release。
+
+顺序不能反：`npm run dist` 里的 `scripts/clean-dist.mjs` 会清空 `dist/`，MyGo 产物必须在它
+之后构建（MyGo 脚本只写 `dist/`，不会再清）。
 
 tag 名里带连字符（`-alpha` / `-beta`）会被自动标记为预发布。**没有明确要求时不要打 tag。**
 
@@ -35,10 +39,17 @@ tag 名里带连字符（`-alpha` / `-beta`）会被自动标记为预发布。*
 
 | 文件 | 说明 |
 | --- | --- |
-| `Lit-Explorer-Setup-<版本>.exe` | NSIS 安装包，可选安装目录 |
-| `Lit-Explorer-<版本>-portable.exe` | 免安装版 |
+| `Lit-Explorer-Setup-<版本>.exe` | Electron NSIS 安装包，可选安装目录（约 122 MB） |
+| `Lit-Explorer-<版本>-portable.exe` | Electron 免安装版（约 111 MB） |
 | `Lit-Explorer-Setup-<版本>.exe.blockmap` | electron-builder 生成的差分块图 |
-| `SHA256SUMS.txt` | 上面两个 exe 的校验和 |
+| `Lit-Explorer-MyGo-Setup-<版本>.exe` | MyGo NSIS 安装包，使用系统 WebView2（约 5.5 MB） |
+| `Lit-Explorer-MyGo-<版本>-portable.exe` | MyGo 免安装版（约 18 MB） |
+| `SHA256SUMS.txt` | 上面四个 exe 的校验和 |
+
+两个版本可以并存：安装目录、卸载项与用户数据目录各自独立
+（Electron 用 `Lit Explorer`，MyGo 用 `Lit Explorer MyGo`）。Release 正文里说明了
+WebView2 依赖与两者的区别；改产物命名时要同步改正文和
+[`scripts/build-checksums.mjs`](../../scripts/build-checksums.mjs) 的版本过滤。
 
 ## 校验和不能省
 

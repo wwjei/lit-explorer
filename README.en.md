@@ -14,9 +14,14 @@ instant in-app preview on the right, double-click to open a file with the system
 
 Download from [Releases](https://github.com/wwjei/lit-explorer/releases):
 
-- `Lit-Explorer-Setup-<version>.exe` — NSIS installer, install directory is selectable
-- `Lit-Explorer-<version>-portable.exe` — no installation required
-- `SHA256SUMS.txt` — checksums for the two above
+- `Lit-Explorer-Setup-<version>.exe` — NSIS installer, install directory is selectable (~122 MB)
+- `Lit-Explorer-<version>-portable.exe` — no installation required (~111 MB)
+- `Lit-Explorer-MyGo-Setup-<version>.exe` — MyGo build, uses the system WebView2 (~5.5 MB)
+- `Lit-Explorer-MyGo-<version>-portable.exe` — MyGo portable build (~18 MB)
+- `SHA256SUMS.txt` — checksums for the four above
+
+The two builds share the same UI and can coexist. The MyGo build needs the WebView2 Runtime
+(bundled with Windows 11; usually present on Windows 10 via Edge).
 
 Builds are **not code-signed**, so Windows SmartScreen will warn about an unknown publisher.
 You can verify a download yourself:
