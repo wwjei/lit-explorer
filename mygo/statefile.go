@@ -2,7 +2,6 @@ package main
 
 // 设置持久化：对应 src/main/store.js + state-sanitize.js。
 // 渲染进程只能改界面偏好；window / lastRoot / recentRoots 由 Go 侧自己维护。
-// 与 Electron 版的差别：web 固定列在 MyGo 上没有原生视图可叠，加载时直接丢掉。
 
 import (
 	"encoding/json"
@@ -224,7 +223,7 @@ func sanitizeNav(value any) any {
 	return out
 }
 
-// sanitizeLayout 丢掉 web 固定列：MyGo 版没有 WebContentsView，保留下来只会得到空窗格。
+// sanitizeLayout 收敛每个项目的固定列：顺序、宽度、分屏比例与每格内容。
 func sanitizeLayout(value any) any {
 	layout, ok := value.(map[string]any)
 	if !ok {
@@ -273,8 +272,28 @@ func sanitizePinnedPane(value any) any {
 	if !ok {
 		return nil
 	}
+	mode := "preview"
+	if raw["mode"] == "source" {
+		mode = "source"
+	}
+	zoom := clampNumF(raw["zoom"], 0, 8)
+	continuous := raw["continuous"] == true
 	if raw["kind"] == "web" || raw["url"] != nil {
-		return nil
+		rawURL, _ := raw["url"].(string)
+		if rawURL == "" {
+			rawURL, _ = raw["path"].(string)
+		}
+		if !validWebURL(rawURL) {
+			return nil
+		}
+		name, _ := raw["name"].(string)
+		if name == "" {
+			name = rawURL
+		}
+		return map[string]any{
+			"path": rawURL, "name": truncate(name, 120), "kind": "web", "url": rawURL,
+			"mode": mode, "zoom": zoom, "continuous": continuous,
+		}
 	}
 	path, _ := raw["path"].(string)
 	if path == "" || len(path) > maxPathChars {
@@ -285,18 +304,13 @@ func sanitizePinnedPane(value any) any {
 	if name == "" {
 		name = baseName(path)
 	}
-	zoom := clampNumF(raw["zoom"], 0, 8)
-	out := map[string]any{
+	if kind == "" {
+		kind = "txt"
+	}
+	return map[string]any{
 		"path": path, "name": truncate(name, 255), "kind": kind,
-		"mode": "preview", "zoom": zoom, "continuous": raw["continuous"] == true,
+		"mode": mode, "zoom": zoom, "continuous": continuous,
 	}
-	if out["kind"] == "" {
-		out["kind"] = "txt"
-	}
-	if raw["mode"] == "source" {
-		out["mode"] = "source"
-	}
-	return out
 }
 
 func sanitizeFavorites(value any) map[string]any {

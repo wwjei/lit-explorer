@@ -29,7 +29,7 @@
 
   window.pv = {
     platform: 'win32',
-    capabilities: { webPane: false },
+    capabilities: { webPane: true },
 
     /* 工作区 */
     pickFolder: function () { return call('App.PickFolder'); },
@@ -64,9 +64,9 @@
     openContextMenu: function (payload) { return call('App.OpenContextMenu', payload || {}); },
     openAppMenu: function () { return call('App.OpenAppMenu'); },
 
-    /* 内嵌网页：MyGo 版没有原生视图，保留空实现 */
-    webSync: function () { return Promise.resolve({ ok: true }); },
-    webReload: function () { return Promise.resolve({ ok: false }); },
+    /* 内嵌网页：fork 出来的子 webview（见 mygo/childwebview.go） */
+    webSync: function (list) { return call('App.WebSync', list || []); },
+    webReload: function (url) { return call('App.WebReload', url); },
     openExternalUrl: function (url) { return call('App.OpenExternalURL', url); },
 
     /* 窗口控制 */
@@ -90,7 +90,7 @@
     onFocusSearch: function (cb) { return on('pv:focus-search', cb); },
     onToggleFavorite: function (cb) { return on('pv:toggle-favorite', cb); },
     onEditWeb: function (cb) { return on('pv:edit-web', cb); },
-    onWebState: function () { return function () {}; },
+    onWebState: function (cb) { return on('pv:web-state', cb); },
     onPreviewPrefs: function (cb) { return on('pv:preview-prefs', cb); }
   };
 })();

@@ -65,10 +65,10 @@ func TestValidWebURL(t *testing.T) {
 	}
 }
 
-func TestSanitizeLayoutDropsWebPanes(t *testing.T) {
+func TestSanitizeLayoutKeepsWebPanes(t *testing.T) {
 	layout := map[string]any{"pins": []any{
 		map[string]any{"w": 400, "split": 0.5, "panes": []any{
-			map[string]any{"path": "https://example.com", "kind": "web", "url": "https://example.com"},
+			map[string]any{"path": "https://example.com/", "kind": "web", "url": "https://example.com/"},
 		}},
 		map[string]any{"w": 420, "split": 0.6, "panes": []any{
 			map[string]any{"path": `C:\work\a.md`, "kind": "md", "name": "a.md"},
@@ -76,12 +76,16 @@ func TestSanitizeLayoutDropsWebPanes(t *testing.T) {
 	}}
 	out, _ := sanitizeLayout(layout).(map[string]any)
 	pins := out["pins"].([]any)
-	if len(pins) != 1 {
-		t.Fatalf("pins = %d, want 1 (web-only column dropped)", len(pins))
+	if len(pins) != 2 {
+		t.Fatalf("pins = %d, want 2", len(pins))
 	}
-	pane := pins[0].(map[string]any)["panes"].([]any)[0].(map[string]any)
-	if pane["kind"] != "md" {
-		t.Errorf("kept pane kind = %v, want md", pane["kind"])
+	web := pins[0].(map[string]any)["panes"].([]any)[0].(map[string]any)
+	if web["kind"] != "web" || web["url"] != "https://example.com/" {
+		t.Errorf("web pane = %v", web)
+	}
+	file := pins[1].(map[string]any)["panes"].([]any)[0].(map[string]any)
+	if file["kind"] != "md" {
+		t.Errorf("file pane kind = %v, want md", file["kind"])
 	}
 }
 

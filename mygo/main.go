@@ -19,6 +19,7 @@ import (
 	"image/png"
 	"io/fs"
 	"log"
+	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -28,6 +29,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -54,6 +56,7 @@ var (
 	evEditWeb        = mygo.NewEvent[map[string]any]("pv:edit-web")
 	evPreviewPrefs   = mygo.NewEvent[map[string]any]("pv:preview-prefs")
 	evMaximized      = mygo.NewEvent[bool]("pv:maximized")
+	evWebState       = mygo.NewEvent[map[string]any]("pv:web-state")
 )
 
 type App struct {
@@ -61,6 +64,29 @@ type App struct {
 	seq     int
 	seqMu   sync.Mutex
 	saveTim *time.Timer
+
+	// 网页窗格：按地址保活一个子 webview（对应 Electron 的 web-views.js）
+	webMu     sync.Mutex
+	webSyncMu sync.Mutex
+	webViews  map[string]*webViewRec
+}
+
+type webSyncRect struct {
+	X      float64 `json:"x"`
+	Y      float64 `json:"y"`
+	Width  float64 `json:"width"`
+	Height float64 `json:"height"`
+}
+
+type webSyncItem struct {
+	URL     string       `json:"url"`
+	Visible bool         `json:"visible"`
+	Rect    *webSyncRect `json:"rect"`
+}
+
+type webViewRec struct {
+	view   *mygo.ChildWebView
+	loaded atomic.Bool
 }
 
 var app = &App{}
@@ -612,6 +638,118 @@ func (a *App) CopyText(text string) map[string]any {
 	if err := mygo.Clipboard.Write(transfer.TextData(text)); err != nil {
 		return map[string]any{"error": err.Error()}
 	}
+	return map[string]any{"ok": true}
+}
+
+const maxWebViews = 6
+
+// WebSync 对应 Electron 的 web:sync：按地址保活子 webview，并更新矩形 / 可见性。
+// 地址不在列表里的视图销毁；同一地址只留一份（与 web-views.js 一致）。
+func (a *App) WebSync(list []webSyncItem) map[string]any {
+	a.webSyncMu.Lock()
+	defer a.webSyncMu.Unlock()
+
+	desired := map[string]webSyncItem{}
+	for _, raw := range list {
+		if len(desired) >= maxWebViews {
+			break
+		}
+		if !validWebURL(raw.URL) {
+			continue
+		}
+		want := webSyncItem{URL: raw.URL, Visible: raw.Visible && raw.Rect != nil, Rect: raw.Rect}
+		if prev, ok := desired[raw.URL]; ok && (prev.Visible || !want.Visible) {
+			continue
+		}
+		desired[raw.URL] = want
+	}
+
+	a.webMu.Lock()
+	existing := make(map[string]*webViewRec, len(a.webViews))
+	for u, rec := range a.webViews {
+		existing[u] = rec
+	}
+	a.webMu.Unlock()
+
+	for url, rec := range existing {
+		if _, keep := desired[url]; !keep {
+			rec.view.Destroy()
+			a.webMu.Lock()
+			delete(a.webViews, url)
+			a.webMu.Unlock()
+		}
+	}
+
+	for url, want := range desired {
+		rec := existing[url]
+		if rec == nil {
+			rect := mygo.Rectangle{}
+			if want.Visible && want.Rect != nil {
+				rect = rectOf(*want.Rect)
+			}
+			view, err := a.win.NewChildWebView(mygo.ChildWebViewOptions{URL: url, Rect: rect})
+			if err != nil {
+				evWebState.Emit(a.win, map[string]any{
+					"url": url, "status": "error", "code": "VIEW_FAILED", "desc": err.Error(),
+				})
+				continue
+			}
+			rec = &webViewRec{view: view}
+			view.OnState(func(st mygo.ChildWebViewState) { a.emitWebState(rec, st) })
+			a.webMu.Lock()
+			if a.webViews == nil {
+				a.webViews = map[string]*webViewRec{}
+			}
+			a.webViews[url] = rec
+			a.webMu.Unlock()
+		}
+		if want.Visible && want.Rect != nil {
+			rec.view.SetRect(rectOf(*want.Rect))
+			rec.view.SetVisible(true)
+		} else {
+			rec.view.SetVisible(false)
+		}
+	}
+	return map[string]any{"ok": true}
+}
+
+func rectOf(r webSyncRect) mygo.Rectangle {
+	return mygo.Rectangle{
+		X: int(math.Round(r.X)), Y: int(math.Round(r.Y)),
+		Width: int(math.Round(r.Width)), Height: int(math.Round(r.Height)),
+	}
+}
+
+func (a *App) emitWebState(rec *webViewRec, st mygo.ChildWebViewState) {
+	if st.Status == "popup" {
+		// 页面要开新窗口：与 Electron 一样交给系统浏览器
+		openExternal(st.CurrentURL)
+		return
+	}
+	payload := map[string]any{"url": st.URL, "status": st.Status}
+	switch st.Status {
+	case "loaded":
+		if rec.loaded.Swap(true) {
+			payload["status"] = "navigated"
+		}
+		payload["currentUrl"] = st.CurrentURL
+	case "error":
+		payload["code"] = st.Code
+		payload["desc"] = st.Desc
+	case "gone":
+		payload["reason"] = st.Desc
+	}
+	evWebState.Emit(a.win, payload)
+}
+
+func (a *App) WebReload(raw string) map[string]any {
+	a.webMu.Lock()
+	rec := a.webViews[raw]
+	a.webMu.Unlock()
+	if rec == nil {
+		return map[string]any{"ok": false}
+	}
+	rec.view.Reload()
 	return map[string]any{"ok": true}
 }
 

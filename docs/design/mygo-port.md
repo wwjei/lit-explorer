@@ -25,7 +25,7 @@ WebView2，产物是单个 Go 可执行文件。它提供 `Bind`（JS ↔ Go 的
 | `store.js` + `state-sanitize.js` | `mygo/statefile.go`（白名单字段、offered root 校验） |
 | `pv://` 协议 | 本机回环预览服务（见 §5） |
 | `Menu` / `dialog` / `clipboard` | MyGo `Menu` / `Dialog` / `Clipboard` |
-| `WebContentsView` | **没有对应物，能力屏蔽** |
+| `WebContentsView` | fork 里的 `Window.NewChildWebView()`（见 §6） |
 
 ## 3. 结果
 
@@ -78,28 +78,31 @@ WebView2，产物是单个 Go 可执行文件。它提供 `Bind`（JS ↔ Go 的
 | 右键菜单 / ⋯ 应用菜单 | ⚠️ 已用 MyGo `Menu` 实现并调用不崩；本机窗口不在可见桌面，`SendKeys` 无法聚焦，弹层未能自动确认 |
 | 文件夹 / 图标选择对话框 | ⚠️ 已用 `Dialog.Open` 实现，需人工点一次 |
 | 拖放文件夹打开工作区 | ⚠️ 已接 `OnFileDrop`，未自动验证 |
-| **内嵌网页（网页快速访问）** | ❌ **屏蔽**：点击改为系统浏览器打开 + 提示；web 固定列加载时丢弃 |
+| **内嵌网页（网页快速访问）** | ✅ 靠 fork 的 `ChildWebView` 实现：页面盖在窗格矩形上，`web:state` 的 loading / loaded / navigated / error / gone 与 Electron 同形；`target=_blank` 交给系统浏览器；web 固定列可保存并恢复 |
 
 ## 4. 损失与风险
 
-1. **内嵌网页没有替代物。** Electron 的 `WebContentsView` 让每个网页列拥有独立视图、
-   持久登录态、剪贴板授权询问；WebView2 只有窗口级 webview，没有等价的子视图。
-   这是产品功能表里明确列着的「网页快速访问」，移植后会退化为「快速链接」。
-   同一原因，网页列头部按钮（重新加载 / 固定网页）与失败卡片也失去意义。
-2. **预览服务换了实现。** WebView2 的自定义 scheme 只把主框架的请求交给 Go：
+1. **内嵌网页要维护一个 fork。** 原版 MyGo 的 `NewWebView` 只允许 native UI 窗口；
+   fork 补了 `ChildWebView`（子 HWND + 独立的 WebView2 经典控制器）。微软并不官方
+   支持同一窗口叠加两个 WebView2 控制器，实测可用，但这是长期维护点：MyGo 升级要
+   rebase fork，WebView2 升级、窗口在不同 DPI 显示器间移动都要复测。
+2. **网页能力有几处弱化。** 子 webview 与主页面共用应用级 profile（登录态持久，
+   但没有 Electron 那样的独立分区）；站点权限（剪贴板读取等）没有按站询问，
+   走 WebView2 默认策略；`target=_blank` 交给系统浏览器（与 Electron 一致）。
+3. **预览服务换了实现。** WebView2 的自定义 scheme 只把主框架的请求交给 Go：
    HTML 预览 iframe 里的相对 `css/js` 根本到不了处理器（已实测：主页面 `fetch` 能到，
    iframe 内 `fetch` / `<img>` 都失败）。原型改用绑定 `127.0.0.1` 的随机端口 +
    随机令牌预览服务，每个请求仍走工作区白名单。可行，但比 `pv://` 多了一个本机
    监听面，需要额外的安全评审。
-3. **WebView2 从「随包」变成「依赖系统」。** Windows 11 自带；Windows 10 需要
+4. **WebView2 从「随包」变成「依赖系统」。** Windows 11 自带；Windows 10 需要
    Evergreen Runtime。换来的是渲染内核跟随 Edge 升级——docx/pptx/PDF 的渲染一致性
    要重新建立回归基线。
-4. **框架成熟度。** MyGo v0.7.1 发布于实验当天，API 仍在快速演进（本实验就踩到
+5. **框架成熟度。** MyGo v0.7.1 发布于实验当天，API 仍在快速演进（本实验就踩到
    自定义 scheme 只覆盖主框架的问题）。把发布路径压在一个这样年轻的框架上，
    要接受后续升级成本。
-5. **发布链未完成。** 本次只产出单文件 exe，没有做 NSIS 安装包、图标嵌入、签名与
+6. **发布链未完成。** 本次只产出单文件 exe，没有做 NSIS 安装包、图标嵌入、签名与
    自动更新；`mygo build` 声称能出 Windows 安装包，未实测。
-6. **构建链更重。** 需要 Go 1.27+ 工具链；前端要先 `npm run build` 再 stage 进
+7. **构建链更重。** 需要 Go 1.27+ 工具链；前端要先 `npm run build` 再 stage 进
    `mygo/frontend/`（生成物、不入库）。CI 要同时维护 Node 与 Go 两套环境。
 
 ## 5. 截图
@@ -135,53 +138,56 @@ PDF 预览（Edge 内置阅读器）：
 
 ![查找](mygo-port/07-find.png)
 
-网页快捷访问的降级（系统浏览器 + 提示）：
+网页窗格（临时列里打开 https://example.com）：
 
-![网页降级](mygo-port/08-web-gated.png)
+![网页窗格](mygo-port/09-web-pane.png)
 
-## 6. 能不能 fork MyGo 把内嵌网页补回来
+固定住的网页列 + 临时列预览 PDF：
 
-先给结论：**技术上可行，但这是一项框架特性，不是配置或小补丁。**
+![固定网页列](mygo-port/10-web-pin.png)
 
-MyGo 已经有「窗口里嵌 webview」的原语：`Window.NewWebView()` +
-`ui.WebView`，但只允许 native UI 窗口（`WindowOptions.Content`），页窗口调用会返回
-`errNoContent`。它内部的实现是 `ICoreWebView2CompositionController` +
-DirectComposition（`internal/windows/webview_embed.go`、`surface.go`）：视觉树、裁剪、
-输入转发都已经在跑。而我们的页窗口用的是经典 `ICoreWebView2Controller`
-（`ctlPutIsVisible`），微软对「同一窗口里叠两个经典 WebView2 控制器」是不支持的。
+## 6. fork 里补了什么
 
-所以要补的不是「渲染第二个页面」，而是把页窗口也放进 composition 那套：
+内嵌网页最终是用 fork 实现的：[wwjei/mygo](https://github.com/wwjei/mygo)
+`v0.7.1-lit.2`（基于 v0.7.1），新增 `Window.NewChildWebView()`。
 
-1. 页窗口的主 webview 换成 CompositionController（或给页窗口加一层 composition
-   覆盖层），复用现有 visual 树；
-2. 放开 `NewWebView` 的 `content == nil` 限制，提供「按矩形放置」的 API，不依赖
-   native UI 布局；
-3. 输入路由 / 命中测试 / 焦点：native UI 有一套现成的，页窗口要按窗格矩形拦截并
-   转给子控制器；
-4. 每个网页视图独立 profile（WebView2 `ProfileName`），保住「登录态互不串」；
-   MyGo 现在是应用级 profile；
-5. 导航 / 加载 / 权限 / 剪贴板询问 → 页事件，形状可以沿用现在的 `web:state`。
+**为什么必须改框架**：原版 MyGo 只有两种 webview 用法——页窗口一个铺满的经典
+`ICoreWebView2Controller`，或 native UI 窗口里的 WebView2 **CompositionController**
+（`Window.NewWebView`，但页窗口调用返回 `errNoContent`）。微软不官方支持同窗口叠加
+两个经典控制器，所以不能只在应用层加一个视图。
 
-成本：Windows 上是 COM + DirectComposition 的活，熟悉这套代码的人大约 1–2 周出原型，
-再加 macOS（WKWebView 的 subview，容易）与 Linux（WebKitGTK）与回归。MyGo 还在
-0.7.x，API 和内部结构都在动，fork 需要持续跟上游。
+**fork 的做法**（`internal/windows/childwebview.go`）：给每个网页窗格建一个
+`WS_CHILD` 子窗口（`STATIC` 类），把独立的经典 WebView2 控制器挂在这个子 HWND 上，
+用 `SetWindowPos(HWND_TOP)` 压在页面的 webview 之上；DIP 矩形按窗口 DPI 换算成物理
+像素；隐藏时同时 `ShowWindow` 与 `controller.put_IsVisible`。事件只接需要的
+NavigationStarting / NavigationCompleted / ProcessFailed / NewWindowRequested，
+转成 `loading / loaded / error / gone / popup` 状态。
 
-**不 fork 的替代**：用 MyGo 现有的 `WindowOptions.Parent` + `Panel` 开一个无边框子
-窗口，盖在网页窗格的位置上，由布局事件驱动移动。能实现，但会露出独立窗口的痕迹
-（阴影、圆角裁剪、焦点、Alt-Tab、跨显示器移动），和 Electron 的 `WebContentsView`
-差距明显，只适合当临时方案。
+**应用层**：`App.WebSync` 按地址保活视图（同一地址只留一份，地址移出列表就销毁），
+`WebReload` 刷新，状态转成 Electron 的 `web:state` 载荷；`target=_blank` 与 Electron
+一样交给系统浏览器；web 固定列恢复保存 / 恢复。
 
-建议：先向上游提 issue / PR（这个能力对 MyGo 有普遍价值，底层设施已经有了）；
-只有在「必须自带内嵌网页列且接受长期维护 fork」时才自己改。
+**代价与边界**：
+
+- 子 webview 与主页面共用应用级 profile，没有独立分区；站点权限（剪贴板读取等）
+  走 WebView2 默认策略，没有 Electron 的按站询问。
+- 微软不官方支持同窗口叠加经典控制器，实测可用，但这是 fork 最脆的一处：
+  WebView2 升级、跨 DPI 显示器移动、窗口层级变化都要复测。
+- 只有 Windows 后端实现了 `ChildWebView`；macOS / Linux 调用会返回
+  “not supported on this platform”。
+- fork 需要跟随上游 rebase（本项目用 `replace` 指向 fork tag，改版本号即可）。
+
+更省事的顺序仍然是先向上游提 issue / PR：这个能力对 MyGo 有普遍价值，fork 里只有
+Windows 一份实现，补上 macOS（WKWebView subview）与 Linux（WebKitGTK）更适合放在上游。
 
 ## 7. 结论
 
 - **体积**：18.6 MB vs 122.4 MB，缩减 84.8%，是这次实验唯一确定的大收益。
-- **功能**：除内嵌网页外，界面与预览能力基本无损；内嵌网页需要重新设计（外部窗口
-  或放弃），不是配置能补的。
-- **代价**：内存没有变好、启动略慢、依赖系统 WebView2、框架很年轻、预览服务需要
-  安全复核、发布链要重做。
+- **功能**：界面与预览能力全部跑通；内嵌网页靠 fork 补回，与 Electron 版行为基本一致
+  （差异是 profile 共享与站点权限默认策略）。
+- **代价**：内存没有变好、启动略慢、依赖系统 WebView2、框架很年轻、需要维护一个
+  Windows 端的 fork、预览服务需要安全复核、发布链要重做。
 
-建议：**除非「安装包 < 20 MB」是硬指标，否则不值得为此重写主进程。** 若确实是硬指标，
-MyGo 路线可承载约 95% 的界面能力，但「网页快速访问」必须按降级方案改产品定义，
-并且要先补齐原生菜单 / 对话框 / 拖放的人工验收与安装包链路。
+建议：**除非「安装包 < 20 MB」是硬指标，否则不值得为此重写主进程并维护 fork。**
+若确实是硬指标，MyGo 路线现在能覆盖全部界面能力，但要接受 fork 的长期维护成本，
+并先补齐原生菜单 / 对话框 / 拖放的人工验收与安装包链路。

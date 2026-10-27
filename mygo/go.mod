@@ -12,3 +12,5 @@ require (
 	github.com/ebitengine/purego v0.11.1 // indirect
 	golang.org/x/net v0.59.0 // indirect
 )
+
+replace github.com/egoist/mygo => github.com/wwjei/mygo v0.7.1-lit.2

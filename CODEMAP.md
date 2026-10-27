@@ -104,10 +104,12 @@
 | 设置持久化与白名单 | `mygo/statefile.go` | `loadState()`、`patchFromPage()`、`sanitizeLayout()` | `state.json`、`web` 固定列被丢弃 |
 | 渲染层桥接 | `mygo/bridge.js` | `window.pv`、`capabilities.webPane` | `mygo.call`、`on('pv:…')` |
 | 前端资源打包 | `mygo/stage-frontend.mjs` | 生成 `mygo/frontend/`（gitignore）供 `go:embed` | `stage-frontend` |
+| 网页窗格（内嵌网页） | `mygo/main.go`、`mygo/bridge.js` | `WebSync()`、`WebReload()`、`emitWebState()`、`pv:web-state` | `ChildWebView`、`webViewRec`、`maxWebViews` |
 
-网页内嵌能力在 MyGo 版没有对应物：`app.js` 的 `openWebFavorite()` 按
-`pv.capabilities.webPane === false` 改为系统浏览器打开；`webSync` / `webReload` /
-`onWebState` 是空实现。
+网页窗格用 fork 的 `Window.NewChildWebView()`（`go.mod` 的 `replace` 指向
+`wwjei/mygo v0.7.1-lit.2`）：`App.WebSync` 按地址保活视图、`WebReload` 刷新、
+状态转成 `web:state`。`app.js` 的 `openWebFavorite()` 仍按
+`pv.capabilities.webPane` 决定是否内嵌（其他后端为 false）。
 
 ## 7. 文档地图
 

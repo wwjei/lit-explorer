@@ -15,7 +15,8 @@
 | 启动到窗口 | 1.66 s | 2.17 s（冷启动 WebView2） |
 | 内存（工作集 / 私有） | 473 MB / 392 MB，4 进程 | 602 MB / 400 MB，8 进程 |
 
-功能上除「内嵌网页」外全部跑通；逐项对照见设计文档。
+功能全部跑通，包括内嵌网页——后者靠 fork 出来的 `ChildWebView` 补上（见下）。
+逐项对照见设计文档。
 
 ## 构建
 
@@ -45,16 +46,42 @@ Go 单测：`cd mygo && go test ./...`。
 | --- | --- |
 | `main.go` | 窗口、菜单、单实例、预览服务、`App.*` 绑定方法 |
 | `fsapi.go` | 对应 `src/main/fs-api.js`：授权根、真实路径校验、类型/MIME、读与 SVG 保存 |
-| `statefile.go` | 对应 `store.js` + `state-sanitize.js`；加载时丢弃 web 固定列 |
+| `statefile.go` | 对应 `store.js` + `state-sanitize.js`（含 web 固定列） |
 | `bridge.js` | 注入页面的 `window.pv`，与 `src/main/preload.js` 同形 |
 | `stage-frontend.mjs` | 生成 `mygo/frontend/`（`go:embed` 的输入） |
 | `fsapi_test.go` | 路径边界、图片地址清洗、状态收敛、SVG 保存基线 |
 
+## 依赖 fork
+
+内嵌网页需要 MyGo 原版没有的能力：在页窗口上按矩形叠一个 webview。这里用了
+[wwjei/mygo](https://github.com/wwjei/mygo) 的 `v0.7.1-lit.2`（fork 自 v0.7.1），
+新增 `Window.NewChildWebView()`：
+
+```go
+web, _ := win.NewChildWebView(mygo.ChildWebViewOptions{
+    URL:  "https://example.com",
+    Rect: mygo.Rectangle{X: 800, Y: 100, Width: 420, Height: 600},
+})
+web.SetRect(...)        // 窗格移动 / 窗口缩放时
+web.SetVisible(false)   // 被欢迎页、菜单盖住时
+web.OnState(...)        // loading / loaded / error / gone / popup
+web.Destroy()           // 窗格移出同步列表时
+```
+
+`mygo/go.mod` 用 `replace github.com/egoist/mygo => github.com/wwjei/mygo v0.7.1-lit.2`
+指过去；fork 的模块路径保持原样，上游升级时把 fork rebase 到新 tag 再改版本号即可。
+
+Windows 实现是「子 HWND + 独立 WebView2 经典控制器」：控制器挂在页窗口的子窗口上，
+用 `SetWindowPos` 保持页面之上，坐标按 DPI 从 DIP 换算成物理像素。微软并未官方支持
+同一窗口叠加两个 WebView2 控制器，实测可工作，但升级 WebView2 / 移动窗口到不同 DPI
+显示器时需要复测。
+
 ## 与 Electron 版的差异
 
-- **内嵌网页不可用**：没有 `WebContentsView`。网页快捷访问点击后用系统浏览器打开
-  并提示；保存过的 web 固定列在加载设置时丢弃；`webSync` / `webReload` /
-  `onWebState` 是空实现。
+- **内嵌网页**：已通过 fork 的 `ChildWebView` 实现，`webSync` / `webReload` /
+  `onWebState` 与 Electron 版同形。与 Electron 的差别：子 webview 与主页面共用
+  应用级 profile（登录态仍持久，但没有独立分区）；`target=_blank` 与 Electron 一样
+  交给系统浏览器；剪贴板读取等站点权限没有做按站询问，交给 WebView2 默认策略。
 - **预览地址走本机回环服务**：WebView2 的自定义 scheme 只把主框架请求交给 Go，
   HTML 预览里的相对 CSS/JS 到不了处理器。改为 `127.0.0.1:<随机端口>/<随机令牌>/…`
   的预览服务，工作区白名单仍逐请求校验。这是原型里最需要复核的一处。
