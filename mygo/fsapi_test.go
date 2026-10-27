@@ -94,10 +94,13 @@ func TestSanitizeLayoutKeepsWebPanes(t *testing.T) {
 }
 
 func TestWriteSvgBoundaries(t *testing.T) {
+	isolateRoots(t)
 	dir := t.TempDir()
-	resetAllowedRoots()
-	allowResolvedRoot(dir)
-	defer resetAllowedRoots()
+	real, err := realPath(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowResolvedRoot(real)
 
 	target := filepath.Join(dir, "a.svg")
 	if err := os.WriteFile(target, []byte("<svg/>"), 0o644); err != nil {
