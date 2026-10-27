@@ -10,5 +10,7 @@ build/icons/
 build/icon.ico
 build/notices/
 
-# MyGo 移植实验：前端资源由 mygo/stage-frontend.mjs 生成
+# MyGo 版：前端资源由 mygo/stage-frontend.mjs 生成
 mygo/frontend/
+mygo/mygo.ts
+mygo/mygo.json

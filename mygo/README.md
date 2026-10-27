@@ -1,33 +1,49 @@
-# lit explorer · MyGo 移植实验
+# lit explorer · MyGo 版
 
 用 [MyGo](https://github.com/egoist/mygo)（Go + 系统 WebView2）承载同一份
-`src/renderer` 界面，验证「不打包 Chromium」能省多少体积、会丢哪些能力。
+`src/renderer` 界面，是随 Release 一起发布的第二个 Windows 版本。与 Electron 版功能
+一致、共用界面代码，但不打包 Chromium，安装包从约 122 MB 降到约 5.5 MB。
 
-**这是实验分支上的原型，未合入主线，也不是发布路径。** 结论与实测数据见
+实测数据（体积、启动、内存）与能力对照见
 [docs/design/mygo-port.md](../docs/design/mygo-port.md)。
 
-## 结果速览
+## 产物
 
 | 指标 | Electron 版 | MyGo 版 |
 | --- | --- | --- |
-| 产物 | 安装包 122.4 MB / 免安装 111.3 MB | 单文件 exe **18.6 MB** |
-| 安装后占用 | Electron 运行时约 369 MB + 应用 | 18.6 MB（WebView2 运行时由系统提供） |
+| 安装包 | 122.4 MB（NSIS）/ 111.3 MB（portable） | **5.5 MB**（NSIS）/ **17.8 MB**（portable） |
+| 运行时 | 自带 Electron | 系统 WebView2（Win11 自带，Win10 一般随 Edge） |
 | 启动到窗口 | 1.66 s | 2.17 s（冷启动 WebView2） |
-| 内存（工作集 / 私有） | 473 MB / 392 MB，4 进程 | 602 MB / 400 MB，8 进程 |
+| 内存（工作集 / 私有） | 473 MB / 392 MB | 602 MB / 400 MB |
 
-功能全部跑通，包括内嵌网页——后者靠 fork 出来的 `ChildWebView` 补上（见下）。
-逐项对照见设计文档。
+两个版本可以并存：安装目录、卸载项与用户数据目录各自独立
+（Electron 用 `Lit Explorer`，MyGo 用 `Lit Explorer MyGo`）。
 
 ## 构建
 
-需要 Go 1.27+ 与 Windows 的 WebView2 Runtime（Windows 11 自带）。
+需要 Go 1.27+。打包走仓库根目录的脚本，不要直接调 `mygo build`（它不会生成前端资源、
+也不会把产物改名为发布用的名字）：
 
 ```bash
-npm run build                      # 先生成 src/renderer/vendor 与 docpreview
-node mygo/stage-frontend.mjs       # 把渲染层/资源拷进 mygo/frontend（已 gitignore）
-cd mygo
-go build -trimpath -ldflags "-s -w" -o ../.tmp/litexplorer-mygo.exe .
+npm run dist:mygo   # predist:mygo 先 build + notices，再 stage → 编译 → 安装包 → dist/
+npm run dist:all    # Electron + MyGo；顺序固定，Electron 的 clean-dist 会清空 dist/
 ```
+
+CLI 默认用 `go run github.com/egoist/mygo/cmd/mygo@v0.7.1`；本机已装 `mygo` 时可用
+`MYGO_CLI=mygo` 覆盖。缺 NSIS 时 CLI 会自己下载，离线环境可把 electron-builder 缓存里的
+`makensis.exe` 目录放进 `PATH`。国内网络拉不动 `proxy.golang.org` 时设
+`GOPROXY=https://goproxy.cn,direct`。
+
+手工调试构建：
+
+```bash
+npm run build                       # 生成 src/renderer/vendor 与 docpreview
+node mygo/stage-frontend.mjs        # 把渲染层/资源拷进 mygo/frontend（gitignore）
+cd mygo
+go test ./... && go build -trimpath -ldflags "-s -w" -o ../.tmp/litexplorer-mygo.exe .
+```
+
+`go:embed` 依赖 `mygo/frontend/`，所以 `go test` / `go build` 之前必须先 stage。
 
 运行：
 
@@ -38,54 +54,27 @@ go build -trimpath -ldflags "-s -w" -o ../.tmp/litexplorer-mygo.exe .
 调试用参数：`--eval=<js 文件> --delay=<ms> --hold=<ms>`（执行一段 JS，打印返回值，
 `--hold` 让窗口多留一会儿供截图）。`MYGO_DEBUG=1` 会打印预览服务的每个请求。
 
-Go 单测：`cd mygo && go test ./...`。
-
 ## 结构
 
 | 文件 | 作用 |
 | --- | --- |
 | `main.go` | 窗口、菜单、单实例、预览服务、`App.*` 绑定方法 |
 | `fsapi.go` | 对应 `src/main/fs-api.js`：授权根、真实路径校验、类型/MIME、读与 SVG 保存 |
-| `statefile.go` | 对应 `store.js` + `state-sanitize.js`（含 web 固定列） |
-| `bridge.js` | 注入页面的 `window.pv`，与 `src/main/preload.js` 同形 |
+| `statefile.go` | 对应 `store.js` + `state-sanitize.js`；web 固定列按 `kind` + `url` 保留 |
+| `bridge.js` | 注入页面的 `window.pv`，与 `src/main/preload.js` 同形；`capabilities.webPane = true` |
 | `stage-frontend.mjs` | 生成 `mygo/frontend/`（`go:embed` 的输入） |
 | `fsapi_test.go` | 路径边界、图片地址清洗、状态收敛、SVG 保存基线 |
 
-## 依赖 fork
-
-内嵌网页需要 MyGo 原版没有的能力：在页窗口上按矩形叠一个 webview。这里用了
-[wwjei/mygo](https://github.com/wwjei/mygo) 的 `v0.7.1-lit.2`（fork 自 v0.7.1），
-新增 `Window.NewChildWebView()`：
-
-```go
-web, _ := win.NewChildWebView(mygo.ChildWebViewOptions{
-    URL:  "https://example.com",
-    Rect: mygo.Rectangle{X: 800, Y: 100, Width: 420, Height: 600},
-})
-web.SetRect(...)        // 窗格移动 / 窗口缩放时
-web.SetVisible(false)   // 被欢迎页、菜单盖住时
-web.OnState(...)        // loading / loaded / error / gone / popup
-web.Destroy()           // 窗格移出同步列表时
-```
-
-`mygo/go.mod` 用 `replace github.com/egoist/mygo => github.com/wwjei/mygo v0.7.1-lit.2`
-指过去；fork 的模块路径保持原样，上游升级时把 fork rebase 到新 tag 再改版本号即可。
-
-Windows 实现是「子 HWND + 独立 WebView2 经典控制器」：控制器挂在页窗口的子窗口上，
-用 `SetWindowPos` 保持页面之上，坐标按 DPI 从 DIP 换算成物理像素。微软并未官方支持
-同一窗口叠加两个 WebView2 控制器，实测可工作，但升级 WebView2 / 移动窗口到不同 DPI
-显示器时需要复测。
-
 ## 与 Electron 版的差异
 
-- **内嵌网页**：已通过 fork 的 `ChildWebView` 实现，`webSync` / `webReload` /
-  `onWebState` 与 Electron 版同形。与 Electron 的差别：子 webview 与主页面共用
-  应用级 profile（登录态仍持久，但没有独立分区）；`target=_blank` 与 Electron 一样
-  交给系统浏览器；剪贴板读取等站点权限没有做按站询问，交给 WebView2 默认策略。
-- **预览地址走本机回环服务**：WebView2 的自定义 scheme 只把主框架请求交给 Go，
-  HTML 预览里的相对 CSS/JS 到不了处理器。改为 `127.0.0.1:<随机端口>/<随机令牌>/…`
-  的预览服务，工作区白名单仍逐请求校验。这是原型里最需要复核的一处。
-- 设置文件在 `%APPDATA%\litexplorer-mygo\state.json`（Electron 版在
-  `userData/state.json`，两者不共享）。
-- 原生菜单、文件夹/图片选择框用 MyGo 的 `Menu` / `Dialog` 重新实现；本机无可见
-  桌面，弹层与对话框未能自动截图确认，需人工点一次。
+- **预览地址走本机回环服务。** WebView2 的自定义 scheme 只把主框架请求交给 Go，
+  HTML 预览 iframe 里的相对 CSS/JS 到不了处理器。改为
+  `127.0.0.1:<随机端口>/<随机令牌>/…` 的预览服务，工作区白名单仍逐请求校验。
+- **内嵌网页靠 fork 支持。** 上游 MyGo 的 `NewWebView` 只允许 native UI 窗口；
+  `go.mod` 的 `replace` 指向 `wwjei/mygo v0.7.1-lit.2`，它在主窗口上叠加子 HWND +
+  WebView2 经典控制器（`Window.NewChildWebView()`）。微软不官方支持同窗口叠加控制器，
+  升级 MyGo / WebView2 时要复测网页列。
+- **渲染内核跟随系统 Edge。** docx / pptx / PDF 的渲染一致性要按 WebView2 版本回归。
+- 设置文件在 `%APPDATA%\Lit Explorer MyGo\state.json`，与 Electron 版不共享。
+- `FEATURES.md` 与第三方许可声明编在 exe 里；菜单「功能特性说明」「第三方许可」首次
+  打开时解到用户数据目录再交给系统默认程序。

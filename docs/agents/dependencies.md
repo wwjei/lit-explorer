@@ -30,6 +30,19 @@ pptx-preview / jszip 都由 esbuild 打包进 `src/renderer/vendor/`，运行时
 `predist` 里已经串上这一步，正常打包不用管。手工改过 `src/renderer/vendor/` 或想单独
 确认声明时，`npm run build && npm run notices` 重跑一次即可。
 
+## MyGo shell 的 Go 依赖
+
+`mygo/` 是独立的 Go module（`mygo/go.mod` / `mygo/go.sum`）。改 Go 依赖、或调整
+`replace` 指向的 fork 时，要跑 `cd mygo && go mod tidy` 并提交 `go.sum`；CI 用
+`go-version-file: mygo/go.mod` 装 Go，缺 `go.sum` 条目会直接失败。
+
+`replace github.com/egoist/mygo => github.com/wwjei/mygo v0.7.1-lit.2` 指向带
+`Window.NewChildWebView()` 的 fork（内嵌网页列）。这个 tag 不在 sum.golang.org 上，
+第一次拉取时需要 `GOPRIVATE=github.com/wwjei/mygo go mod tidy` 生成校验条目；之后
+普通构建不受影响。国内网络拉 `proxy.golang.org` 超时时可用
+`GOPROXY=https://goproxy.cn,direct`。fork 的维护方式见
+[build.md](build.md#两个-shell-electron-与-mygo)。
+
 ## 依赖更新走 Dependabot
 
 [.github/dependabot.yml](../../.github/dependabot.yml) 每周检查 npm、每月检查 GitHub Actions。

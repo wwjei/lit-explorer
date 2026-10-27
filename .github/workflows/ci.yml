@@ -48,6 +48,20 @@ jobs:
         # 集成测试跑的是真实构建产物（src/renderer/vendor/），不先构建会测到空文件
         run: npm run build
 
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: mygo/go.mod
+          cache-dependency-path: mygo/go.sum
+
+      - name: MyGo 前端资源与编译检查
+        # 两个 shell 共用 src/renderer；staging 之后 go test / go build 才能过（go:embed）
+        run: |
+          node mygo/stage-frontend.mjs
+          cd mygo
+          go test ./...
+          go build ./...
+
       - name: 单元测试
         run: npm run test:unit
 

@@ -1,6 +1,6 @@
-# MyGo 移植实验：体积、能力与代价
+# MyGo 移植：体积、能力与代价
 
-2026-10 · 分支 `spike/mygo`
+2026-10 · 实验分支 `spike/mygo`，已合入 main 并成为随 Release 发布的第二个 Windows 构建
 
 ## 1. 问题
 
@@ -23,7 +23,7 @@ WebView2，产物是单个 Go 可执行文件。它提供 `Bind`（JS ↔ Go 的
 | --- | --- |
 | `fs-api.js` | `mygo/fsapi.go`（真实路径校验、junction 边界、读上限、SVG 保存基线） |
 | `store.js` + `state-sanitize.js` | `mygo/statefile.go`（白名单字段、offered root 校验） |
-| `pv://` 协议 | 本机回环预览服务（见 §5） |
+| `pv://` 协议 | 本机回环预览服务（见 §4） |
 | `Menu` / `dialog` / `clipboard` | MyGo `Menu` / `Dialog` / `Clipboard` |
 | `WebContentsView` | fork 里的 `Window.NewChildWebView()`（见 §6） |
 
@@ -33,13 +33,13 @@ WebView2，产物是单个 Go 可执行文件。它提供 `Bind`（JS ↔ Go 的
 
 | | Electron 版 | MyGo 版 |
 | --- | --- | --- |
-| 用户下载 | 122.4 MB（NSIS）/ 111.3 MB（portable） | **18.6 MB** 单文件 exe |
-| 安装后 | 约 369 MB（Electron 分发目录）+ 应用 | 18.6 MB（不含系统 WebView2） |
-| 其中前端资源 | `app.asar` 约 5 MB | 内嵌 5.9 MB / 116 个文件 |
-| 缩减 | — | **−84.8%**（对比 NSIS 安装包） |
+| 用户下载 | 122.4 MB（NSIS）/ 111.3 MB（portable） | **5.5 MB**（NSIS）/ **17.8 MB**（portable） |
+| 安装后 | 约 369 MB（Electron 分发目录）+ 应用 | 17.8 MB（不含系统 WebView2） |
+| 其中前端资源 | `app.asar` 约 5 MB | 内嵌 5.8 MB / 96 个文件 |
+| 缩减 | — | **−95.5%**（对比 NSIS 安装包）/ −84.0%（对比 portable） |
 
-18.6 MB 里 Go 运行时与本应用代码约 12.7 MB，其余是内嵌的渲染层（shiki 语法包
-4.4 MB 占大头）。前端不再单独分发，也没有额外运行时文件。
+17.8 MB 的免安装 exe 里 Go 运行时与本应用代码约 12.7 MB，其余是内嵌的渲染层
+（shiki 语法包 4.4 MB 占大头）。前端不再单独分发，也没有额外运行时文件。
 
 ### 启动与内存（同一台机器，隔离数据目录，开着一个 16 文件 + 一张 1.1 MB 图片的工作区）
 
@@ -91,17 +91,17 @@ WebView2，产物是单个 Go 可执行文件。它提供 `Bind`（JS ↔ Go 的
    走 WebView2 默认策略；`target=_blank` 交给系统浏览器（与 Electron 一致）。
 3. **预览服务换了实现。** WebView2 的自定义 scheme 只把主框架的请求交给 Go：
    HTML 预览 iframe 里的相对 `css/js` 根本到不了处理器（已实测：主页面 `fetch` 能到，
-   iframe 内 `fetch` / `<img>` 都失败）。原型改用绑定 `127.0.0.1` 的随机端口 +
+   iframe 内 `fetch` / `<img>` 都失败）。实现改为绑定 `127.0.0.1` 的随机端口 +
    随机令牌预览服务，每个请求仍走工作区白名单。可行，但比 `pv://` 多了一个本机
    监听面，需要额外的安全评审。
 4. **WebView2 从「随包」变成「依赖系统」。** Windows 11 自带；Windows 10 需要
    Evergreen Runtime。换来的是渲染内核跟随 Edge 升级——docx/pptx/PDF 的渲染一致性
    要重新建立回归基线。
 5. **框架成熟度。** MyGo v0.7.1 发布于实验当天，API 仍在快速演进（本实验就踩到
-   自定义 scheme 只覆盖主框架的问题）。把发布路径压在一个这样年轻的框架上，
-   要接受后续升级成本。
-6. **发布链未完成。** 本次只产出单文件 exe，没有做 NSIS 安装包、图标嵌入、签名与
-   自动更新；`mygo build` 声称能出 Windows 安装包，未实测。
+   自定义 scheme 只覆盖主框架的问题）。要接受后续升级与 rebase fork 的成本。
+6. **发布链已补齐。** NSIS 安装包、图标与版本元数据都已跑通（`npm run dist:mygo`
+   产出 5.5 MB 安装包 / 17.8 MB 免安装版）；代码签名与自动更新与 Electron 版一样
+   还没做，原因见 [further_notes.md](../../further_notes.md) 的 N4 / N5。
 7. **构建链更重。** 需要 Go 1.27+ 工具链；前端要先 `npm run build` 再 stage 进
    `mygo/frontend/`（生成物、不入库）。CI 要同时维护 Node 与 Go 两套环境。
 

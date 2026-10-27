@@ -104,3 +104,21 @@ SMIL、事件属性、`javascript:` / 危险 `data:` 链接、`file:` / 相对�
 网页内容能联网、能写自己的 cookie、能被站点跟踪，这是浏览器的正常行为，不算越界；
 但它不能读工作区、不能调宿主 IPC；除了页面里的 `mailto:` 会交给系统邮件程序，
 不能启动本机程序。
+
+## MyGo 版的两处差异
+
+MyGo 版（`mygo/`）与 Electron 版共用渲染层，但系统边界要各自实现：
+
+- **文件与状态的白名单在 `mygo/fsapi.go` / `mygo/statefile.go`。** 它们对应
+  `src/main/fs-api.js` / `state-sanitize.js`，同样做 `realpath` 后的根目录校验、
+  读取上限、SVG 的 size+mtime 基线与状态字段白名单。新增文件系统能力时两份都要加，
+  不要只改 Electron 侧让 MyGo 版静默少一道校验。
+- **HTML 预览走本机回环服务**（`startPreviewServer()`）：只绑 `127.0.0.1` 的随机端口，
+  路径前缀是进程级 32 字节随机令牌，每个请求仍过 `assertAllowed()`。不要改成
+  `0.0.0.0`、固定端口或固定令牌；令牌不要写进日志或持久化文件
+  （`MYGO_DEBUG=1` 只打印路径，不打印令牌前缀）。这是比 `pv://` 多出来的一个本机
+  监听面，改服务时要按「局域网也能访问」的假设重审。
+- **子 webview**（fork 的 `NewChildWebView`）与主页面共用应用级 WebView2 profile，
+  没有 Electron 的独立 `persist:web-docs` 分区；站点权限走 WebView2 默认策略，
+  没有按站询问剪贴板读取。`WebSync` 里的地址仍过 `validWebURL()`（只放行 `http(s)`、
+  拒绝控制字符与带账号密码的地址）。不要图省事把 `pv` 桥接注入子 webview。

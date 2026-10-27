@@ -35,6 +35,20 @@ npm run check:docs        # 文档索引与死链（改文档后跑，CI 也会�
 加用例时用 `test/helpers.cjs` 的 `run(id, title, fn) / ok / eq / eqJson / done`：
 断言要打印出实际值（失败信息就是排错线索），改坏的既有行为要能直接反映成红。
 
+### MyGo 版
+
+```bash
+node mygo/stage-frontend.mjs     # go:embed 的输入，没 stage 过 go test 直接失败
+cd mygo && go test ./... && cd ..
+npm run dist:mygo                # 端到端：stage → 编译 → NSIS / portable 进 dist/
+```
+
+`mygo/fsapi_test.go` 覆盖路径边界、图片地址清洗、状态白名单（含 web 固定列）与 SVG
+保存基线；它是 Go 侧唯一的回归网，改 `mygo/fsapi.go` / `statefile.go` 时同步补。
+界面行为没有第二条断言网：MyGo 版跑的是同一份 `src/renderer`，Electron 集成套件
+覆盖的逻辑仍然有效，但 WebView2 特有的部分（预览回环服务、子 webview 的 DPI 与生命周期）
+只能手工验证——`go test` 全绿不代表网页列没问题。
+
 ### 迭代时只跑相关的那一段
 
 `--list` 看段落 id，`--only` / `--skip` 挑范围：
@@ -155,3 +169,8 @@ taskkill //IM "Lit Explorer.exe" //F      # 先关掉正在运行的实例：安
 
 装完可确认产物里确实是当前代码：
 `grep -qa "<新符号>" "$LOCALAPPDATA/Programs/Lit Explorer/resources/app.asar"`。
+
+MyGo 版装到 `%LOCALAPPDATA%\Programs\Lit Explorer MyGo`，产物是单个 exe（前端资源编在
+里面，没有 `app.asar`）：直接运行 `dist/Lit-Explorer-MyGo-<版本>-portable.exe` 就能验证
+打包结果。它需要系统 WebView2 Runtime；缺的时候窗口起不来而不是弹提示。
+两个版本可以同时安装，但各自有单实例锁与独立的 `userData`。

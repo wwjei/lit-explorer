@@ -958,10 +958,36 @@ func (a *App) OpenAppMenu() map[string]any {
 		mygo.Separator(),
 		{Label: "开发者工具", Accelerator: "F12", Click: func(*mygo.MenuItem, *mygo.Window) { a.win.Page().OpenDevTools() }},
 		mygo.Separator(),
+		{Label: "功能特性说明", Click: func(*mygo.MenuItem, *mygo.Window) { a.openBundled("FEATURES.md") }},
+		{Label: "第三方许可", Click: func(*mygo.MenuItem, *mygo.Window) {
+			a.openBundled("notices/THIRD-PARTY-NOTICES.md")
+		}},
 		{Label: "示例项目目录", Click: func(*mygo.MenuItem, *mygo.Window) { a.openWorkspace(a.GetSampleRoot()) }},
 	}
 	mygo.NewMenu(items).Popup(a.win)
 	return map[string]any{"ok": true}
+}
+
+// openBundled 把随二进制分发的文档（FEATURES.md、第三方许可）落到 userData 再交给
+// 系统默认程序。每次都重写：升级后 exe 里的是新版本，别让旧副本留在磁盘上。
+// 它们不在工作区内，所以不走 assertAllowed。
+func (a *App) openBundled(name string) {
+	dir, err := appPathUserData()
+	if err != nil {
+		return
+	}
+	data, err := fs.ReadFile(frontendFS, "frontend/"+name)
+	if err != nil {
+		return
+	}
+	dest := filepath.Join(dir, "bundled", filepath.FromSlash(name))
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return
+	}
+	if err := os.WriteFile(dest, data, 0o644); err != nil {
+		return
+	}
+	openPath(dest)
 }
 
 func (a *App) toggleTheme() {
