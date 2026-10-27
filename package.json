@@ -23,7 +23,7 @@
     "shot": "electron .",
     "probe": "node scripts/run-probe.mjs",
     "predist": "npm run build && npm run notices",
-    "dist": "electron-builder --win --publish never"
+    "dist": "node scripts/clean-dist.mjs && electron-builder --win --publish never"
   },
   "license": "MIT",
   "//author": "必须是对象形式（author.name）：electron-builder 用 author.name 填 exe 的 CompanyName，写成字符串的话它会取到 undefined，exe 就留着 Electron 原版的厂商信息。",

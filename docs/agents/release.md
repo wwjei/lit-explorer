@@ -44,8 +44,8 @@ tag 名里带连字符（`-alpha` / `-beta`）会被自动标记为预发布。*
 
 没有代码签名，`SHA256SUMS.txt` 是用户唯一能自己核对「下载到的就是 CI 构建出来的那一份」
 的手段，Release 说明里也据此给出了 `sha256sum -c` 的用法。由
-`scripts/build-checksums.mjs` 生成，只收录**当前版本号**的 exe——本地 `dist/` 里往往还
-堆着以前几次打包的产物，不按版本号过滤会把不相干的旧包也列进去。
+`scripts/build-checksums.mjs` 生成，只收录**当前版本号**的 exe——`dist` 脚本现在会先
+清空 `dist/`（`scripts/clean-dist.mjs`），这条过滤是防止有人手工往目录里放旧包的兜底。
 
 ## 不要让 electron-builder 自己发布
 

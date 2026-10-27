@@ -23,11 +23,16 @@ npm run dev      # 启动并打开开发者工具
 
 ### 依赖安装慢 / 卡在下载 Electron
 
-Electron 的二进制默认从 GitHub 下载，国内经常超时。项目已带 `.npmrc` 指向 npmmirror 镜像：
+Electron 的二进制默认从 GitHub 下载，国内经常超时。`@electron/get` 认 `ELECTRON_MIRROR`
+环境变量，安装时带上即可：
 
-```ini
-electron_mirror=https://npmmirror.com/mirrors/electron/
+```bash
+ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ npm install
 ```
+
+**为什么不写在 `.npmrc` 里**：`electron_mirror=...` 会被 npm 当成未知配置传给生命周期
+脚本，每次安装都告警，而且 npm 的下一个主版本不再传递它——镜像会静默失效，表现出来
+只是「下载越来越慢直到超时」。设成用户环境变量可以省掉每次带前缀。
 
 如果 `node_modules/electron/dist/electron.exe` 不存在，说明二进制没下下来，手动补一次：
 
@@ -114,6 +119,7 @@ project_viewer/
 │   ├── build-icons.mjs        # 由 SVG 母版生成各尺寸 ICO
 │   ├── build-notices.mjs      # 生成随包分发的第三方许可声明
 │   ├── build-checksums.mjs    # 生成发布产物的 SHA256SUMS.txt
+│   ├── clean-dist.mjs         # 打包前清空 dist/，避免旧版本的包留在里面
 │   └── audit-report.mjs       # 漏洞扫描，按「进不进安装包」分开看
 ├── src/
 │   ├── main/                  # 主进程：唯一的系统访问入口（读 + 受限的 SVG 保存）
@@ -317,7 +323,7 @@ git push origin v0.0.4-alpha
 本地打包（产物在 `dist/`）：
 
 ```bash
-npm run dist      # predist 会先生成高亮 Worker、图标与第三方许可声明
+npm run dist      # predist 会先生成高亮 Worker、图标与第三方许可声明，dist/ 先清空再打包
 node scripts/build-checksums.mjs   # 生成 SHA256SUMS.txt
 ```
 
