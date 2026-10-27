@@ -12,7 +12,7 @@ body:
     attributes:
       label: 版本
       description: Release 的 tag，或者应用标题栏里的版本号
-      placeholder: 0.0.4-alpha
+      placeholder: 0.0.5-alpha
     validations:
       required: true
 

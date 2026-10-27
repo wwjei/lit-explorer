@@ -314,8 +314,8 @@ npm run shot -- --open="./sample-project" --shot=".tmp/shot.png" --shot-js=".tmp
 tag 里带连字符（如 `v0.0.1-alpha`）会自动标记为预发布。
 
 ```bash
-git tag v0.0.4-alpha
-git push origin v0.0.4-alpha
+git tag v0.0.5-alpha
+git push origin v0.0.5-alpha
 ```
 
 日常提交不需要打 tag：推 `main` 只跑测试，不构建。

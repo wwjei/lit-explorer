@@ -1,6 +1,6 @@
 {
   "name": "lit-explorer",
-  "version": "0.0.4-alpha",
+  "version": "0.0.5-alpha",
   "private": true,
   "description": "lit explorer —— 面向开发者的本地项目文件浏览器：多栏目录导航 + 内嵌预览，双击用系统默认程序打开",
   "main": "src/main/main.js",
