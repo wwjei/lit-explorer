@@ -9,3 +9,6 @@ src/renderer/vendor/
 build/icons/
 build/icon.ico
 build/notices/
+
+# MyGo 移植实验：前端资源由 mygo/stage-frontend.mjs 生成
+mygo/frontend/

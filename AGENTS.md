@@ -28,6 +28,7 @@ lit explorer：Electron 写的本地项目文件浏览器（多栏目录导航 +
 | 已知的依赖 / 安全债，以及什么时候要重新看 | [docs/security-debt.md](docs/security-debt.md) |
 | 想弄清某个设计为什么是这样（如高亮的阈值） | [docs/highlighting.md](docs/highlighting.md) 这类设计文档 |
 | 看未实施功能的调研与方案 | [docs/design/](docs/design/) 下按主题分的文档 |
+| 看 / 继续 MyGo 移植实验（体积收益、能力损失、构建方式） | [docs/design/mygo-port.md](docs/design/mygo-port.md)、[mygo/README.md](mygo/README.md) |
 | 看历史审查记录（为什么有某些防御代码） | [docs/audits/](docs/audits/) 下按日期归档的记录 |
 | 改 CI、发版流程、依赖更新策略 | [.github/workflows/](.github/workflows/) 与 [.github/dependabot.yml](.github/dependabot.yml) |
 

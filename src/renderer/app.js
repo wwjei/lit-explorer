@@ -249,6 +249,12 @@
    * reveal=false 用于切项目恢复：用户关掉的临时预览列不要被重新展开。
    */
   function openWebFavorite(fav, reveal) {
+    // MyGo 版没有 WebContentsView，内嵌网页不可用：交给系统浏览器，不建网页窗格
+    if (pv.capabilities && pv.capabilities.webPane === false) {
+      pv.openExternalUrl(fav.url);
+      toast('当前版本不支持内嵌网页，已用系统浏览器打开');
+      return;
+    }
     const node = webNodeFromFav(fav);
     state.sel = { col: Math.max(0, state.path.length - 1), node };
     state.mode = 'preview';
