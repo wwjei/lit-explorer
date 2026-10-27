@@ -44,6 +44,8 @@ go test ./... && go build -trimpath -ldflags "-s -w" -o ../.tmp/litexplorer-mygo
 ```
 
 `go:embed` 依赖 `mygo/frontend/`，所以 `go test` / `go build` 之前必须先 stage。
+staging 同时收集 Go 依赖许可，需要 Go 工具链；发布脚本会在调用 CLI 前完成这一步，
+以满足 CLI 生成绑定时的首次编译。
 
 运行：
 
@@ -62,8 +64,10 @@ go test ./... && go build -trimpath -ldflags "-s -w" -o ../.tmp/litexplorer-mygo
 | `fsapi.go` | 对应 `src/main/fs-api.js`：授权根、真实路径校验、类型/MIME、读与 SVG 保存 |
 | `statefile.go` | 对应 `store.js` + `state-sanitize.js`；web 固定列按 `kind` + `url` 保留 |
 | `bridge.js` | 注入页面的 `window.pv`，与 `src/main/preload.js` 同形；`capabilities.webPane = true` |
-| `stage-frontend.mjs` | 生成 `mygo/frontend/`（`go:embed` 的输入） |
-| `fsapi_test.go` | 路径边界、图片地址清洗、状态收敛、SVG 保存基线 |
+| `stage-frontend.mjs` | 复制共享前端、生成合并许可，输出 `mygo/frontend/`（`go:embed` 的输入） |
+| `fsapi_test.go` | 路径边界、图片地址清洗、项目恢复与状态收敛、SVG 保存及临时文件隔离 |
+| `main_test.go` | 并发工作区授权、网页显示状态、窗口几何保存 |
+| `../scripts/build-mygo-notices.mjs` | 汇总 npm、Go 模块、Go 运行时与标准库内嵌依赖的许可 |
 
 ## 与 Electron 版的差异
 

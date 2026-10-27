@@ -17,7 +17,11 @@ import path from 'node:path';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const metaPath = path.join(root, 'src/renderer/vendor/meta.json');
-const outFile = path.join(root, 'build/notices/THIRD-PARTY-NOTICES.md');
+// MyGo 只把自己的合并声明写进 frontend，Electron 的 notices 不依赖 Go、也不混入 Go 产物。
+const mygo = process.argv.includes('--mygo');
+const outFile = path.join(root, mygo
+  ? 'mygo/frontend/notices/THIRD-PARTY-NOTICES.md'
+  : 'build/notices/THIRD-PARTY-NOTICES.md');
 
 /** 依次尝试这些文件名找许可原文 */
 const LICENSE_FILES = [
@@ -99,16 +103,20 @@ const lines = [
   '',
   'lit explorer 自身以 [MIT 许可](../LICENSE)发布。',
   '',
-  '安装包里的 `resources/app.asar` 内含打包并压缩过的下列第三方代码，压缩后其版权头',
-  '不再可读，故在此一并列出。它们的许可条款如下，分发本程序时请一并保留。',
+  mygo
+    ? 'MyGo 可执行文件内嵌的共享渲染层含有下列打包并压缩过的 npm 代码。'
+    : '安装包里的 `resources/app.asar` 内含打包并压缩过的下列第三方代码，压缩后其版权头不再可读。',
+  '在此列出其许可与版权声明，分发本程序时请一并保留。',
   '',
   '| 包 | 版本 | 许可 |',
   '| --- | --- | --- |',
   ...pkgs.map((p) => '| ' + [p.name, p.version, p.license].join(' | ') + ' |'),
   '',
-  '此外，安装目录下的 `LICENSE.electron.txt` 与 `LICENSES.chromium.html` 是 Electron 与',
-  'Chromium 的许可声明，由 electron-builder 自动附带，不在本文件范围内。',
-  ''
+  ...(!mygo ? [
+    '此外，安装目录下的 `LICENSE.electron.txt` 与 `LICENSES.chromium.html` 是 Electron 与',
+    'Chromium 的许可声明，由 electron-builder 自动附带，不在本文件范围内。',
+    ''
+  ] : [])
 ];
 
 for (const p of pkgs) {

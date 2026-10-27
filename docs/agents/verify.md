@@ -38,16 +38,17 @@ npm run check:docs        # 文档索引与死链（改文档后跑，CI 也会�
 ### MyGo 版
 
 ```bash
-node mygo/stage-frontend.mjs     # go:embed 的输入，没 stage 过 go test 直接失败
+node mygo/stage-frontend.mjs     # 生成前端和合并许可，需要 Go；没 stage 过 go test 直接失败
 cd mygo && go test ./... && cd ..
 npm run dist:mygo                # 端到端：stage → 编译 → NSIS / portable 进 dist/
 ```
 
-`mygo/fsapi_test.go` 覆盖路径边界、图片地址清洗、状态白名单（含 web 固定列）与 SVG
-保存基线；它是 Go 侧唯一的回归网，改 `mygo/fsapi.go` / `statefile.go` 时同步补。
-界面行为没有第二条断言网：MyGo 版跑的是同一份 `src/renderer`，Electron 集成套件
-覆盖的逻辑仍然有效，但 WebView2 特有的部分（预览回环服务、子 webview 的 DPI 与生命周期）
-只能手工验证——`go test` 全绿不代表网页列没问题。
+`mygo/fsapi_test.go` 覆盖路径边界、图片地址清洗、状态白名单（含 web 固定列）、磁盘项目
+恢复与 SVG 保存基线 / 临时文件隔离；`mygo/main_test.go` 覆盖并发工作区授权、网页显示状态
+与窗口几何保存。改对应实现时同步补回归，测试用独立临时目录与用户数据路径。
+MyGo 版跑的是同一份 `src/renderer`，Electron 集成套件仍覆盖界面逻辑；真实 WebView2
+的焦点、DPI、加载失败卡片与最大化 / 还原观感仍须独立实例验收，`go test` 全绿不代表
+网页列没问题。
 
 ### 迭代时只跑相关的那一段
 

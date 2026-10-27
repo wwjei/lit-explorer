@@ -18,12 +18,12 @@ lit explorer：本地项目文件浏览器（多栏目录导航 + 内嵌预览�
 | 你的场景 | 读这个 |
 | --- | --- |
 | 想知道某个功能在哪个文件 / 方法，或该搜什么关键字 | [CODEMAP.md](CODEMAP.md) |
-| 增删依赖，或在 `dependencies` / `devDependencies` 之间挪包 | [docs/agents/dependencies.md](docs/agents/dependencies.md) |
+| 增删依赖、调整 MyGo fork、生成第三方许可，或在 `dependencies` / `devDependencies` 之间挪包 | [docs/agents/dependencies.md](docs/agents/dependencies.md) |
 | 改 `src/renderer/` 下的界面代码（含 pane / preview-body / find / projects / app 的分层）、动构建脚本或图标、改双 shell 的共用与分叉 | [docs/agents/build.md](docs/agents/build.md) |
 | 改 MyGo 版的主进程能力（`mygo/*.go`）、bridge、预览服务、fork 的 ChildWebView | [mygo/README.md](mygo/README.md)、[docs/design/mygo-port.md](docs/design/mygo-port.md) |
 | 加文件系统能力，改 preload / IPC / 自定义协议 | [docs/agents/security.md](docs/agents/security.md) |
 | 改版本号、打 tag、发 Release | [docs/agents/release.md](docs/agents/release.md) |
-| 跑测试、写界面探针、装包验证改动 | [docs/agents/verify.md](docs/agents/verify.md) |
+| 跑测试（含 MyGo 文件 / 主进程回归）、写界面探针、装包验证改动 | [docs/agents/verify.md](docs/agents/verify.md) |
 | 改产品行为，写文档与注释 | [docs/agents/conventions.md](docs/agents/conventions.md) |
 | 想做的功能、要拍板的事 | [further_notes.md](further_notes.md) |
 | 顺手要清的小问题 | [PENDING.md](PENDING.md) |
@@ -47,5 +47,5 @@ lit explorer：本地项目文件浏览器（多栏目录导航 + 内嵌预览�
    死链）会让 CI 的 `npm run check:docs` 失败。
 6. 不要动用户正在运行的应用：跑起来验证一律用独立的 `--user-data-dir`（`npm run probe`
    已经默认这么做），也不要结束你自己没起的进程。
-7. 加依赖之后要重跑 `npm run notices`（`predist` 里已经串上），否则随包分发的第三方
-   许可声明会漏掉新引入的包。
+7. 加 npm 依赖之后要重跑 `npm run notices`（`predist` 里已经串上）；Go 依赖许可由
+   MyGo staging 收集。两条生成链见 [docs/agents/dependencies.md](docs/agents/dependencies.md)。

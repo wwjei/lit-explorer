@@ -101,15 +101,18 @@ mygo/                  ← MyGo shell：Go + 系统 WebView2，bridge.js 实现�
 | `npm run dist:all` | 两个都出，顺序不能反：Electron 的 `clean-dist` 会清空 `dist/` |
 
 MyGo 版的前端资源不进 git：`mygo/stage-frontend.mjs` 从 `src/renderer`、`src/shared`、
-`assets`、`sample-project` 与根目录的 `FEATURES.md` / `LICENSE` / `README.md`、
-`build/notices/` 拷出 `mygo/frontend/`，再由 `go:embed` 编进 exe。`mygo/frontend/`、
+`assets`、`sample-project` 与根目录的 `FEATURES.md` / `LICENSE` / `README.md`
+拷出 `mygo/frontend/`，再生成合并的 npm / Go 许可（见
+[dependencies.md](dependencies.md#mygo-shell-的-go-依赖)），由 `go:embed` 编进 exe。`mygo/frontend/`、
 `mygo/mygo.json`、`mygo/mygo.ts` 都是生成物，已在 `.gitignore` 里。因此
 `go test ./...` / `go build ./...` 之前必须先跑一次 `node mygo/stage-frontend.mjs`
 （CI 里串好了），否则 `go:embed` 找不到文件。
 
 `scripts/build-mygo.mjs` 负责整套打包：读 `package.json` 的 version 写 `mygo/mygo.json`、
-调用 MyGo CLI、把产物改名为 `dist/Lit-Explorer-MyGo-Setup-<version>.exe` 与
-`dist/Lit-Explorer-MyGo-<version>-portable.exe`。CLI 默认用
+先 staging，再调用 MyGo CLI，最后把产物改名为 `dist/Lit-Explorer-MyGo-Setup-<version>.exe` 与
+`dist/Lit-Explorer-MyGo-<version>-portable.exe`。staging 必须在 CLI 之前完成：CLI 会先编译
+应用生成绑定，再执行 `buildCommand`，只把 staging 放在后者会让干净检出因缺少
+`go:embed` 输入而失败。CLI 默认用
 `go run github.com/egoist/mygo/cmd/mygo@v0.7.1`，本机已装 `mygo` 时可用
 `MYGO_CLI=mygo` 覆盖。缺 NSIS 时 CLI 会自己下载，离线环境可把 electron-builder 缓存里的
 `makensis.exe` 目录放进 `PATH`。

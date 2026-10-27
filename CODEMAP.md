@@ -101,13 +101,16 @@
 
 | 要改什么 | 先看 | 关键入口 | 搜索关键字 |
 | --- | --- | --- | --- |
-| 窗口、菜单、单实例、预览服务 | `mygo/main.go` | `createWindow()`、`startPreviewServer()`、`OpenContextMenu()`、`OpenAppMenu()`、`App.*` 绑定方法 | `mygo.BindAs`、`previewBase`、`Frameless` |
+| 窗口、菜单、单实例、预览服务 | `mygo/main.go` | `createWindow()`、`saveWindowBounds()`、`startPreviewServer()`、`OpenContextMenu()`、`OpenAppMenu()` | `mygo.BindAs`、`mygo.Shell`、`Frameless` |
+| 工作区切换提交 | `mygo/main.go` | `openWorkspace()`、`openWorkspaceWith()`、`resolveWorkspaceRoot()` | `seqMu`、`SUPERSEDED`、`RunOnMain` |
 | 文件系统授权边界与 SVG 保存 | `mygo/fsapi.go` | `assertAllowed()`、`realPath()`、`listDir()`、`writeSvgFile()`、`kindFor()` | `EACCES_ROOT`、`CONFLICT`、`cachedError` |
-| 设置持久化与白名单 | `mygo/statefile.go` | `loadState()`、`patchFromPage()`、`sanitizeLayout()` | `state.json`、`kind: "web"` |
+| 设置持久化与白名单 | `mygo/statefile.go` | `loadState()`、`patchFromPage()`、`sanitizeProjects()`、`sanitizeLayout()` | 磁盘项目校验结构、页面项目校验 `isOfferedRoot`、`state.json` |
 | 渲染层桥接 | `mygo/bridge.js` | `window.pv`、`capabilities.webPane` | `mygo.call`、`on('pv:…')` |
-| 前端资源打包 | `mygo/stage-frontend.mjs` | 生成 `mygo/frontend/`（gitignore）供 `go:embed` | `stage-frontend` |
-| 安装包与产物命名 | `scripts/build-mygo.mjs` | `writeMygoConfig()`、CLI 调用、`dist/` 改名 | `MYGO_CLI`、`Lit-Explorer-MyGo` |
-| 网页窗格（内嵌网页） | `mygo/main.go`、`mygo/bridge.js` | `WebSync()`、`WebReload()`、`emitWebState()`、`pv:web-state` | `ChildWebView`、`webViewRec`、`maxWebViews` |
+| 前端资源打包 | `mygo/stage-frontend.mjs` | 生成 `mygo/frontend/`（gitignore）供 `go:embed`；调用 CLI 前完成 | `stage-frontend` |
+| MyGo 第三方许可 | `scripts/build-mygo-notices.mjs` | 合并 npm、实际链接的 Go 模块及运行时许可 | `Module.Replace`、`THIRD-PARTY-NOTICES.md` |
+| MyGo 回归测试 | `mygo/fsapi_test.go`、`mygo/main_test.go` | 文件写入边界、项目恢复、并发授权、网页状态、窗口几何 | `go test ./...` |
+| 安装包与产物命名 | `scripts/build-mygo.mjs` | 配置生成、CLI 前 staging、`dist/` 改名 | `MYGO_CLI`、`Lit-Explorer-MyGo` |
+| 网页窗格（内嵌网页） | `mygo/main.go`、`mygo/bridge.js` | `WebSync()`、`syncWebViews()`、`WebReload()`、`emitWebState()`、`applyState()`、`syncVisibility()` | `ChildWebView`、`webViewRec`、加载成功才显示、`pv:web-state` |
 
 网页窗格用 fork 的 `Window.NewChildWebView()`（`go.mod` 的 `replace` 指向
 `wwjei/mygo v0.7.1-lit.2`）：`App.WebSync` 按地址保活视图、`WebReload` 刷新、

@@ -42,6 +42,12 @@ if (!fs.existsSync(path.join(root, 'src', 'renderer', 'vendor', 'meta.json'))) {
   process.exit(1);
 }
 
+// CLI v0.7.1 的 writeClient 会先 go build，再执行 buildCommand。
+// fresh checkout 必须在进入 CLI 前准备好 go:embed 的 frontend（含许可声明）。
+execFileSync(process.execPath, [path.join(mygoDir, 'stage-frontend.mjs')], {
+  cwd: root, stdio: 'inherit',
+});
+
 fs.rmSync(path.join(mygoDir, 'dist'), { recursive: true, force: true });
 
 const args = ['build', '-platform', 'windows/amd64'];
