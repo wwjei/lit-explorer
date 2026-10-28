@@ -129,3 +129,9 @@
 | [docs/agents/security.md](docs/agents/security.md) | preload、IPC、自定义协议、写入通道 |
 | [docs/security-debt.md](docs/security-debt.md) | 已知但暂无可行修法的依赖 / 安全问题 |
 | [further_notes.md](further_notes.md) / [PENDING.md](PENDING.md) | 想做的功能 / 顺手清的小问题 |
+
+## 磁盘监测与系统集成
+
+- `src/renderer/changes.js`：`PV.changes.create()` 注入工作区状态与回调，负责目录及预览版本监测；刷新调度与按钮呈现在 `app.js`。
+- `src/main/folder-menu.js`：当前用户 Windows 文件夹菜单注册与取消；安装 / 卸载钩子在 `build/installer.nsh`。MyGo 对应逻辑在 `main.go`。
+- `PV.highlight.mount().find()`：在完整源码中查找，按命中行滚动虚拟视图并保留语法颜色；`find.js` 共用查询条与快捷键。
