@@ -871,3 +871,35 @@ body.has-web #toast.on{transform:translateY(0)}
   .search{width:170px}
   .brand-sub{display:none}
 }
+
+/* 列头保持紧凑：路径复制入口和详情移到文件名悬停提示。 */
+.pv-head{align-items:center;flex-wrap:nowrap;gap:5px;padding:6px 8px;min-height:38px}
+.pv-head .pv-grip{align-self:center;margin:0;width:16px}
+.pv-head .pv-ic{display:none}
+.pv-head .pv-name{flex:1 0 56px}
+.pv-sub{display:none}
+.pv-actions{min-width:0;gap:2px;flex:0 1 auto;overflow-x:auto}
+.pv-actions .iconbtn[data-act="reveal"],.pv-actions .iconbtn[data-act="external"]{display:none}
+@container (max-width:400px){
+  .pv-head{padding:6px;gap:4px}
+  .pv-actions{flex:0 1 auto;flex-wrap:nowrap;margin-left:auto;justify-content:flex-start}
+  .seg button{padding:2px 4px}
+}
+#btn-refresh.is-changed{color:var(--danger);background:color-mix(in srgb,var(--danger) 13%,transparent)}
+.md-frontmatter{border:1px solid var(--line);border-radius:8px;margin-bottom:20px}
+.md-frontmatter .md-code{margin:0}
+
+/* 扩大分界线命中区域，触摸拖动不触发页面平移。 */
+.pane-resize{width:10px;left:-5px;touch-action:none}
+.pv-grip,.pane-split{touch-action:none}
+.pv-head .pv-nm[data-act]{display:block;width:100%;border:0;padding:0;background:none;color:inherit;text-align:left}
+
+.pv-actions{scrollbar-width:none}
+.pv-actions::-webkit-scrollbar{display:none}
+
+.pv-actions .seg,.pv-actions .pv-btns,.pv-actions .pv-zoom{flex-shrink:0}
+
+.pv-actions .pv-seg{flex-shrink:0;white-space:nowrap}
+
+/* 最小列宽总和超过窗口时，让预览区横向滚动，始终为来源目录留一栏。 */
+.preview{max-width:calc(100% - 260px);overflow-x:auto}

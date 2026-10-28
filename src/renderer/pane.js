@@ -536,6 +536,7 @@
   function runTask(pane, key, mode, node) {
     const task = beginTask(pane, key);
     const done = Promise.resolve(hooks.renderBody(pane, node, mode, key, task)).finally(task.settle);
+    pane.ready = done;
     PV.find.afterRender(pane, task, done);
   }
 
@@ -1256,6 +1257,8 @@
     /* 渲染与布局 */
     renderPreview: renderPreview,
     renderPane: renderPane,
+    captureView: function (pane) { return paneScrollKeep(paneScrollHost(pane)); },
+    restoreView: restorePaneTop,
     relayout: function () {
       ensureColumnWidths();
       fitColumnWidths();

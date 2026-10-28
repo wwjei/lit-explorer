@@ -41,7 +41,8 @@
     itemsInDir: function () { return null; },
     toast: function () {},
     /** 正文真的落地后上报显示版本（路径 / size / mtime），变更监测拿它当基线 */
-    loaded: function () {}
+    loaded: function () {},
+    openLocal: async function () {}
   };
 
   /** 路径 -> { size, mtime }，由主进程异步补发 */
@@ -128,7 +129,6 @@
       + '<div class="browser-bar">'
       + '<span class="dots"><i class="r"></i><i class="y"></i><i class="g"></i></span>'
       + '<div class="addr">' + icon('lock', '', 12) + '<span title="' + esc(shown) + '">' + esc(shown) + '</span></div>'
-      + '<button class="iconbtn" data-act="reload" title="刷新">' + icon('refresh', '', 15) + '</button>'
       + '</div>'
       + '<iframe class="frame" title="' + esc(node.name) + ' 预览" '
       + 'sandbox="allow-scripts allow-forms allow-popups allow-modals" src="' + esc(url) + '"></iframe>'
@@ -249,7 +249,7 @@
     const facts = ['网页'];
     if (node.webError) facts.push('加载失败');
     return '<span class="pv-ic">' + nodeIcon(node, 17) + '</span>'
-      + '<div class="pv-name"><div class="pv-nm" title="' + esc(node.name) + '">' + esc(node.name) + '</div>'
+      + '<div class="pv-name"><button type="button" data-act="copy-path" class="pv-nm" title="' + esc(shown + ' · ' + facts.join(' · ')) + '">' + esc(node.name) + '</button>'
       + '<div class="pv-sub"><button type="button" class="pv-path" data-act="copy-path" title="单击复制链接：'
       + esc(shown) + '">' + esc(shown) + '</button>'
       + '<span class="pv-facts"> · ' + esc(facts.join(' · ')) + '</span></div></div>'
@@ -259,8 +259,6 @@
       + '<button class="iconbtn pinbtn' + (pane.pinned ? ' is-on' : '') + '" data-act="pin" title="'
       + (pane.pinned ? '取消固定' : '固定此预览') + '" aria-label="固定预览">'
       + icon(pane.pinned ? 'pinFilled' : 'pin', '', 15) + '</button>'
-      + '<button class="iconbtn reloadbtn" data-act="reload" title="重新加载">'
-      + icon('refresh', '', 15) + '</button>'
       + '<button class="iconbtn" data-act="close" title="' + (pane.pinned ? '关闭此预览列' : '收起预览') + '">'
       + icon('close', '', 15) + '</button>'
       + '</div></div>';
@@ -311,7 +309,7 @@
 
     // 图钉 / 刷新 / 关闭放在最右，低频的排在左边；复制路径改成点标题下的路径
     return '<span class="pv-ic">' + nodeIcon(node, 17) + '</span>'
-      + '<div class="pv-name"><div class="pv-nm" title="' + esc(node.name) + '">' + esc(node.name) + '</div>'
+      + '<div class="pv-name"><button type="button" data-act="copy-path" class="pv-nm" title="' + esc(node.path + ' · ' + facts.join(' · ')) + '">' + esc(node.name) + '</button>'
       + '<div class="pv-sub"><button type="button" class="pv-path" data-act="copy-path" title="单击复制文件路径：'
       + esc(node.path) + '">' + esc(pathText) + '</button>'
       + '<span class="pv-facts"> · ' + esc(facts.join(' · ')) + '</span></div></div>'
@@ -323,9 +321,6 @@
       + '<button class="iconbtn pinbtn' + (pane.pinned ? ' is-on' : '') + '" data-act="pin" title="'
       + (pane.pinned ? '取消固定' : '固定此预览') + '" aria-label="固定预览">'
       + icon(pane.pinned ? 'pinFilled' : 'pin', '', 15) + '</button>'
-      + '<button class="iconbtn reloadbtn' + (pane.changed ? ' is-changed' : '')
-      + '" data-act="reload" title="' + (pane.changed ? '文件已在磁盘上变化，点击重新读取' : '重新读取')
-      + '">' + icon('refresh', '', 15) + '</button>'
       + '<button class="iconbtn" data-act="close" title="' + (pane.pinned ? '关闭此预览列' : '收起预览') + '">'
       + icon('close', '', 15) + '</button>'
       + '</div></div>';
@@ -422,6 +417,15 @@
     noteLoaded(pane, node, { size: res.size, mtime: res.mtime }, task);
     PV.highlight.highlightFences(pane.body.querySelector('.prose'));
     markBrokenImages(pane);
+    pane.body.querySelector('.prose').addEventListener('click', (event) => {
+      const a = event.target.closest('a');
+      if (!a) return;
+      const href = a.getAttribute('href');
+      if (!href || /^(https?:|mailto:)/i.test(href)) return;
+      event.preventDefault();
+      if (href.startsWith('#')) return;
+      hooks.openLocal(node.path, href).catch((err) => hooks.toast('无法打开链接：' + err.message));
+    });
   }
 
   async function renderText(ctx) {

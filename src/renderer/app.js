@@ -42,7 +42,6 @@
     cols: [],        // 每栏的加载状态与原始条目
     sel: null,       // { col, node }
     mode: 'preview', // 临时预览列的「预览 / 源码」模式
-    query: '',
     theme: 'light',
     pendingScroll: false,
     hideDot: false,          // 是否隐藏以 . 开头的条目
@@ -195,10 +194,6 @@
     if (state.hideDot && parts.some((p) => p.charAt(0) === '.')) {
       state.hideDot = false;
       pv.setState({ hideDot: false });
-    }
-    if (state.query) {
-      state.query = '';
-      $('#search').value = '';
     }
 
     const rootNode = state.path[0]
@@ -545,11 +540,10 @@
   function itemsOf(ci) {
     const col = state.cols[ci];
     if (!col || !col.entries) return [];
-    const cacheKey = state.query + '\u0001' + (state.hideDot ? 'hide' : 'show');
+    const cacheKey = (state.hideDot ? 'hide' : 'show');
     if (col._items && col._itemsKey === cacheKey) return col._items;
-    const q = state.query.toLowerCase();
     const base = baseItemsOf(ci);
-    const list = q ? base.filter((e) => e.name.toLowerCase().indexOf(q) >= 0) : base.slice();
+    const list = base.slice();
     list.sort(PV.paths.compareNodes);
     col._items = list;
     col._itemsKey = cacheKey;
@@ -600,14 +594,36 @@
   }
 
   /** 重新扫描：清掉缓存后按当前路径重载 */
+  let refreshing = false;
   async function rescan() {
-    if (!state.root) return;
-    const keep = state.sel ? state.sel.node.path : null;
-    state.cols = [];
-    const jobs = [];
-    for (let i = 0; i < state.path.length; i++) jobs.push(loadColumn(i));
-    await Promise.all(jobs);
-    if (keep) toast('已重新扫描');
+    if (!state.root || refreshing) return;
+    refreshing = true;
+    const root = state.root;
+    const btn = $('#btn-refresh');
+    btn.disabled = true;
+    try {
+      await Promise.all([Promise.all(PV.pane.visiblePanes().map(pollPane)), pollOpenDirs()]);
+      if (root !== state.root) return;
+      const jobs = state.path.map((folder, i) => {
+        if (!dirtyDirs.has(folder.path)) return Promise.resolve();
+        if (state.cols[i]) state.cols[i].stale = true;
+        return loadColumn(i);
+      });
+      for (const pane of PV.pane.visiblePanes()) {
+        if (pane.node && pane.node.kind === WEB_KIND) {
+          await pv.webReload(pane.node.url);
+          continue;
+        }
+        if (!pane.changed) continue;
+        const keep = PV.pane.captureView(pane);
+        PV.pane.renderPane(pane, true);
+        jobs.push(Promise.resolve(pane.ready).then(() => PV.pane.restoreView(pane, keep)));
+      }
+      await Promise.all(jobs);
+      paintRescan();
+      toast(PV.pane.visiblePanes().some((p) => p.changed) ? '部分内容未能刷新，请查看预览中的错误提示' : '已刷新变化内容');
+    } catch (err) { toast('刷新失败：' + err.message); }
+    finally { refreshing = false; btn.disabled = false; }
   }
 
   /* ============================ 选择与导航 ============================ */
@@ -661,6 +677,10 @@
         setPreviewVisible(true);
       }
       render();
+      requestAnimationFrame(() => {
+        const col = colsEl.children[ci];
+        if (col) col.scrollIntoView({ block: 'nearest', inline: 'end' });
+      });
     }
     scheduleSaveNav();
   }
@@ -820,7 +840,7 @@
     const col = state.cols[ci];
     if (!folder) return '';
     const phase = !col ? 'init' : col.state + ':' + col.version + (col.error ? ':' + (col.error.error || '') : '');
-    return folder.path + '\u0001' + phase + '\u0001' + state.query + '\u0001' + (state.hideDot ? 'hide' : 'show')
+    return folder.path + '\u0001' + phase + '\u0001' + (state.hideDot ? 'hide' : 'show')
       + '\u0001' + (ci === 0 && state.favTop ? 'favtop' : 'norm');
   }
 
@@ -906,16 +926,13 @@
           + icon('toTop', '', 14) + '</button>'
         : '';
       head.innerHTML = '<b>' + esc(folder.name) + '</b>'
-        + '<button class="col-toggle rescanbtn' + (dirtyDirs.size ? ' is-changed' : '') + '"'
-        + ' data-rescan title="' + rescanTitle()
-        + '" aria-label="重新扫描">' + icon('refresh', '', 14) + '</button>'
         + '<button class="col-toggle' + (state.hideDot ? ' is-on' : '') + '" data-toggle-dot title="'
         + (state.hideDot ? '显示以 . 开头的文件/文件夹' : '隐藏以 . 开头的文件/文件夹') + '" aria-label="切换点文件显示">'
         + icon(state.hideDot ? 'eyeOff' : 'eye', '', 14) + '</button>'
         + swap;
     } else {
       const total = baseItemsOf(ci).length;
-      const countText = state.query && total !== items.length ? items.length + ' / ' + total : String(items.length);
+      const countText = String(items.length);
       head.innerHTML = '<b>' + esc(folder.name) + '</b><span>'
         + (col && col.state === 'ready' ? countText : '') + '</span>';
     }
@@ -960,7 +977,7 @@
     }
 
     if (!items.length) {
-      list.innerHTML = '<div class="col-note">' + (state.query ? '无匹配项' : '空目录') + '</div>';
+      list.innerHTML = '<div class="col-note">' + '空目录' + '</div>';
       return;
     }
 
@@ -1072,9 +1089,9 @@
 
   /** 把焦点落到顶栏的文件名搜索框（Ctrl+F 的兜底、菜单里的「聚焦搜索框」共用） */
   function focusSearch() {
-    const el = $('#search');
-    el.focus();
-    el.select();
+    const pane = PV.find.targetPane();
+    if (pane && PV.find.canFind(pane)) PV.find.open(pane);
+    else toast('请先打开可查找的文件');
   }
 
   function ensureVisible(ci, idx) {
@@ -1305,6 +1322,8 @@
   });
 
   /* 顶部按钮 */
+  $('#btn-refresh').addEventListener('click', () => rescan());
+
   $('#btn-theme').addEventListener('click', () => {
     applyTheme(state.theme === 'light' ? 'dark' : 'light');
   });
@@ -1343,12 +1362,6 @@
     if (res && res.error && res.error !== 'SUPERSEDED') toast('打不开示例项目：' + res.error);
   });
 
-  /* 搜索 */
-  $('#search').addEventListener('input', (e) => {
-    state.query = e.target.value.trim();
-    render();
-  });
-
   /* 键盘 */
   document.addEventListener('keydown', (e) => {
     // 原生菜单栏已移除，应用级快捷键在这里接管
@@ -1365,7 +1378,7 @@
         if (pane) {
           toast(pane.node && pane.node.kind === WEB_KIND
             ? '网页列暂不支持预览内查找'
-            : '这一列不支持查找：Markdown 与 Word / PPT 预览里可以用 Ctrl+F');
+            : '这一列不支持查找；文档预览与源码视图可以用 Ctrl+F');
           return;
         }
         focusSearch();
@@ -1384,13 +1397,12 @@
     if (tag === 'input' || tag === 'textarea') {
       if (e.key === 'Escape') {
         e.target.value = '';
-        state.query = '';
         e.target.blur();
         render();
       }
       return;
     }
-    if (e.key === '/') { e.preventDefault(); $('#search').focus(); return; }
+
     // 焦点不在查找框里时，Esc 先关掉查找条
     if (e.key === 'Escape' && PV.find.isOpen()) { PV.find.close(); return; }
     if (!state.root) return;
@@ -1475,137 +1487,22 @@
    * 目录 mtime 只在直接子项增删/改名时变化，正好对应「列表可能过期」。
    * 不走 fs.watch：agent 频繁写文件时事件会成串，而且 \\wsl$ / 网络盘收不到通知。
    * ------------------------------------------------------------------------- */
-  const CHANGE_POLL_MS = 5000;
-  /** 连续这么久没回到前台就暂停扫描：窗口在后台放着时没必要每 5 秒唤醒磁盘 */
-  const FOREGROUND_IDLE_MS = 10 * 60 * 1000;
-  let changeTimer = 0;
-  let changePolling = false;
-  let lastForegroundAt = Date.now();
-
-  /** 记下某个窗格「现在显示的是哪个版本」 */
-  function noteLoaded(pane, node, info) {
-    if (!pane || !pane.node || !node || pane.node.path !== node.path) return;
-    if (node.kind === WEB_KIND) return;
-    if (info && typeof info.size === 'number' && typeof info.mtime === 'number') {
-      pane.known = { path: node.path, size: info.size, mtime: info.mtime };
-      pane.changed = false;
-      return;
-    }
-    // 图片 / HTML / PDF / 文档的读取接口不给 mtime，单独问一次
-    const path = node.path;
-    pv.stat(path).then((st) => {
-      if (!st || st.error || !pane.node || pane.node.path !== path) return;
-      pane.known = { path: path, size: st.size, mtime: st.mtime };
-      pane.changed = false;
-    }).catch(() => {});
-  }
-
-  function markChanged(pane) {
-    if (pane.changed) return;
-    pane.changed = true;
-    // 只重建头部，正文不动（内容身份没变，renderPane 会跳过正文）
-    PV.pane.renderPane(pane, false);
-  }
-
-  async function pollPane(pane) {
-    const node = pane.node;
-    if (!node || node.isDir || node.kind === WEB_KIND) return;
-    let st;
-    try {
-      st = await pv.stat(node.path);
-    } catch {
-      return;   // 读不到就下一轮再试，变更监测不打扰用户
-    }
-    // 等待期间窗格可能已经换了文件或被关掉
-    if (!pane.node || pane.node.path !== node.path) return;
-    if (!st || st.error) { markChanged(pane); return; }
-    if (!pane.known || pane.known.path !== node.path) {
-      // 正文还没落地（或刚换文件），这一轮先建立基线
-      pane.known = { path: node.path, size: st.size, mtime: st.mtime };
-      return;
-    }
-    if (st.size !== pane.known.size || Math.abs(st.mtime - pane.known.mtime) > 0.5) {
-      markChanged(pane);
-    }
-  }
-
   /** 重新扫描按钮的提示语：有外部变更时说明该点它了 */
   function rescanTitle() {
-    return dirtyDirs.size ? '工作区有变化，点击重新扫描' : '重新扫描 (F5)';
+    return '刷新已变化内容 (F5)';
   }
 
   /** 只改按钮本身，不整块重绘（重绘会把栏内滚动位置清掉） */
   function paintRescan() {
-    const btn = colsEl.querySelector('[data-rescan]');
+    const btn = $('#btn-refresh');
     if (!btn) return;
-    btn.classList.toggle('is-changed', dirtyDirs.size > 0);
+    btn.classList.toggle('is-changed', dirtyDirs.size > 0 || PV.pane.visiblePanes().some((p) => p.changed));
     btn.title = rescanTitle();
   }
 
-  /** 某个目录刚重新读过：收掉它的变更标记，并重新记 mtime 基线 */
-  function noteDirLoaded(dir) {
-    dirtyDirs.delete(dir);
-    dirKnown.delete(dir);
-    if (!dir) return;
-    pv.stat(dir).then((st) => {
-      if (!st || st.error) return;
-      if (state.path.some((f) => f.path === dir)) dirKnown.set(dir, st.mtime);
-    }).catch(() => {});
-  }
-
-  async function pollOpenDirs() {
-    if (!state.path.length) return;
-    const open = new Set(state.path.map((f) => f.path));
-    // 已经不在栏里的目录不再占着基线
-    for (const key of Array.from(dirKnown.keys())) {
-      if (!open.has(key)) dirKnown.delete(key);
-    }
-    for (const key of Array.from(dirtyDirs)) {
-      if (!open.has(key)) dirtyDirs.delete(key);
-    }
-
-    for (const dir of open) {
-      if (dirtyDirs.has(dir)) continue;
-      let st;
-      try {
-        st = await pv.stat(dir);
-      } catch {
-        continue;
-      }
-      // 目录被删掉或暂时读不到：列表肯定已经不对了
-      if (!st || st.error) { dirtyDirs.add(dir); continue; }
-      if (!dirKnown.has(dir)) { dirKnown.set(dir, st.mtime); continue; }
-      if (Math.abs(st.mtime - dirKnown.get(dir)) > 0.5) dirtyDirs.add(dir);
-    }
-    paintRescan();
-  }
-
-  async function checkForChanges() {
-    if (changePolling || document.hidden) return;
-    // 有焦点时一直算在前台；失焦后再给 10 分钟宽限，然后停到重新聚焦为止
-    if (document.hasFocus()) lastForegroundAt = Date.now();
-    else if (Date.now() - lastForegroundAt >= FOREGROUND_IDLE_MS) return;
-    changePolling = true;
-    try {
-      await Promise.all([Promise.all(PV.pane.visiblePanes().map(pollPane)), pollOpenDirs()]);
-    } finally {
-      changePolling = false;
-    }
-  }
-
-  function startChangeWatch() {
-    if (changeTimer) return;
-    changeTimer = setInterval(checkForChanges, CHANGE_POLL_MS);
-    // 窗口重新可见 / 重新获得焦点时立刻补查一次，不用等下一个 5 s
-    document.addEventListener('visibilitychange', () => {
-      if (!document.hidden) checkForChanges();
-    });
-    window.addEventListener('focus', () => {
-      lastForegroundAt = Date.now();
-      checkForChanges();
-    });
-    checkForChanges();
-  }
+  const { noteLoaded, noteDirLoaded, pollPane, pollOpenDirs, startChangeWatch } = PV.changes.create({
+    pv, state, dirKnown, dirtyDirs, WEB_KIND, paintRescan
+  });
 
   /* ============================ 把模块接起来 ============================ */
   // pane.js 管窗格的生命周期与布局，preview-body.js 管正文与头部画成什么样；
@@ -1615,6 +1512,27 @@
     root: function () { return state.root; },
     previewPrefs: function () { return { docx: state.previewDocx, pptx: state.previewPptx }; },
     itemsInDir: itemsInDir,
+    openLocal: async function (mdPath, href) {
+      const root = state.root;
+      const target = PV.paths.resolveLink(mdPath, href);
+      if (!target || !PV.paths.within(state.root, target)) throw new Error('链接不在工作区内');
+      const slash = target.lastIndexOf('/');
+      const result = await pv.list(target.slice(0, slash));
+      if (root !== state.root) return;
+      const node = result && result.entries && result.entries.find((n) => PV.paths.same(n.path, target));
+      if (!node || node.isDir) throw new Error('目标不是可预览的文件或已不存在');
+      // 按目录链导航，保持目标文件与列表同时可见。
+      const parts = PV.paths.partsUnder(state.root, node.path);
+      if (!parts) throw new Error('链接不在工作区内');
+      state.path = state.path.slice(0, 1);
+      for (let i = 0; i < parts.length - 1; i++) {
+        await loadColumn(i);
+        const dir = state.cols[i].entries.find((n) => n.isDir && n.name === parts[i]);
+        if (!dir) throw new Error('目录不存在');
+        await selectNode(dir, i, { scroll: false });
+      }
+      await selectNode(node, parts.length - 1, { revealPreview: true });
+    },
     loaded: noteLoaded
   });
   PV.pane.init({

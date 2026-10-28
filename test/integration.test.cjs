@@ -394,7 +394,7 @@ async function main() {
       const t0=Date.now();
       [...document.querySelectorAll('.row')].find(e=>e.textContent.includes('good.md')).click();
       await new Promise(r=>setTimeout(r,50));
-      document.querySelector('.pane:not(.is-pinned) button[data-act="reload"]').click();
+      PV.pane.renderPane(PV.find.targetPane(), true);
       await new Promise(r=>setTimeout(r,100));
       const before=document.querySelector('.pane:not(.is-pinned) .pv-body').textContent;
       // 第一次读取的晚到响应在点击后 DELAY.read 落地；再留 100ms 给 IPC 派发
@@ -458,13 +458,68 @@ async function main() {
       m1.missing);
   });
 
+  await run('M2', 'Markdown 元数据与本地链接导航', async () => {
+    const f = await prepare();
+    const runPage = await renderer();
+    createdWin.setContentSize(1280, 900);
+    stubList(f.ws, ['link.md', 'target.md']);
+    stubRead((_e, p) => ({ text: String(p).endsWith('link.md')
+      ? '---\nname: sample\nversion: 2.7.5\n---\n[打开](./target.md)' : '# TARGET_LOCAL', size: 80 }));
+    createdWin.webContents.send('workspace:opened', f.ws);
+    await waitStubbedRows(runPage);
+    const result = await runPage(`(async()=>{
+      [...document.querySelectorAll('.row')].find(e=>e.textContent.includes('link.md')).click();
+      await waitFor(()=>document.querySelector('.md-frontmatter'));
+      const metadata=document.querySelector('.md-frontmatter').textContent;
+      document.querySelector('.prose a').click();
+      await waitFor(()=>document.querySelector('.prose')?.textContent.includes('TARGET_LOCAL'));
+      await new Promise(requestAnimationFrame);
+      const head=document.querySelector('.pane:not(.is-pinned) .pv-head');
+      const list=document.querySelector('.cols').getBoundingClientRect();
+      const col=document.querySelector('.col').getBoundingClientRect();
+      return {metadata, height:head.getBoundingClientRect().height, visible:col.right>list.left && col.left<list.right};
+    })()`);
+    ok('YAML 元数据完整展示', result.metadata.includes('name: sample') && result.metadata.includes('version: 2.7.5'), result);
+    ok('列头保持单行高度，来源列表可见', result.height <= 50 && result.visible, result);
+    ok('本地相对链接在应用中打开目标预览', true);
+  });
+
+  await run('R1', '全局刷新只重读变化的预览', async () => {
+    const f = await prepare();
+    const runPage = await renderer();
+    stubList(f.ws, ['refresh.md']);
+    let version = 1;
+    let reads = 0;
+    stubRead(() => { reads++; return { text: '# VERSION_' + version, size: version, mtime: version }; });
+    ipcMain.removeHandler('fs:stat');
+    ipcMain.handle('fs:stat', () => ({ size: version, mtime: version }));
+    createdWin.webContents.send('workspace:opened', f.ws);
+    await waitStubbedRows(runPage);
+    await runPage(`(async()=>{
+      [...document.querySelectorAll('.row')].find(e=>e.textContent.includes('refresh.md')).click();
+      await waitFor(()=>document.querySelector('.prose')?.textContent.includes('VERSION_1'));
+      document.querySelector('#btn-refresh').click();
+      await waitFor(()=>!document.querySelector('#btn-refresh').disabled);
+    })()`);
+    eq('无变化时不重新读取正文', reads, 1);
+    version = 2;
+    await runPage(`(async()=>{
+      document.querySelector('#btn-refresh').click();
+      await waitFor(()=>document.querySelector('.prose')?.textContent.includes('VERSION_2'));
+      await waitFor(()=>!document.querySelector('#btn-refresh').disabled);
+    })()`);
+    eq('变化后重新读取一次', reads, 2);
+    ipcMain.removeHandler('fs:stat');
+    ipcMain.handle('fs:stat', () => ({ size: 0, mtime: 0 }));
+  });
+
   await run('F1', '预览内查找：命中、切走自动关、固定时跟过去', async () => {
     const f = await prepare();
     const runPage = await renderer();
     stubList(f.ws, ['doc.md', 'code.js']);
     // ipcMain.handle 的监听器第一个参数是 event，路径在第二个
     stubRead((_e, p) => ({
-      text: /\.md$/.test(String(p)) ? 'ZEBRA one\n\nZEBRA two\n' : 'const a = 1;\n',
+      text: /\.md$/.test(String(p)) ? 'ZEBRA one\n\nZEBRA two\n' : 'const a = 1;\n'.repeat(3000) + 'const ZEBRA = 1;\n',
       size: 24
     }));
     createdWin.webContents.send('workspace:opened', f.ws);
@@ -492,10 +547,10 @@ async function main() {
       await waitFor(()=>openFindBar().querySelector('.find-count').textContent==='2/2');
       const afterNext=openFindBar().querySelector('.find-count').textContent;
 
-      // 切到不支持查找的代码视图：查找条应当自己关掉
+      // 查找覆盖虚拟滚动之外的源码行，并保留当前查询词。
       clickRow('code.js');
-      await waitFor(()=>!openFindBar() && pane().querySelector('.codeview'));
-      const closedOnCode=!openFindBar();
+      await waitFor(()=>pane().querySelector('.codeview mark.is-current'));
+      const closedOnCode=!!openFindBar() && openFindBar().querySelector('.find-count').textContent==='1/1';
       const codeView=!!pane().querySelector('.codeview');
 
       // 回到 Markdown 再查一次，这次固定住：正文与查找条一起搬到新列
@@ -518,7 +573,7 @@ async function main() {
     eq('命中数正确', f1.hits, 2);
     eq('计数显示 1/2', f1.count, '1/2');
     eq('下一个匹配后计数变 2/2', f1.afterNext, '2/2');
-    ok('切到代码视图后查找条自动关闭', f1.closedOnCode && f1.codeView, f1);
+    ok('源码查找定位到第 3001 行的匹配', f1.closedOnCode && f1.codeView, f1);
     ok('固定时查询词跟到新列', f1.carried, f1);
     eq('固定列里的命中重新落上', f1.pinHits, 2);
     await clearPinnedColumns(runPage);
