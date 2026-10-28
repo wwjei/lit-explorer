@@ -28,6 +28,7 @@ lit explorer：本地项目文件浏览器（多栏目录导航 + 内嵌预览�
 | 想做的功能、要拍板的事 | [further_notes.md](further_notes.md) |
 | 顺手要清的小问题 | [PENDING.md](PENDING.md) |
 | 已知的依赖 / 安全债，以及什么时候要重新看 | [docs/security-debt.md](docs/security-debt.md) |
+| Windows 文件夹右键菜单 | `src/main/folder-menu.js`、`build/installer.nsh`、`mygo/main.go` |
 | 想弄清某个设计为什么是这样（如高亮的阈值） | [docs/highlighting.md](docs/highlighting.md) 这类设计文档 |
 | 看未实施功能的调研与方案 | [docs/design/](docs/design/) 下按主题分的文档 |
 | 看 MyGo 移植的实测数据与能力差异（体积、启动、内存、内嵌网页） | [docs/design/mygo-port.md](docs/design/mygo-port.md) |

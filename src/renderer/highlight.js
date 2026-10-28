@@ -243,6 +243,7 @@
     const metrics = root.querySelector('.cv-metrics');
     const wrapBtn = root.querySelector('.cv-wrap');
 
+    let search = { query: '', hits: [], byLine: new Map(), index: -1 };
     let tokens = null;
     let tokenMs = null;
     let renderMs = null;
@@ -273,6 +274,34 @@
       const row = document.createElement('div');
       row.className = 'cl';
       row.innerHTML = '<span class="ln">' + (i + 1) + '</span><span class="lc">' + content + '</span>';
+      if (search.query) {
+        const lc = row.querySelector('.lc');
+        const walker = document.createTreeWalker(lc, NodeFilter.SHOW_TEXT);
+        const nodes = [];
+        while (walker.nextNode()) nodes.push(walker.currentNode);
+        // 按整行的字符位置着色，命中可以跨越语法 token。
+        let offset = 0;
+        for (const node of nodes) {
+          const value = node.nodeValue;
+          const frag = document.createDocumentFragment();
+          let cut = 0;
+          for (const h of (search.byLine.get(i) || [])) {
+            const hit = search.hits[h];
+            const start = Math.max(0, hit.at - offset);
+            const end = Math.min(value.length, hit.at + search.query.length - offset);
+            if (end <= start) continue;
+            frag.append(value.slice(cut, start));
+            const mark = document.createElement('mark');
+            mark.className = 'find-hit' + (h === search.index ? ' is-current' : '');
+            mark.textContent = value.slice(start, end);
+            frag.append(mark);
+            cut = end;
+          }
+          frag.append(value.slice(cut));
+          node.replaceWith(frag);
+          offset += value.length;
+        }
+      }
       return row;
     }
 
@@ -305,14 +334,7 @@
     }
 
     function updateStatus() {
-      const parts = [state.lineCount + ' 行', fmtSize(size)];
-      if (tokenMs != null) parts.push('分词 ' + tokenMs + 'ms');
-      if (renderMs != null) parts.push('渲染 ' + Math.round(renderMs) + 'ms');
-      if (renderEnd > renderStart) parts.push('DOM ' + (renderEnd - renderStart) + ' 行');
-      parts.push(state.level === 'plain'
-        ? (lang && state.canForce ? '纯文本（可手动高亮）' : '纯文本')
-        : (state.truncated ? '部分高亮' : '完整高亮'));
-      metrics.textContent = parts.join(' · ');
+      metrics.textContent = state.lineCount + ' 行 · ' + fmtSize(size);
     }
 
     function updateNotice() {
@@ -424,6 +446,29 @@
     run();
 
     return {
+      find(query, index = 0) {
+        const hits = query === search.query ? search.hits : [];
+        const needle = query.toLowerCase();
+        if (needle && query !== search.query) state.lines.forEach((line, i) => {
+          const lower = line.toLowerCase();
+          let at = lower.indexOf(needle);
+          while (at >= 0) { hits.push({ line: i, at }); at = lower.indexOf(needle, at + needle.length); }
+        });
+        const byLine = new Map();
+        hits.forEach((hit, i) => {
+          if (!byLine.has(hit.line)) byLine.set(hit.line, []);
+          byLine.get(hit.line).push(i);
+        });
+        search = { query, hits, byLine, index: hits.length ? Math.min(index, hits.length - 1) : -1 };
+        const hit = hits[search.index];
+        if (hit && !wrap) scroll.scrollTop = Math.max(0, hit.line * LINE_H - scroll.clientHeight / 2);
+        renderWindow(true);
+        if (hit) {
+          const mark = win.querySelector('mark.is-current');
+          if (mark) mark.scrollIntoView({ block: 'center', inline: 'center' });
+        }
+        return hits.length;
+      },
       destroy() {
         destroyed = true;
         jobId++;

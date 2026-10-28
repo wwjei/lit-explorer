@@ -132,6 +132,15 @@
     const out = [];
     let para = [];
     let i = 0;
+    // 元数据仅作为转义后的 YAML 展示，不执行标签或对象构造。
+    if (/^\uFEFF?---\s*$/.test(lines[0])) {
+      const end = lines.findIndex((line, n) => n > 0 && /^(---|\.\.\.)\s*$/.test(line));
+      if (end > 0) {
+        out.push('<section class="md-frontmatter" aria-label="文档元数据"><pre class="md-code" data-lang="yaml"><code>'
+          + esc(lines.slice(1, end).join('\n')) + '</code></pre></section>');
+        i = end + 1;
+      }
+    }
     const flush = () => {
       if (para.length) { out.push('<p>' + inline(para.join(' '), images) + '</p>'); para = []; }
     };

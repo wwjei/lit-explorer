@@ -26,7 +26,7 @@ README 与界面直接使用它。`scripts/build-icons.mjs` 自带 PNG 解码、
 ```
 src/shared/contracts.js（主进程 require，渲染进程先加载）
 paths.js → icons.js → highlight.js → markdown.js
-         → pane.js → preview-body.js → webview.js → svgedit.js → find.js → projects.js → app.js
+         → pane.js → preview-body.js → webview.js → svgedit.js → find.js → projects.js → changes.js → app.js
 ```
 
 `vendor/docpreview.js` 不在这条链上：它是按需加载的产物，第一次打开 docx / pptx 才注入。
@@ -44,6 +44,7 @@ paths.js → icons.js → highlight.js → markdown.js
 | `svgedit.js`（`PV.svgedit`） | SVG 编辑模式的正文：解析与安全清洗、选择、拖动（矩形带框内文字）、矩形八向缩放、文字单行编辑、删除、撤销重做、自动保存；它自己管 `pane.view.destroy` 清理监听与 ResizeObserver |
 | `find.js`（`PV.find`） | 预览内查找：查找条、命中标记、在命中之间跳转 |
 | `projects.js`（`PV.projects`） | 项目切换条：最多 5 个项目、图标目录与图标选择、每项目浏览位置与固定列布局的持久化；打开 / 切换由 `app.js` 通过 `PV.projects.init()` 注入 |
+| `changes.js`（`PV.changes`） | 注入依赖的目录 / 文件版本监测，统一维护磁盘变化状态 |
 | `app.js` | 目录导航（多栏、虚拟滚动、快速访问与网页条目）、键盘 / 指针 / 主进程事件接线，以及把上面几个模块接起来 |
 
 分层是为了把「异步任务与界面归属」收在一处：正文**只能通过任务对象写**

@@ -77,7 +77,8 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "perMachine": false,
-      "shortcutName": "lit explorer"
+      "shortcutName": "lit explorer",
+      "include": "build/installer.nsh"
     },
     "portable": {
       "artifactName": "Lit-Explorer-${version}-portable.${ext}"

@@ -127,6 +127,11 @@ func main() {
 		return
 	}
 	mygo.App.OnSecondInstance(func(args []string, wd string) {
+		for _, arg := range args {
+			if strings.HasPrefix(arg, "--open=") {
+				app.openWorkspace(strings.TrimPrefix(arg, "--open="))
+			}
+		}
 		if app.win != nil && !app.win.IsDestroyed() {
 			app.win.Show()
 			app.win.Focus()
@@ -244,7 +249,7 @@ func runEval(file string, delay, hold int) {
 }
 
 func windowBounds(value any) (int, int, int, int, bool) {
-	w, h := 1440, 900
+	w, h := 1280, 900
 	m, ok := value.(map[string]any)
 	if !ok {
 		return w, h, 0, 0, false
@@ -953,7 +958,7 @@ func (a *App) OpenContextMenu(payload map[string]any) map[string]any {
 				evToggleFavorite.Emit(a.win, map[string]any{"url": raw, "name": name, "kind": "web"})
 			}},
 			mygo.Separator(),
-			{Label: "重新扫描目录", Accelerator: "F5", Click: func(*mygo.MenuItem, *mygo.Window) {
+			{Label: "刷新已变化内容", Accelerator: "F5", Click: func(*mygo.MenuItem, *mygo.Window) {
 				evRescan.Emit(a.win, struct{}{})
 			}},
 		}
@@ -989,7 +994,7 @@ func (a *App) OpenContextMenu(payload map[string]any) map[string]any {
 			&mygo.MenuItem{Label: "在资源管理器中显示", Click: func(*mygo.MenuItem, *mygo.Window) { reveal(target) }},
 			mygo.Separator())
 	}
-	items = append(items, &mygo.MenuItem{Label: "重新扫描目录", Accelerator: "F5", Click: func(*mygo.MenuItem, *mygo.Window) {
+	items = append(items, &mygo.MenuItem{Label: "刷新已变化内容", Accelerator: "F5", Click: func(*mygo.MenuItem, *mygo.Window) {
 		evRescan.Emit(a.win, struct{}{})
 	}})
 	mygo.NewMenu(items).Popup(a.win)
@@ -1003,9 +1008,11 @@ func (a *App) OpenAppMenu() map[string]any {
 	items := []*mygo.MenuItem{
 		{Label: "打开文件夹…", Accelerator: "Ctrl+O", Click: func(*mygo.MenuItem, *mygo.Window) { a.PickFolder() }},
 		{Label: "打开示例项目", Click: func(*mygo.MenuItem, *mygo.Window) { a.openWorkspace(a.GetSampleRoot()) }},
+		{Label: "注册文件夹右键菜单", Click: func(*mygo.MenuItem, *mygo.Window) { a.configureFolderMenu(true) }},
+		{Label: "取消文件夹右键菜单", Click: func(*mygo.MenuItem, *mygo.Window) { a.configureFolderMenu(false) }},
 		mygo.Separator(),
-		{Label: "重新扫描目录", Accelerator: "F5", Click: func(*mygo.MenuItem, *mygo.Window) { evRescan.Emit(a.win, struct{}{}) }},
-		{Label: "聚焦搜索框", Accelerator: "Ctrl+F", Click: func(*mygo.MenuItem, *mygo.Window) { evFocusSearch.Emit(a.win, struct{}{}) }},
+		{Label: "刷新已变化内容", Accelerator: "F5", Click: func(*mygo.MenuItem, *mygo.Window) { evRescan.Emit(a.win, struct{}{}) }},
+		{Label: "在当前文件中查找", Accelerator: "Ctrl+F", Click: func(*mygo.MenuItem, *mygo.Window) { evFocusSearch.Emit(a.win, struct{}{}) }},
 		{Label: "快捷键", Submenu: []*mygo.MenuItem{
 			{Label: "↑ / ↓　选择", Disabled: true},
 			{Label: "→　进入目录", Disabled: true},
@@ -1095,5 +1102,30 @@ func copyText(text string) {
 func openExternal(raw string) {
 	if u, err := url.Parse(raw); err == nil && (u.Scheme == "http" || u.Scheme == "https") {
 		_ = mygo.Shell.OpenExternal(u.String())
+	}
+}
+
+// 注册项只使用当前用户的注册表，不提升权限。
+func (a *App) configureFolderMenu(enable bool) {
+	key := `HKCU\Software\Classes\Directory\shell\LitExplorerMyGo`
+	exe, err := os.Executable()
+	if err != nil {
+		log.Print(err)
+		return
+	}
+	commands := [][]string{{"delete", key, "/f"}}
+	if enable {
+		commands = [][]string{
+			{"add", key, "/ve", "/d", "用 Lit MyGo 打开", "/f"},
+			{"add", key, "/v", "Icon", "/d", exe, "/f"},
+			{"add", key + `\command`, "/ve", "/d", `"` + exe + `" "--open=%1"`, "/f"},
+		}
+	}
+	for _, args := range commands {
+		if out, err := exec.Command("reg.exe", args...).CombinedOutput(); err != nil {
+			log.Printf("文件夹菜单设置失败: %v %s", err, out)
+			mygo.Dialog.Message(mygo.MessageOptions{Parent: a.win, Message: "文件夹菜单设置失败", Detail: string(out), Buttons: []string{"确定"}})
+			return
+		}
 	}
 }

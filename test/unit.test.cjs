@@ -62,6 +62,13 @@ function loadRenderer() {
 
     ok('原始 HTML 仍被转义', toHtml('<img src=x onerror=1>').indexOf('&lt;img') >= 0);
 
+    const front = toHtml('---\nname: <script>\nversion: 2.7.5\n---\n# Body');
+    ok('front matter 不执行 HTML 并保留正文', front.includes('md-frontmatter') && front.includes('&lt;script&gt;') && front.includes('<h1>Body</h1>'), front);
+    ok('没有闭合的分隔线不吞掉正文', toHtml('---\nplain').includes('plain'));
+    const paths = loadRenderer().PV.paths;
+    eq('相对链接解析父目录与编码空格', paths.resolveLink('/ws/docs/a.md', '../b%20c.md'), '/ws/b c.md');
+    eq('无效编码不能生成路径', paths.resolveLink('/ws/a.md', '%zz'), null);
+
     // 图片：地址由主进程解析成 pv://；没有解析结果就落成占位，渲染器不猜路径
     const md = loadRenderer().PV.markdown;
     const imgMap = new Map([['figures/a b.png', {
