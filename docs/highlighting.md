@@ -100,7 +100,7 @@ const html = hl.codeToHtml(code, {
 | 主线程单次任务 | < 8 ms |
 | 首次打开高亮面板 | 只加载该语言 + 2 个主题的模块 |
 
-测量方式：`performance.mark/measure` 打点，开发面板常驻显示 `文件大小 / 行数 / 分词耗时 / 渲染耗时 / DOM 行数 / 是否降级`。
+测量方式：`performance.mark/measure` 打点，开发调试数据通过 `PV.highlight.stats` 查看；日常界面仅显示文件大小与行数。
 
 ### 实测记录（v0.1 实现，Windows 11 / Electron 44 / Shiki 4.5.0）
 

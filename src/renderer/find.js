@@ -1,8 +1,8 @@
 /* 预览内查找
  *
  * Ctrl+F 在「渲染成真实 DOM 的预览」里查关键字：
- *   - 参与查找：Markdown 预览、Word / PPT 内嵌预览
- *   - 不参与：代码视图（按窗口渲染，DOM 里只有可见的几十行）、图片、PDF、HTML（在 iframe 里）
+ *   - 参与查找：Markdown、源码与代码、Word / PPT 内嵌预览
+ *   - 不参与：图片、PDF、HTML（在 iframe 里）
  * 命中处原地包一层 <mark>，当前命中再加 .is-current 并滚到视口中间。
  *
  * 查找条长在窗格上（pane.findEl），所以「窗格没了 / 换内容了 / 被收起来了」都要
@@ -40,8 +40,8 @@
     if (pane.el.hidden) return false;
     const box = pane.body;
     if (!box || box.classList.contains('is-empty')) return false;
-    if (box.querySelector('.codeview, .img-wrap, .imgseq, iframe')) return false;
-    return !!box.querySelector('.prose, .docview');
+    if (box.querySelector('.img-wrap, .imgseq, iframe')) return false;
+    return !!box.querySelector('.prose, .docview, .codeview');
   }
 
   /** Ctrl+F 会落在哪个窗格：指针下的 → 最近点过的 → 最左的可见窗格 */
@@ -113,6 +113,7 @@
     const f = findState;
     findState = null;
     if (!f) return;
+    if (f.pane.view && f.pane.view.find) f.pane.view.find('');
     clearMarks(f.pane.body);
     const bar = f.pane.findEl;
     if (!bar) return;
@@ -239,6 +240,14 @@
     if (!f) return;
     // 文本被外部重写（比如代码高亮完成）时可以保留当前命中序号，避免视图跳回第一条
     const prev = keepIndex && f.index >= 0 ? f.index : -1;
+    if (f.pane.view && f.pane.view.find) {
+      const count = f.pane.view.find(f.query, prev >= 0 ? prev : 0);
+      f.hits = new Array(count);
+      f.index = count ? (prev >= 0 ? Math.min(prev, count - 1) : 0) : -1;
+      f.capped = false;
+      updateFindBar();
+      return;
+    }
     clearMarks(f.pane.body);
     f.hits = [];
     f.index = -1;
@@ -259,6 +268,7 @@
   function focusFindHit() {
     const f = findState;
     if (!f) return;
+    if (f.pane.view && f.pane.view.find) { f.pane.view.find(f.query, f.index); return; }
     for (let i = 0; i < f.hits.length; i++) {
       f.hits[i].classList.toggle('is-current', i === f.index);
     }
