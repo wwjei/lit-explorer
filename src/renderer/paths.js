@@ -76,6 +76,20 @@
 
   window.PV = window.PV || {};
   window.PV.paths = {
+    resolveLink: function (base, href) {
+      let raw;
+      try { raw = decodeURIComponent(href.split('#')[0].split('?')[0]); } catch { return null; }
+      if (!raw || /[\u0000-\u001f\u007f]/.test(raw) || raw.startsWith('//')) return null;
+      raw = raw.replace(/\\/g, '/');
+      const parent = base.replace(/\\/g, '/').replace(/[^/]+$/, '');
+      const full = /^(?:[a-z]:\/|\/)/i.test(raw) ? raw : parent + raw;
+      const parts = [];
+      for (const part of full.split('/')) {
+        if (part === '..') parts.pop();
+        else if (part !== '.') parts.push(part);
+      }
+      return parts.join('/');
+    },
     norm: norm,
     key: key,
     same: same,
