@@ -183,7 +183,7 @@ async function createWindow() {
 
   win = new BrowserWindow(Object.assign(
     {
-      width: 1440,
+      width: 1280,
       height: 900,
       minWidth: 900,
       minHeight: 560,
@@ -607,9 +607,16 @@ async function showAppMenu() {
   const items = [
     { label: '打开文件夹…', accelerator: 'Ctrl+O', click: pickFolderAndOpen },
     { label: '打开示例项目', click: () => openWorkspace(assetPath('sample-project')) },
+    ...(['注册文件夹右键菜单', '取消文件夹右键菜单'].map((label, i) => ({
+      label, visible: process.platform === 'win32', enabled: app.isPackaged,
+      click: async () => {
+        try { await require('./folder-menu').configure(i === 0, process.execPath); }
+        catch (err) { dialog.showErrorBox('文件夹右键菜单设置失败', err.message); }
+      }
+    }))),
     { type: 'separator' },
-    { label: '重新扫描目录', accelerator: 'F5', click: () => win.webContents.send('app:rescan') },
-    { label: '聚焦搜索框', accelerator: 'Ctrl+F', click: () => win.webContents.send('app:focus-search') },
+    { label: '刷新已变化内容', accelerator: 'F5', click: () => win.webContents.send('app:rescan') },
+    { label: '在当前文件中查找', accelerator: 'Ctrl+F', click: () => win.webContents.send('app:focus-search') },
     {
       // 原来状态栏那排按键说明，收进菜单里当图例；不是可执行命令
       label: '快捷键',
@@ -655,7 +662,9 @@ async function showAppMenu() {
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
-  app.on('second-instance', () => {
+  app.on('second-instance', (_event, argv) => {
+    const open = argv.find((a) => a.startsWith('--open='));
+    if (open) openWorkspace(open.slice(7)).catch(console.error);
     if (win) {
       if (win.isMinimized()) win.restore();
       win.focus();
