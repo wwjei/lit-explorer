@@ -184,4 +184,4 @@ MyGo 版装到 `%LOCALAPPDATA%\Programs\Lit Explorer MyGo`，产物是单个 exe
 
 飞书设备授权回归为 S11 / D2，Go 为 `TestFeishuDevice*`。使用共享 `test/fixtures/feishu-auth.json` 模拟注册、授权、拒绝、过期和刷新，不创建真实应用；真实资源及验证步骤见 [授权设计](../design/feishu-client-authorization.md)。
 
-金山目录回归为 S12 / D3 和 Go `TestDirectoryPluginKdocsFolders`，共用 `test/fixtures/kdocs-directory.json`，覆盖查询 token、双字段分页（offset=0）、子目录独立快捷项、已有分享链接、权限 / 限流 / 过期归一化；不用真实凭据，真实资源见 [金山设计](../design/kdocs-directory-plugin.md)。
+金山原生插件回归为 S12/S13、D3 和 Go `TestKdocsNative*`，共用 `test/fixtures/kdocs-skill.json`，覆盖授权、节流 / 取消 / 到期、系统保护与不降级明文、账号绑定、目录 / 详情 / 在线链接、子目录快捷项、退出和失效凭据移除。不使用真实凭据；真实资源与 Windows 安全存储验收见 [金山设计](../design/kdocs-directory-plugin.md)。

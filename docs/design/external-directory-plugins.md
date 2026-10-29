@@ -6,7 +6,7 @@
 
 远程标识与本地文件路径分开。目录支持逐层浏览、分页、详情、刷新和将子目录单独加入快捷访问；目录里的文档点击后解析实际在线链接，交给现有网页预览。Wiki 节点可以同时有子项和实体文档，提供“打开当前文档”。
 
-稳定的 providerId、挂载 id、根对象 id/type 和名称按项目保存。凭据留在本机宿主内存；切项目、重启或无法续期后需重连。解析出的在线链接不写导航 / 固定列布局，云预览只在当前会话保留。移除来源只关闭该来源预览，保留其他来源内容。
+稳定的 providerId、挂载 id、根对象 id/type 和名称按项目保存。飞书凭据留在宿主会话；金山内置模块可在系统保护可用时安全保存授权，切项目 / 重启重新连接时复用。解析出的在线链接不写导航 / 固定列布局，云预览只在当前会话保留。移除来源只关闭该来源预览，保留其他来源内容。
 
 ## 共享清单与契约
 
@@ -15,7 +15,7 @@
 | 概念 | 字段与约束 |
 | --- | --- |
 | Catalog | apiVersion=1、providers |
-| Provider | id、name、version、inputHint、apiOrigin、documentHosts、root、list、details?、documentLink?、initialize?、success、authCodes?、errorCodes?、authentication? |
+| Provider | id、name、version、inputHint、transport?、apiOrigin?、documentHosts、root、list、details?、documentLink?、initialize?、success、authCodes?、errorCodes?、authentication?；kdocs-skill 为固定内置 transport，不接受任意脚本 |
 | Root | kind 固定为 directory、defaultType、urlTypes；可选 defaultId / omitDefaultId 定义服务默认根 |
 | Mount | id、providerId、rootId、rootType?、name；connected 为运行时信息 |
 | Node | id、name、type、kind、url?、modifiedAt?、scopeId?、documentId?、documentType?、hasChildren? |
@@ -24,6 +24,8 @@
 节点 kind 仍区分目录和文档。id 为不含分隔符、空白和查询字符的稳定远程标识；不交给 fs IPC。scopeId 是服务命名空间，例如 Wiki space_id。documentId/type 用于目录节点自身关联的实体文档；hasChildren=false 的 Wiki 叶子直接作为文档打开。
 
 移除单文档 provider 后，旧单文档挂载不再加载；没有原始租户网页链接时不自动猜测转换地址。
+
+金山声明 `transport=kdocs-skill`，操作通过固定 operation=list/details/open 进入原生模块，不提供可配置进程、动态工具或外部命令。以下 HTTP 模板能力用于其他声明式服务。
 
 ## 请求模板与归一化
 
@@ -37,7 +39,7 @@ list / details / initialize 声明 method（GET/POST）、固定相对 path、qu
 - details 查询最新文档元数据；没有 details 时使用列表元数据。documentLink 可单独声明实际链接查询（url/name 响应路径），用于金山的已有分享接口。
 - 文档域名与 API origin 分开，打开前验证 HTTPS、主机、端口、控制字符与账号密码。
 
-桥接 `directoryCall` 仅分派 providers / mounts / connect / list / details / open / pin / remove / cancel / authStart / authPoll，不暴露任意 HTTP 或原始令牌。pin 只能将已发现的目录加入快捷访问，重复来源复用已有项；连接验证及项目序号检查继续生效。
+桥接 `directoryCall` 仅分派 providers / mounts / connect / list / details / open / pin / remove / cancel / authStart / authPoll / kdocsAuthStart / kdocsAuthPoll / kdocsLogout，不暴露任意 HTTP 或原始令牌。pin 只能将已发现的目录加入快捷访问，重复来源复用已有项；连接验证及项目序号检查继续生效。
 
 ## 飞书内置插件
 
@@ -61,9 +63,9 @@ Wiki 导航使用 node_token，打开时用 obj_token/type 查询实际文档链
 
 ## 金山内置插件
 
-`kdocs-personal` 使用个人文档官方列表与已有分享接口，支持默认“我的文档”、双字段分页和子文件夹独立快捷项。鉴权为手动 access_token，所需权限 access_personal_files；不复用飞书登录，不把 WPS 365 企业接口或应用空间混入个人文档。
+`kdocs-skill` 内置原生 Skill 协议模块，浏览器授权后调用 list_my_files / list_files / get_file_info / get_file_link，支持默认“我的文档”、page_token 分页和子目录独立快捷项。不运行 CLI、不复用旧开放平台令牌，不把 WPS 365 企业账号混入个人文档。
 
-普通网页目录链接不能替代应用相关 ID，可先从“我的文档”浏览目标目录。没有分享链接时提示用户，不自动扩大分享权限。接口证据、差异、鉴权边界与真实测试准备见 [金山插件设计](kdocs-directory-plugin.md)。
+普通网页目录链接不能替代应用相关 ID，可先从“我的文档”浏览目标目录。在线链接通过 get_file_link 获取，不调用分享修改工具。接口证据、差异、鉴权边界与真实测试准备见 [金山插件设计](kdocs-directory-plugin.md)。
 
 ## 其他插件接入
 
@@ -80,6 +82,6 @@ API 请求固定 origin，不跟随重定向；响应 JSON 2 MiB、超时 15 秒
 
 移除、切项目中断对应请求；关闭连接表单取消验证。旧响应不能覆盖新项目或目录。云插件不增加本地路径权限，不提供云端上传、删除或分享修改能力。在线网页不能取得本地 pv 桥接，API 身份与网页登录身份分别管理。
 
-Node S9/S10、Go 飞书契约测试及界面 D1 覆盖飞书目录 / Wiki；S11/D2 与 Go 授权用例覆盖实验设备授权；S12/D3 和 `TestDirectoryPluginKdocsFolders` 使用共享金山夹具覆盖默认根、分页、文件夹快捷项和已有分享链接。
+Node S9/S10、Go 飞书契约测试及界面 D1 覆盖飞书目录 / Wiki；S11/D2 与 Go 授权用例覆盖实验设备授权；S12/S13/D3 和 `TestKdocsNative*` 使用共享金山夹具覆盖原生授权、系统保护、账号切换、默认根、分页、文件夹快捷项与在线链接。
 
 后续工作：真实服务联调、系统凭据库和跨重启账号复用、其他服务适配、来源改名、目录浏览位置恢复，以及更完整的目录详情。当前没有任意第三方可执行插件安装运行能力。

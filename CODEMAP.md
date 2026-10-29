@@ -145,7 +145,7 @@
 
 ## 目录插件、飞书与金山
 
-- `src/shared/directory-providers.json`：共享版本化插件清单，包含飞书文件夹 / Wiki 目录和金山个人文件夹映射；默认根、查询参数认证、双字段分页、已有分享链接均在清单声明。
+- `src/shared/directory-providers.json`：共享版本化插件清单，包含飞书文件夹 / Wiki 目录和金山个人文件夹映射；金山使用内置 Skill transport（原生 HTTP，不运行 CLI）；默认根、节点映射和分页在清单声明。
 - `src/main/directory-plugins.js`：`createDirectoryPlugins / invokeDirectoryPlugin` 管理挂载、会话令牌、节点与分页授权、请求、缓存、取消和标准化。
 - `mygo/directory_plugins.go`：同形宿主和 `App.DirectoryCall`；从 staging 后的共享清单加载插件。
 - `src/renderer/cloud-directories.js`：`PV.cloud` 管理来源配置表单、目录列表、详情、分页和在线文档打开；`app.js` 注入预览与快捷访问回调。
@@ -157,3 +157,5 @@
 `src/main/feishu-auth.js` / `mygo/feishu_auth.go`：`start/poll/take/token/cancel/clear`；共享配置 `src/shared/feishu-auth.json`。目录桥接新增 `authStart` / `authPoll`，`connect` 可消费一次性 `authId`，原始凭据不返回界面。方案、资格边界和真实测试资源见 [客户端授权设计](docs/design/feishu-client-authorization.md)。
 
 金山插件的官方接口、对象 ID 与鉴权边界见 [金山目录设计](docs/design/kdocs-directory-plugin.md)。目录宿主 `pin` / bridge `pin` 仅将已发现子目录独立挂载；单文档 provider 已移除，文档快捷项走原有网页链接。
+
+`src/main/kdocs-plugin.js` / `mygo/kdocs_plugin.go`：`start/poll/identity/invoke/logout`，官方浏览器引导页 + Skill exchange + 四个只读工具；协议配置在 `src/shared/kdocs-skill.json`。安全持久化由 `protected-credentials.js` 注入 Electron safeStorage，Go Windows 用 `kdocs_protection_windows.go` 的 DPAPI。目录桥接 `kdocsAuthStart/kdocsAuthPoll/kdocsLogout` 不返回原始凭据。
