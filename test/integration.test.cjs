@@ -120,6 +120,7 @@ function loadMainModule() {
     require: (n) => (n === 'electron' ? Object.assign({}, electron, { app: fakeApp, ipcMain: recorder })
       : n === './fs-api' ? fsApi
         : n === './state-sanitize' ? require(path.join(ROOT, 'src/main/state-sanitize.js'))
+          : n === './directory-plugins' ? require(path.join(ROOT, 'src/main/directory-plugins.js'))
           : n === './reference-dirs' ? require(path.join(ROOT, 'src/main/reference-dirs.js'))
           : n === './web-url' ? require(path.join(ROOT, 'src/main/web-url.js'))
             : n === '../shared/contracts' ? require(path.join(ROOT, 'src/shared/contracts.js'))
@@ -175,6 +176,7 @@ function renderer() {
       ipcMain.handle('app:get-state', () => ({}));
       ipcMain.handle('app:set-state', () => ({}));
       // 预览变更监测每 5 s 会 stat 一次当前预览；测试里没有真实文件，固定返回同一版本
+      ipcMain.handle('directories:call', (_e, method) => ({value: method === 'mounts' || method === 'providers' ? [] : true}));
       ipcMain.handle('references:list', () => []);
       ipcMain.handle('fs:stat', () => ({ size: 0, mtime: 0 }));
       ipcMain.handle('window:is-maximized', () => false);
@@ -542,6 +544,92 @@ async function main() {
     await runPage(`waitFor(()=>![...document.querySelectorAll('.fav-row')].some(e=>e.dataset.favKey===${JSON.stringify(external)}))`);
     eq('移除外部目录后撤销授权', service.list().length, 0);
     ipcMain.removeHandler('references:list'); ipcMain.handle('references:list', () => []);
+  });
+
+  await run('D1', '云目录插件：文件夹、具体文档与 Wiki 快捷项', async () => {
+    const f=await prepare(); const runPage=await renderer();
+    const {createDirectoryPlugins,invokeDirectoryPlugin}=require('../src/main/directory-plugins');
+    const fixture=require('./fixtures/feishu-directory.json');
+    let saved={};
+    const service=createDirectoryPlugins({store:{load:async()=>saved,patch:async(p)=>{saved={...saved,...p};}},fetch:async(raw,options)=>{
+      const url=new URL(raw);let data;
+      if(url.pathname.endsWith('get_node')) data=fixture.wikiRoot;
+      else if(url.pathname.includes('/wiki/')) data=fixture.wikiPage;
+      else if(url.pathname.endsWith('batch_query')) {
+        const doc=JSON.parse(options.body).request_docs[0];
+        data=doc.doc_token==='docA'?fixture.details:{code:0,data:{metas:[{doc_token:doc.doc_token,doc_type:doc.doc_type,title:'Wiki 实体 '+doc.doc_token,url:'https://tenant.feishu.cn/docx/'+doc.doc_token}]}};
+      } else if(url.searchParams.get('folder_token')==='folderA') data=fixture.nestedPage;
+      else data=url.searchParams.get('page_token')?fixture.lastPage:fixture.firstPage;
+      return new Response(JSON.stringify(data));
+    }});
+    service.activate(f.ws);
+    ipcMain.removeHandler('directories:call');
+    ipcMain.handle('directories:call',(_e,method,args)=>invokeDirectoryPlugin(service,method,args));
+    stubList(f.ws,['cloud-placeholder.md']);stubRead(()=>({text:'# LOCAL',size:7}));
+    createdWin.webContents.send('workspace:opened',f.ws);
+    const result=await runPage(`(async()=>{
+      const type=(name,value)=>{document.querySelector('.cloud-connect [name="'+name+'"]').value=value;};
+      const connect=async(provider,root,name)=>{
+        document.querySelector('[data-cloud-add]').click();
+        await waitFor(()=>document.querySelector('.cloud-connect'));
+        type('providerId',provider);type('rootId',root);type('name',name);type('token','fixture-secret');
+        document.querySelector('.cloud-connect').requestSubmit();
+        return document.querySelector('.cloud-connect [name=token]')?.value==='';
+      };
+      await waitFor(()=>document.querySelector('.row:not(.fav-row)')?.textContent.includes('cloud-placeholder.md'));
+      [...document.querySelectorAll('.row:not(.fav-row)')].find(e=>e.textContent.includes('cloud-placeholder.md')).click();
+      await waitFor(()=>document.querySelector('.prose')?.textContent.includes('LOCAL'));
+      PV.pane.pinCurrent();
+      const cleared=await connect('feishu-drive','https://tenant.feishu.cn/drive/folder/root','云目录');
+      await waitFor(()=>document.querySelectorAll('.cloud-entry').length===2);
+      document.querySelector('[data-cloud-entry="0"]').click();
+      await waitFor(()=>document.querySelector('.cloud-entries')?.textContent.includes('接口'));
+      const nested=true;
+      document.querySelector('[data-cloud-up]').click();
+      await waitFor(()=>document.querySelectorAll('.cloud-entry').length===2);
+      document.querySelector('[data-cloud-next]').click();
+      await waitFor(()=>document.querySelectorAll('.cloud-entry').length===3);
+      document.querySelector('[data-cloud-detail="1"]').click();
+      await waitFor(()=>document.querySelector('.cloud-details')?.textContent.includes('最新'));
+      const details=true;
+      document.querySelector('[data-cloud-entry="1"]').click();
+      await waitFor(()=>!document.querySelector('.cloud-dialog[open]') && document.querySelector('.pv-nm')?.textContent.includes('最新'));
+      const preview=true;
+      PV.pane.pinCurrent();
+      const noSignedUrls=!JSON.stringify(PV.pane.layoutSnapshot()).includes('feishu.cn');
+      await connect('feishu-document','https://tenant.feishu.cn/docx/docA','单文档');
+      await waitFor(()=>!document.querySelector('.cloud-dialog[open]') && [...document.querySelectorAll('.cloud-fav')].some(e=>e.textContent.includes('单文档')));
+      const documentItem=true;
+      await connect('feishu-wiki','https://tenant.feishu.cn/wiki/wikiRoot','Wiki目录');
+      await waitFor(()=>document.querySelector('.cloud-entry')?.textContent.includes('子文档'));
+      const wiki=true;
+      const rootOpens=!document.querySelector('[data-cloud-current-document]').hidden;
+      document.querySelector('[data-cloud-current-document]').click();
+      await waitFor(()=>!document.querySelector('.cloud-dialog[open]') && document.querySelector('.pv-nm')?.textContent.includes('wikiDocRoot'));
+      [...document.querySelectorAll('.cloud-fav')].find(e=>e.textContent.includes('Wiki目录')).click();
+      await waitFor(()=>document.querySelector('[data-cloud-entry="0"]'));
+      document.querySelector('[data-cloud-entry="0"]').click();
+      await waitFor(()=>!document.querySelector('.cloud-dialog[open]') && document.querySelector('.pv-nm')?.textContent.includes('wikiDocChild'));
+      await connect('feishu-wiki-document','https://tenant.feishu.cn/wiki/wikiRoot','Wiki单文档');
+      await waitFor(()=>!document.querySelector('.cloud-dialog[open]') && [...document.querySelectorAll('.cloud-fav')].some(e=>e.textContent.includes('Wiki单文档')));
+      const wikiDocument=true;
+      [...document.querySelectorAll('.cloud-fav')].find(e=>e.textContent.includes('云目录')).querySelector('[data-cloud-remove]').click();
+      await waitFor(()=>document.querySelectorAll('.cloud-fav').length===3);
+      return {cleared,nested,details,preview,documentItem,wiki,rootOpens,wikiDocument,noSignedUrls,localPinPreserved:PV.pane.allPanes().some(p=>p.pinned&&p.node?.name==='cloud-placeholder.md')};
+    })()`);
+    ok('提交连接后立即清空页面令牌',result.cleared,result);
+    ok('文件夹分页、详情和在线预览可用',result.nested&&result.details&&result.preview,result);
+    ok('具体文档作为独立快捷项直接打开',result.documentItem,result);
+    ok('Wiki 目录可浏览，并可打开节点自身与子文档',result.wiki&&result.rootOpens,result);
+    ok('具体 Wiki 文档也能独立添加',result.wikiDocument,result);
+    ok('解析出的文档链接不写入布局',result.noSignedUrls,result);
+    ok('移除云来源保留其他本地固定预览',result.localPinPreserved,result);
+    ok('挂载配置不保存令牌',!JSON.stringify(saved).includes('fixture-secret'));
+    eq('移除一个来源保留其他来源',(await service.mounts()).length,3);
+    for(const mount of await service.mounts()) await service.remove(mount.id);
+    ipcMain.removeHandler('directories:call');ipcMain.handle('directories:call',(_e,method)=>({value:method==='mounts'||method==='providers'?[]:true}));
+    await runPage('PV.cloud.setProject('+JSON.stringify(f.ws)+')');
+    await clearPinnedColumns(runPage);
   });
 
   await run('R1', '全局刷新只重读变化的预览', async () => {

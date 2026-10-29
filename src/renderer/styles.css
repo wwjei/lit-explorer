@@ -903,3 +903,21 @@ body.has-web #toast.on{transform:translateY(0)}
 
 /* 最小列宽总和超过窗口时，让预览区横向滚动，始终为来源目录留一栏。 */
 .preview{max-width:calc(100% - 260px);overflow-x:auto}
+
+/* 云目录与本地路径分开浏览；打开文档时复用网页预览窗格。 */
+.cloud-dialog{width:min(760px,90vw);max-height:82vh;padding:18px;border:1px solid var(--line);border-radius:12px;background:var(--panel);color:var(--text);overflow:auto}
+.cloud-dialog::backdrop{background:#0006}
+.cloud-toolbar,.cloud-navigation,.cloud-entry{display:flex;align-items:center;gap:10px;justify-content:space-between}
+.cloud-toolbar{margin-bottom:14px}
+.cloud-navigation{position:sticky;top:0;background:var(--panel);padding-bottom:8px}
+.cloud-path{min-width:0;overflow-wrap:anywhere;flex:1}
+.cloud-connect{display:grid;gap:12px}
+.cloud-connect label{display:grid;gap:5px}
+.cloud-connect input,.cloud-connect select{background:var(--panel-2);color:var(--text);border:1px solid var(--line);padding:8px;border-radius:6px;width:100%}
+.cloud-connect p,.cloud-message{font-size:12px;color:var(--muted);line-height:1.6}
+.cloud-message{padding:8px 0;overflow-wrap:anywhere}
+.cloud-entry{border-bottom:1px solid var(--line-soft);padding:5px 0}
+.cloud-entry-open{min-width:0;flex:1;text-align:left;justify-content:flex-start;height:auto;white-space:normal}
+.cloud-entry-open span{overflow-wrap:anywhere}
+.cloud-details{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--panel-2);padding:12px;border-radius:8px}
+.cloud-fav .iconbtn{margin-left:auto;width:24px;height:24px}

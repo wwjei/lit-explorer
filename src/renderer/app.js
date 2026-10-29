@@ -98,7 +98,8 @@
   }
 
   function webNodeFromFav(fav) {
-    return { name: fav.name, kind: WEB_KIND, url: fav.url, path: fav.url, isDir: false };
+    return { name: fav.name, kind: WEB_KIND, url: fav.url, path: fav.url, isDir: false,
+      ...(fav.cloudMountId ? { cloudMountId: fav.cloudMountId, cloudNodeId: fav.cloudNodeId } : {}) };
   }
 
   function rootForPath(path) {
@@ -516,11 +517,12 @@
     const selKey = state.sel
       ? (state.sel.node.kind === WEB_KIND ? state.sel.node.url : state.sel.node.path)
       : '';
-    const rows = state.favs.length
-      ? state.favs.map((f) => favRowHtml(f, selKey)).join('')
+    const rows = state.favs.length || PV.cloud.rows()
+      ? state.favs.map((f) => favRowHtml(f, selKey)).join('') + PV.cloud.rows()
       : '<div class="col-note">右键或行尾闪电图标加入快速访问；点标题栏的 + 添加网页链接</div>';
     const add = (state.path[0] && !PV.paths.same(state.path[0].path, state.root)
       ? '<button class="col-toggle" data-project-root title="返回项目目录" aria-label="返回项目目录">' + icon('arrowLeft', '', 14) + '</button>' : '')
+      + '<button class="col-toggle fav-add" data-cloud-add title="添加云文档或 Wiki 目录" aria-label="添加云文档或 Wiki 目录">' + icon('globe', '', 14) + '</button>'
       + '<button class="col-toggle fav-add" data-reference-add title="添加外部目录" aria-label="添加外部目录">' + icon('folder', '', 14) + icon('plus', '', 10) + '</button>'
       + '<button class="col-toggle fav-add" data-web-add title="添加网页链接" aria-label="添加网页链接">'
       + icon('globe', '', 12) + icon('plus', 'fav-plus', 10) + '</button>';
@@ -645,7 +647,7 @@
     const btn = $('#btn-refresh');
     btn.disabled = true;
     try {
-      await Promise.all([Promise.all(PV.pane.visiblePanes().map(pollPane)), pollOpenDirs()]);
+      await Promise.all([Promise.all(PV.pane.visiblePanes().map(pollPane)), pollOpenDirs(), PV.cloud.refresh()]);
       if (root !== state.root) return;
       const jobs = state.path.map((folder, i) => {
         if (!dirtyDirs.has(folder.path)) return Promise.resolve();
@@ -693,6 +695,7 @@
     // 切换条：当前项立刻高亮；新项目有空位就加进去
     PV.projects.noteOpened(dir);
     render();
+    await PV.cloud.setProject(dir);
     const references = await pv.referenceDirs();
     if (state.root !== dir) return;
     state.referenceDirs = references;
@@ -755,7 +758,7 @@
   function currentNav() {
     return {
       path: state.path.map((f) => f.path),
-      sel: state.sel ? state.sel.node.path : null,
+      sel: state.sel && !state.sel.node.cloudMountId ? state.sel.node.path : null,
       mode: state.mode,
       // 固定列、列宽、分屏比例都跟着项目走：切走时一起存，切回来原样恢复
       layout: PV.pane.layoutSnapshot()
@@ -1572,6 +1575,20 @@
   /* ============================ 把模块接起来 ============================ */
   // pane.js 管窗格的生命周期与布局，preview-body.js 管正文与头部画成什么样；
   // 它们需要的应用状态都由这里提供。
+  PV.cloud.init({
+    changed: renderFavorites,
+    toast,
+    openWeb: openWebFavorite,
+    clearPreviews: function (mountId) {
+      if (state.sel && state.sel.node.cloudMountId === mountId) state.sel = null;
+      for (const pane of PV.pane.allPanes().slice()) {
+        if (!pane.node || pane.node.cloudMountId !== mountId) continue;
+        if (pane.pinned) PV.pane.unpinPane(pane);
+        else PV.pane.resetTemp();
+      }
+      render();
+    }
+  });
   PV.body.init({
     toast: toast,
     root: function () { return state.root; },
