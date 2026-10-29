@@ -344,6 +344,57 @@ function loadRenderer() {
     eq('数字按数值排序', p.compareNodes({ name: 'a10', isDir: false }, { name: 'a2', isDir: false }) > 0, true);
   });
 
+  await run('S8', '外部参考目录的授权、撤销与只读边界', async () => {
+    const fsApi = require('../src/main/fs-api');
+    const { createReferenceDirs } = require('../src/main/reference-dirs');
+    const project = freshDir('reference-project');
+    const other = freshDir('reference-other');
+    const external = freshDir('reference-external');
+    const file = path.join(external, 'ref.svg');
+    fs.writeFileSync(file, '<svg/>');
+    let state = {};
+    let pick = async () => external;
+    const service = createReferenceDirs({ fsApi,
+      store: { load: async () => state, patch: async (p) => { state = { ...state, ...p }; } },
+      pick: () => pick()
+    });
+    fsApi.resetAllowedRoots();
+    const root = await fsApi.allowRoot(project);
+    service.activate(root, []);
+    const added = await service.add();
+    eq('选择框添加真实目录', added.dirs.length, 1);
+    eq('参考文件可读取', (await fsApi.readFileForPreview(file)).text, '<svg/>');
+    let error;
+    try { await fsApi.writeSvgFile(file, '<svg/>', {}); } catch (err) { error = err.code; }
+    eq('参考目录不可写入 SVG', error, 'EREAD_ONLY');
+    await service.add();
+    eq('重复目录不重复保存', service.list().length, 1);
+    const prepared = await service.prepare(root);
+    eq('可从主进程设置恢复目录', prepared.length, 1);
+    const link = path.join(external, 'escape');
+    if (linkDir(other, link)) {
+      error = null;
+      try { await fsApi.assertAllowed(path.join(link, 'secret')); } catch (err) { error = err.code; }
+      ok('参考目录中的链接不能越界', !!error, error);
+    }
+    const sanitized = require('../src/main/state-sanitize').sanitizePatch({ referenceDirs: { [root]: [other] } }, () => true);
+    eq('页面设置不能伪造参考目录授权', Object.keys(sanitized).length, 0);
+    await service.remove(external);
+    error = null;
+    try { await fsApi.assertAllowed(file); } catch (err) { error = err.code; }
+    ok('移除后立即不可读', !!error, error);
+    let choose;
+    pick = () => new Promise((resolve) => { choose = resolve; });
+    const pending = service.add();
+    fsApi.resetAllowedRoots();
+    const next = await fsApi.allowRoot(other);
+    service.activate(next, []);
+    choose(external);
+    eq('项目切换后丢弃旧选择框结果', (await pending).error, 'SUPERSEDED');
+    eq('新项目没有旧项目的参考目录', service.list().length, 0);
+    fsApi.resetAllowedRoots();
+  });
+
   done();
 })().catch((err) => {
   console.error(err);

@@ -41,6 +41,9 @@
 
     /* 文件系统 */
     list: function (dir) { return call('App.List', dir); },
+    referenceDirs: function () { return call('App.ReferenceDirs'); },
+    addReferenceDir: function () { return call('App.AddReferenceDir'); },
+    removeReferenceDir: function (dir) { return call('App.RemoveReferenceDir', dir); },
     read: function (path) { return call('App.Read', path); },
     readBytes: function (path) {
       return call('App.ReadBytes', path).then(function (res) {

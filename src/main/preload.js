@@ -14,6 +14,10 @@ contextBridge.exposeInMainWorld('pv', {
   openRoot: (dir) => ipcRenderer.invoke('workspace:open', dir),
   getSampleRoot: () => ipcRenderer.invoke('workspace:sample'),
 
+  referenceDirs: () => ipcRenderer.invoke('references:list'),
+  addReferenceDir: () => ipcRenderer.invoke('references:add'),
+  removeReferenceDir: (dir) => ipcRenderer.invoke('references:remove', dir),
+
   /* 项目快捷切换 */
   pickProjectIcon: () => ipcRenderer.invoke('projects:pick-icon'),
 
