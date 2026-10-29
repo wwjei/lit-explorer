@@ -483,7 +483,7 @@ function loadRenderer() {
     eq('同一插件宿主可加载不同服务的字段映射',(await generic.list(example.id,'root','')).entries[0].name,'通用节点');
   });
 
-  await run('S10', '具体文档与 Wiki 目录挂载语义', async () => {
+  await run('S10', 'Wiki 目录挂载与移除单文档入口', async () => {
     const {createDirectoryPlugins}=require('../src/main/directory-plugins');
     const fixture=require('./fixtures/feishu-directory.json');
     let state={},calls=[];
@@ -498,11 +498,10 @@ function loadRenderer() {
       return new Response(JSON.stringify(data));
     }});
     api.activate('/specific');
-    const document=await api.connect({providerId:'feishu-document',rootId:'https://tenant.feishu.cn/docx/docA?from=share',name:'具体设计文档',token:'fixture-secret'});
-    eq('具体文档链接提取正确的文档标识',document.rootId,'docA');
-    eq('文档作为单项挂载',document.rootKind,'document');
-    ok('单文档连接不调用文件夹列表',calls.every(c=>c.url.pathname.endsWith('batch_query')));
-    eq('具体文档可以直接解析并打开',(await api.open(document.id,document.rootId)).url,'https://tenant.feishu.cn/docx/docA');
+    for (const providerId of ['feishu-document','feishu-wiki-document']) {
+      let error; try { await api.connect({providerId,rootId:'docA',token:'fixture-secret'}); } catch (err) {error=err.code;}
+      eq('已取消单文档入口 '+providerId,error,'BAD_REQUEST');
+    }
     const wiki=await api.connect({providerId:'feishu-wiki',rootId:'https://tenant.feishu.cn/wiki/wikiRoot',name:'我的 Wiki 目录',token:'fixture-secret'});
     eq('Wiki 节点作为目录入口',wiki.rootKind,'directory');
     const page=await api.list(wiki.id,'wikiRoot','');
@@ -513,10 +512,58 @@ function loadRenderer() {
     eq('Wiki 节点自身也能打开文档',(await api.open(wiki.id,'wikiRoot')).url,'https://tenant.feishu.cn/docx/wikiDocRoot');
     eq('Wiki 子项打开实体文档链接',(await api.open(wiki.id,'wikiChild')).url,'https://tenant.feishu.cn/docx/wikiDocChild');
     eq('Wiki 目录详情来自节点接口',(await api.details(wiki.id,'wikiRoot')).name,'知识库入口');
-    const wikiDoc=await api.connect({providerId:'feishu-wiki-document',rootId:'https://tenant.feishu.cn/wiki/wikiRoot',name:'具体 Wiki 文档',token:'fixture-secret'});
-    eq('同一 Wiki 节点也可作为单文档快捷项',wikiDoc.rootKind,'document');
-    eq('Wiki 单文档直接打开实体链接',(await api.open(wikiDoc.id,'wikiRoot')).url,'https://tenant.feishu.cn/docx/wikiDocRoot');
     ok('文档与目录配置均不包含令牌',!JSON.stringify(state).includes('fixture-secret'));
+  });
+
+  await run('S12', '金山文件夹：双字段分页、子目录快捷项与只读分享链接', async () => {
+    const {createDirectoryPlugins,invokeDirectoryPlugin}=require('../src/main/directory-plugins');
+    const fixture=require('./fixtures/kdocs-directory.json');
+    let saved={}, calls=[], mode='normal';
+    const api=createDirectoryPlugins({store:{load:async()=>saved,patch:async(p)=>{saved={...saved,...p};}},fetch:async(raw,options)=>{
+      const url=new URL(raw);calls.push({url,options});
+      let data=fixture[mode];
+      if(!data) data=url.pathname.endsWith('/links') ? fixture.link : url.searchParams.get('parent_id') ? fixture.nestedPage : url.searchParams.has('offset') ? fixture.lastPage : fixture.firstPage;
+      return new Response(JSON.stringify(data));
+    }});
+    api.activate('/kdocs');
+    const descriptor=api.providers().find(p=>p.id==='kdocs-personal');
+    ok('金山提供默认我的文档入口',!!descriptor.defaultRootId);
+    eq('金山不复用飞书设备授权',descriptor.browserAuth,false);
+    const root=await api.connect({providerId:'kdocs-personal',rootId:'',name:'我的金山文档',token:'fixture-secret'});
+    eq('根节点始终为目录',root.rootKind,'directory');
+    const first=await api.list(root.id,root.rootId,'');
+    eq('文件夹 ID 使用本应用 open_id',first.entries[0].id,'folder_A');
+    eq('数值修改时间正确标准化',first.entries[0].modifiedAt,'1700000010');
+    eq('首次请求省略 parent_id',calls[0].url.searchParams.has('parent_id'),false);
+    ok('令牌按官方要求放查询参数且不放 Bearer',calls.every(c=>c.url.hostname==='developer.kdocs.cn'&&c.url.searchParams.get('access_token')==='fixture-secret'&&!c.options.headers.Authorization&&c.options.redirect==='error'));
+    eqJson('零偏移量与 file 过滤器同时保存',JSON.parse(first.nextCursor),{offset:0,filter:'file'});
+    const last=await api.list(root.id,root.rootId,first.nextCursor);
+    eq('offset=0 不是结束标志',last.entries[0].id,'file_B');
+    eq('只以 -1 表示分页结束',last.nextCursor,'');
+    eq('第二页完整回传 filter',calls.at(-1).url.searchParams.get('filter'),'file');
+    const bad=await invokeDirectoryPlugin(api,'list',{mountId:root.id,nodeId:root.rootId,cursor:'{"offset":900,"filter":"file"}'});
+    eq('不接受伪造复合分页',bad.error,'OUTSIDE_MOUNT');
+    const nested=await api.list(root.id,'folder_A','');
+    eq('子目录文件可被发现',nested.entries[0].id,'file_A');
+    eq('详情来自已获取的列表元数据',(await api.details(root.id,'file_A')).name,'接口说明');
+    const pinned=await api.pin(root.id,'folder_A');
+    eq('将子文件夹独立加入快捷访问',pinned.rootId,'folder_A');
+    eq('重复添加复用同一快捷项',(await api.pin(root.id,'folder_A')).id,pinned.id);
+    eq('文件不能作为目录快捷项',(await invokeDirectoryPlugin(api,'pin',{mountId:root.id,nodeId:'file_A'})).error,'BAD_REQUEST');
+    await api.remove(root.id);
+    eq('移除我的文档后独立文件夹仍能打开',(await api.open(pinned.id,'file_A')).url,'https://www.kdocs.cn/l/fixtureDoc');
+    ok('仅读接口，不创建或修改分享',calls.every(c=>c.options.method==='GET'));
+    ok('设置不保存凭据或接口地址',!/fixture-secret|access_token|developer.kdocs.cn/.test(JSON.stringify(saved)));
+    mode='missingLink';
+    eq('无分享时给出明确错误',(await invokeDirectoryPlugin(api,'open',{mountId:pinned.id,nodeId:'file_A'})).error,'LINK_UNAVAILABLE');
+    mode='limited';
+    eq('业务限流码归一化',(await invokeDirectoryPlugin(api,'list',{mountId:pinned.id,nodeId:'folder_A',refresh:true})).error,'RATE_LIMITED');
+    mode='forbidden';
+    eq('授权范围不匹配归一化为无权限',(await invokeDirectoryPlugin(api,'list',{mountId:pinned.id,nodeId:'folder_A',refresh:true})).error,'FORBIDDEN');
+    mode='expired';
+    eq('过期令牌要求重新连接',(await invokeDirectoryPlugin(api,'list',{mountId:pinned.id,nodeId:'folder_A',refresh:true})).error,'AUTH_REQUIRED');
+    eq('令牌过期后断开快捷项',(await api.mounts())[0].connected,false);
+    eq('不猜测普通网页链接中的目录 ID',(await invokeDirectoryPlugin(api,'connect',{providerId:'kdocs-personal',rootId:'https://www.kdocs.cn/mine/123',token:'fixture-secret'})).error,'BAD_REQUEST');
   });
 
   await run('S11', '飞书设备授权：本机凭据、注册、取消与刷新', async () => {

@@ -161,16 +161,10 @@ func TestDirectoryPluginDocumentAndWiki(t *testing.T) {
 		}
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(string(response)))}, nil
 	})
-	document, err := s.connect(map[string]any{"providerId": "feishu-document", "rootId": "https://tenant.feishu.cn/docx/docA", "name": "具体文档", "token": "fixture-secret"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	doc := document.(map[string]any)
-	if doc["rootKind"] != "document" || doc["rootId"] != "docA" {
-		t.Fatalf("single document: %v", doc)
-	}
-	if _, err := s.open(doc["id"].(string), "docA"); err != nil {
-		t.Fatal(err)
+	for _, providerID := range []string{"feishu-document", "feishu-wiki-document"} {
+		if _, err := s.connect(map[string]any{"providerId": providerID, "rootId": "docA", "token": "fixture-secret"}); err == nil {
+			t.Fatal("single document provider still available")
+		}
 	}
 	wiki, err := s.connect(map[string]any{"providerId": "feishu-wiki", "rootId": "https://tenant.feishu.cn/wiki/wikiRoot", "name": "Wiki目录", "token": "fixture-secret"})
 	if err != nil {
@@ -195,41 +189,109 @@ func TestDirectoryPluginDocumentAndWiki(t *testing.T) {
 	if err != nil || detail.Name != "知识库入口" {
 		t.Fatalf("wiki details: %v %v", detail, err)
 	}
-	wikiDocument, err := s.connect(map[string]any{"providerId": "feishu-wiki-document", "rootId": "https://tenant.feishu.cn/wiki/wikiRoot", "name": "具体Wiki文档", "token": "fixture-secret"})
+}
+
+func TestDirectoryPluginKdocsFolders(t *testing.T) {
+	isolateState(t)
+	data, err := os.ReadFile("../test/fixtures/kdocs-directory.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	single := wikiDocument.(map[string]any)
-	if single["rootKind"] != "document" {
-		t.Fatalf("wiki single: %v", single)
-	}
-	if _, err := s.open(single["id"].(string), "wikiRoot"); err != nil {
+	var fixture map[string]json.RawMessage
+	if err = json.Unmarshal(data, &fixture); err != nil {
 		t.Fatal(err)
 	}
-}
-
-func TestDirectoryPluginCancelsPendingConnection(t *testing.T) {
-	isolateState(t)
 	s := newDirectoryPlugins()
-	s.activate("old-project")
-	started := make(chan struct{})
-	done := make(chan error, 1)
+	s.activate("kdocs-project")
+	mode := ""
+	requests := []*http.Request{}
 	s.client.Transport = directoryRoundTrip(func(req *http.Request) (*http.Response, error) {
-		close(started)
-		<-req.Context().Done()
-		return nil, req.Context().Err()
+		requests = append(requests, req)
+		if req.URL.Host != "developer.kdocs.cn" || req.URL.Query().Get("access_token") != "fixture-secret" || req.Header.Get("Authorization") != "" || req.Method != "GET" {
+			t.Fatal("kdocs request or credential boundary")
+		}
+		response := fixture[mode]
+		if mode == "" {
+			switch {
+			case strings.HasSuffix(req.URL.Path, "/links"):
+				response = fixture["link"]
+			case req.URL.Query().Get("parent_id") != "":
+				response = fixture["nestedPage"]
+			case req.URL.Query().Has("offset"):
+				response = fixture["lastPage"]
+			default:
+				response = fixture["firstPage"]
+			}
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(string(response)))}, nil
 	})
-	go func() {
-		_, err := s.connect(map[string]any{"providerId": "feishu-drive", "rootId": "root", "token": "fixture-secret", "attemptId": "pending"})
-		done <- err
-	}()
-	<-started
-	s.activate("new-project")
-	err := <-done
-	if err == nil || err.Error() != "SUPERSEDED" {
-		t.Fatalf("old connection survived: %v", err)
+	result, err := s.connect(map[string]any{"providerId": "kdocs-personal", "name": "金山文档", "token": "fixture-secret"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(s.mounts()) != 0 {
-		t.Fatal("pending connection persisted across projects")
+	mount := result.(map[string]any)
+	id := mount["id"].(string)
+	root := mount["rootId"].(string)
+	if requests[0].URL.Query().Has("parent_id") {
+		t.Fatal("synthetic root sent as API folder")
+	}
+	session, _, _ := s.getNode(id, root)
+	page, err := s.page(session, root, "", false)
+	if err != nil || len(page.Entries) != 1 || page.Entries[0].ModifiedAt != "1700000010" {
+		t.Fatal("mapping", page, err)
+	}
+	var cursor map[string]any
+	_ = json.Unmarshal([]byte(page.NextCursor), &cursor)
+	if cursor["offset"] != float64(0) || cursor["filter"] != "file" {
+		t.Fatal("composite cursor", cursor)
+	}
+	page, err = s.page(session, root, page.NextCursor, false)
+	if err != nil || page.NextCursor != "" || page.Entries[0].ID != "file_B" {
+		t.Fatal("pagination", page, err)
+	}
+	if requests[len(requests)-1].URL.Query().Get("filter") != "file" {
+		t.Fatal("filter not replayed")
+	}
+	if _, err = s.page(session, root, `{"offset":999,"filter":"file"}`, false); err == nil {
+		t.Fatal("forged cursor accepted")
+	}
+	if _, err = s.page(session, "folder_A", "", false); err != nil {
+		t.Fatal(err)
+	}
+	pinned, err := s.pin(id, "folder_A")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pinnedID := pinned.(map[string]any)["id"].(string)
+	duplicate, err := s.pin(id, "folder_A")
+	if err != nil || duplicate.(map[string]any)["id"] != pinnedID {
+		t.Fatal("duplicate folder shortcut", err)
+	}
+	if _, err = s.pin(id, "file_A"); err == nil {
+		t.Fatal("single file pinned as folder")
+	}
+	s.remove(id)
+	opened, err := s.open(pinnedID, "file_A")
+	if err != nil || opened.(map[string]any)["url"] != "https://www.kdocs.cn/l/fixtureDoc" {
+		t.Fatal(opened, err)
+	}
+	saved, _ := json.Marshal(loadState())
+	if strings.Contains(string(saved), "fixture-secret") || strings.Contains(string(saved), "access_token") {
+		t.Fatal("persisted credential")
+	}
+	mode = "missingLink"
+	if _, err = s.open(pinnedID, "file_A"); err == nil || err.Error() != "LINK_UNAVAILABLE" {
+		t.Fatal("missing share link", err)
+	}
+	pinnedSession, _, _ := s.getNode(pinnedID, "folder_A")
+	for _, pair := range [][2]string{{"limited", "RATE_LIMITED"}, {"forbidden", "FORBIDDEN"}, {"expired", "AUTH_REQUIRED"}} {
+		name, expected := pair[0], pair[1]
+		mode = name
+		if _, err = s.page(pinnedSession, "folder_A", "", true); err == nil || err.Error() != expected {
+			t.Fatal(name, err)
+		}
+	}
+	if _, err = s.connect(map[string]any{"providerId": "kdocs-personal", "rootId": "https://www.kdocs.cn/mine/123", "token": "fixture-secret"}); err == nil {
+		t.Fatal("web URL treated as application-scoped folder ID")
 	}
 }

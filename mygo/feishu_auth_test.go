@@ -159,7 +159,7 @@ func TestDirectoryDeviceAuthConnection(t *testing.T) {
 		if req.URL.Host != "open.feishu.cn" || req.Header.Get("Authorization") != "Bearer access-fixture" {
 			t.Fatal("directory credential boundary")
 		}
-		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(string(fixture["details"])))}, nil
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(string(fixture["firstPage"])))}, nil
 	})
 	app := &App{directoryPlugins: service}
 	response := app.DirectoryCall("authStart", map[string]any{"mode": "application", "attemptId": "connect", "appId": "cli_fixture", "appSecret": "own-secret"})
@@ -171,7 +171,7 @@ func TestDirectoryDeviceAuthConnection(t *testing.T) {
 	if response["error"] != nil {
 		t.Fatal(response)
 	}
-	response = app.DirectoryCall("connect", map[string]any{"providerId": "feishu-document", "rootId": "docA", "name": "授权文档", "authId": "connect"})
+	response = app.DirectoryCall("connect", map[string]any{"providerId": "feishu-drive", "rootId": "root", "name": "授权文档", "authId": "connect"})
 	if response["error"] != nil {
 		t.Fatal(response)
 	}

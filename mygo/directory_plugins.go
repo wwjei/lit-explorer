@@ -21,6 +21,13 @@ import (
 )
 
 type directoryOperation struct {
+	URL        string `json:"url"`
+	Name       string `json:"name"`
+	Pagination *struct {
+		Type   string `json:"type"`
+		Offset string `json:"offset"`
+		Filter string `json:"filter"`
+	} `json:"pagination"`
 	Node    string            `json:"node"`
 	Method  string            `json:"method"`
 	Path    string            `json:"path"`
@@ -32,11 +39,19 @@ type directoryOperation struct {
 	Fields  map[string]string `json:"fields"`
 }
 type directoryProvider struct {
-	InputHint string `json:"inputHint"`
-	Root      struct {
-		Kind        string            `json:"kind"`
-		DefaultType string            `json:"defaultType"`
-		URLTypes    map[string]string `json:"urlTypes"`
+	Authentication *struct {
+		Type      string `json:"type"`
+		Parameter string `json:"parameter"`
+	} `json:"authentication"`
+	ErrorCodes   map[string]string   `json:"errorCodes"`
+	DocumentLink *directoryOperation `json:"documentLink"`
+	InputHint    string              `json:"inputHint"`
+	Root         struct {
+		Kind          string            `json:"kind"`
+		DefaultID     string            `json:"defaultId"`
+		OmitDefaultID bool              `json:"omitDefaultId"`
+		DefaultType   string            `json:"defaultType"`
+		URLTypes      map[string]string `json:"urlTypes"`
 	} `json:"root"`
 	Initialize *directoryOperation `json:"initialize"`
 	Success    struct {
@@ -186,6 +201,9 @@ func directoryNormalize(raw any, p directoryProvider, fields map[string]string) 
 		if strings.HasPrefix(field, "=") {
 			return strings.TrimPrefix(field, "=")
 		}
+		if number, ok := directoryGet(raw, field).(float64); ok && k == "modifiedAt" {
+			return fmt.Sprintf("%.0f", number)
+		}
 		return directoryText(directoryGet(raw, field), max)
 	}
 	n := directoryNode{DocumentID: value("documentId", 256), DocumentType: value("documentType", 256), ScopeID: value("scopeId", 256), ID: value("id", 256), Name: value("name", 256), Type: value("type", 256), URL: value("url", 4096), ModifiedAt: value("modifiedAt", 256), Kind: "document"}
@@ -225,11 +243,16 @@ func newDirectoryPlugins() *directoryPluginService {
 	}
 	for _, p := range catalog.Providers {
 		origin, err := url.Parse(p.APIOrigin)
-		if err != nil || origin.Scheme != "https" || origin.User != nil || origin.Host == "" || origin.Path != "" || origin.RawQuery != "" || origin.Fragment != "" || !directoryID.MatchString(p.ID) || len(p.DocumentHosts) == 0 || p.Success.Field == "" || (p.Root.Kind != "directory" && p.Root.Kind != "document") {
+		if err != nil || origin.Scheme != "https" || origin.User != nil || origin.Host == "" || origin.Path != "" || origin.RawQuery != "" || origin.Fragment != "" || !directoryID.MatchString(p.ID) || len(p.DocumentHosts) == 0 || p.Success.Field == "" || p.Root.Kind != "directory" {
 			continue
 		}
 		valid := true
-		operations := []directoryOperation{p.List, p.Details}
+		operations := []directoryOperation{p.List}
+		if p.Details.Method != "" {
+			operations = append(operations, p.Details)
+		} else if p.DocumentLink == nil {
+			valid = false
+		}
 		if p.Initialize != nil {
 			operations = append(operations, *p.Initialize)
 		}
@@ -237,6 +260,18 @@ func newDirectoryPlugins() *directoryPluginService {
 			if (op.Method != "GET" && op.Method != "POST") || (strings.HasPrefix(op.Path, "//") || strings.Contains(op.Path, "/../") || !directoryPath.MatchString(op.Path)) || op.Entries == "" || len(op.Fields) == 0 {
 				valid = false
 			}
+		}
+		if p.DocumentLink != nil {
+			op := p.DocumentLink
+			if (op.Method != "GET" && op.Method != "POST") || strings.HasPrefix(op.Path, "//") || strings.Contains(op.Path, "/../") || !directoryPath.MatchString(op.Path) || op.URL == "" {
+				valid = false
+			}
+		}
+		if p.Authentication != nil && (p.Authentication.Type != "query" || p.Authentication.Parameter != "access_token") {
+			valid = false
+		}
+		if p.List.Pagination != nil && p.List.Pagination.Type != "offset-filter" {
+			valid = false
 		}
 		if valid {
 			s.providers[p.ID] = p
@@ -337,7 +372,23 @@ func (s *directoryPluginService) request(session *directorySession, op directory
 	if docType == "" {
 		docType = node.Type
 	}
-	vars := map[string]string{"nodeId": node.ID, "nodeType": node.Type, "cursor": cursor, "scopeId": space, "documentId": docID, "documentType": docType}
+	parentID := node.ID
+	if session.provider.Root.OmitDefaultID && node.ID == session.provider.Root.DefaultID {
+		parentID = ""
+	}
+	offset, filter := "", ""
+	if session.provider.List.Pagination != nil && cursor != "" {
+		var page struct {
+			Offset int64  `json:"offset"`
+			Filter string `json:"filter"`
+		}
+		if json.Unmarshal([]byte(cursor), &page) != nil {
+			return nil, fmt.Errorf("BAD_REQUEST")
+		}
+		offset = fmt.Sprint(page.Offset)
+		filter = page.Filter
+	}
+	vars := map[string]string{"parentId": parentID, "offset": offset, "filter": filter, "nodeId": node.ID, "nodeType": node.Type, "cursor": cursor, "scopeId": space, "documentId": docID, "documentType": docType}
 	path := op.Path
 	for key, value := range vars {
 		path = strings.ReplaceAll(path, "$"+key, url.PathEscape(value))
@@ -350,7 +401,7 @@ func (s *directoryPluginService) request(session *directorySession, op directory
 			query.Set(key, fmt.Sprint(v))
 		}
 	}
-	target.RawQuery = query.Encode()
+
 	var body io.Reader
 	if op.Body != nil {
 		data, _ := json.Marshal(directorySubstitute(op.Body, vars))
@@ -358,18 +409,25 @@ func (s *directoryPluginService) request(session *directorySession, op directory
 	}
 	ctx, cancel := context.WithTimeout(session.ctx, 15*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, op.Method, target.String(), body)
-	if err != nil {
-		return nil, fmt.Errorf("BAD_REQUEST")
-	}
 	token := session.token
+	var err error
 	if session.credential != nil {
 		token, err = s.auth.token(session.credential, session.ctx)
 		if err != nil {
 			return nil, err
 		}
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	if session.provider.Authentication != nil {
+		query.Set(session.provider.Authentication.Parameter, token)
+	}
+	target.RawQuery = query.Encode()
+	req, err := http.NewRequestWithContext(ctx, op.Method, target.String(), body)
+	if err != nil {
+		return nil, fmt.Errorf("BAD_REQUEST")
+	}
+	if session.provider.Authentication == nil {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := s.client.Do(req)
 	if err != nil {
@@ -411,6 +469,9 @@ func (s *directoryPluginService) request(session *directorySession, op directory
 		if reflect.DeepEqual(code, float64(auth)) {
 			return nil, fmt.Errorf("AUTH_REQUIRED")
 		}
+	}
+	if mapped := session.provider.ErrorCodes[fmt.Sprint(code)]; mapped != "" {
+		return nil, fmt.Errorf("%s", mapped)
 	}
 	if !reflect.DeepEqual(code, session.provider.Success.Value) {
 		return nil, fmt.Errorf("PROVIDER_ERROR")
@@ -467,12 +528,30 @@ func (s *directoryPluginService) page(session *directorySession, nodeID, cursor 
 		entries = append(entries, n)
 	}
 	next := ""
-	more, _ := directoryGet(result, session.provider.List.HasMore).(bool)
-	if more {
-		next = directoryText(directoryGet(result, session.provider.List.Cursor), 2048)
-		if next == "" || next == cursor {
+	if spec := session.provider.List.Pagination; spec != nil {
+		offset, ok := directoryGet(result, spec.Offset).(float64)
+		filter := directoryText(directoryGet(result, spec.Filter), 32)
+		if !ok || offset < -1 || offset > 9007199254740991 || offset != float64(int64(offset)) || (offset != -1 && filter != "folder" && filter != "file") {
 			return empty, fmt.Errorf("BAD_RESPONSE")
 		}
+		if offset != -1 {
+			encoded, _ := json.Marshal(struct {
+				Offset int64  `json:"offset"`
+				Filter string `json:"filter"`
+			}{int64(offset), filter})
+			next = string(encoded)
+		}
+	} else {
+		more, _ := directoryGet(result, session.provider.List.HasMore).(bool)
+		if more {
+			next = directoryText(directoryGet(result, session.provider.List.Cursor), 2048)
+			if next == "" {
+				return empty, fmt.Errorf("BAD_RESPONSE")
+			}
+		}
+	}
+	if next != "" && next == cursor {
+		return empty, fmt.Errorf("BAD_RESPONSE")
 	}
 	page := directoryPage{Directory: node, Entries: entries, NextCursor: next}
 	s.mu.Lock()
@@ -503,6 +582,9 @@ func (s *directoryPluginService) page(session *directorySession, nodeID, cursor 
 }
 func directoryRootConfig(provider directoryProvider, raw string) (string, string, error) {
 	root, typeID := raw, provider.Root.DefaultType
+	if root == "" {
+		root = provider.Root.DefaultID
+	}
 	if strings.HasPrefix(strings.ToLower(raw), "https:") {
 		safe, err := directoryURL(raw, provider)
 		if err != nil {
@@ -532,8 +614,15 @@ func directoryRootConfig(provider directoryProvider, raw string) (string, string
 	return root, typeID, nil
 }
 func (s *directoryPluginService) connect(input map[string]any) (any, error) {
+	return s.connectWithCredential(input, nil, nil)
+}
+func (s *directoryPluginService) connectWithCredential(input map[string]any, credential *feishuFlow, expectedSeq *int) (any, error) {
 	s.mu.Lock()
 	seq := s.seq
+	if expectedSeq != nil && seq != *expectedSeq {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("SUPERSEDED")
+	}
 	if s.root == "" {
 		s.mu.Unlock()
 		return nil, fmt.Errorf("NO_WORKSPACE")
@@ -564,7 +653,7 @@ func (s *directoryPluginService) connect(input map[string]any) (any, error) {
 	}
 	token := directoryText(input["token"], 4096)
 	authID := directoryText(input["authId"], 4096)
-	if !exists || !directoryRemoteID(m.RootID) || (authID == "" && (token == "" || strings.ContainsAny(token, " \t\r\n"))) || (authID != "" && (p.APIOrigin != "https://open.feishu.cn" || !strings.HasPrefix(p.ID, "feishu-"))) {
+	if !exists || !directoryRemoteID(m.RootID) || (authID == "" && credential == nil && (token == "" || strings.ContainsAny(token, " \t\r\n"))) || (authID != "" && (p.APIOrigin != "https://open.feishu.cn" || !strings.HasPrefix(p.ID, "feishu-"))) {
 		return nil, fmt.Errorf("BAD_REQUEST")
 	}
 	if m.ID == "" {
@@ -583,7 +672,7 @@ func (s *directoryPluginService) connect(input map[string]any) (any, error) {
 		rootType = p.Root.DefaultType
 	}
 	root := directoryNode{ID: m.RootID, Name: m.Name, Type: rootType, Kind: p.Root.Kind}
-	session := &directorySession{attemptID: directoryText(input["attemptId"], 128), cursors: map[string]map[string]bool{}, mount: m, provider: p, token: token, seq: seq, ctx: ctx, cancel: cancel, nodes: map[string]directoryNode{root.ID: root}, cache: map[string]directoryCache{}}
+	session := &directorySession{credential: credential, attemptID: directoryText(input["attemptId"], 128), cursors: map[string]map[string]bool{}, mount: m, provider: p, token: token, seq: seq, ctx: ctx, cancel: cancel, nodes: map[string]directoryNode{root.ID: root}, cache: map[string]directoryCache{}}
 	if authID != "" {
 		var err error
 		session.credential, err = s.auth.take(authID)
@@ -617,20 +706,9 @@ func (s *directoryPluginService) connect(input map[string]any) (any, error) {
 		session.nodes[root.ID] = root
 		session.scopeID = root.ScopeID
 	}
-	if root.Kind == "directory" {
-		if _, err := s.page(session, root.ID, "", false); err != nil {
-			cancel()
-			return nil, err
-		}
-	} else {
-		detail, err := s.documentDetails(session, root)
-		if err == nil {
-			_, err = directoryURL(detail.URL, p)
-		}
-		if err != nil {
-			cancel()
-			return nil, err
-		}
+	if _, err := s.page(session, root.ID, "", false); err != nil {
+		cancel()
+		return nil, err
 	}
 
 	s.mu.Lock()
@@ -697,10 +775,10 @@ func (s *directoryPluginService) details(mountID, nodeID string) (directoryNode,
 	if err != nil {
 		return node, err
 	}
-	if node.Kind != "directory" {
+	if node.Kind != "directory" && session.provider.Details.Method != "" {
 		return s.documentDetails(session, node)
 	}
-	if session.provider.Initialize == nil {
+	if session.provider.Initialize == nil || node.Kind != "directory" {
 		return node, nil
 	}
 	result, err := s.request(session, *session.provider.Initialize, node, "")
@@ -724,6 +802,25 @@ func (s *directoryPluginService) open(mountID, nodeID string) (any, error) {
 	if node.Kind != "document" && node.DocumentID == "" {
 		return nil, fmt.Errorf("BAD_REQUEST")
 	}
+	if op := session.provider.DocumentLink; op != nil {
+		body, err := s.request(session, *op, node, "")
+		if err != nil {
+			return nil, err
+		}
+		raw := directoryText(directoryGet(body, op.URL), 4096)
+		if raw == "" {
+			return nil, fmt.Errorf("LINK_UNAVAILABLE")
+		}
+		target, err := directoryURL(raw, session.provider)
+		if err != nil {
+			return nil, err
+		}
+		name := directoryText(directoryGet(body, op.Name), 256)
+		if name == "" {
+			name = node.Name
+		}
+		return map[string]any{"name": name, "url": target}, nil
+	}
 	detail, err := s.documentDetails(session, node)
 	if err != nil {
 		return nil, err
@@ -733,6 +830,29 @@ func (s *directoryPluginService) open(mountID, nodeID string) (any, error) {
 		return nil, err
 	}
 	return map[string]any{"name": detail.Name, "url": target}, nil
+}
+func (s *directoryPluginService) pin(mountID, nodeID string) (any, error) {
+	source, node, err := s.getNode(mountID, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	if node.Kind != "directory" {
+		return nil, fmt.Errorf("BAD_REQUEST")
+	}
+	s.mu.Lock()
+	seq := s.seq
+	if source.seq != seq || source.ctx.Err() != nil {
+		s.mu.Unlock()
+		return nil, fmt.Errorf("SUPERSEDED")
+	}
+	input := map[string]any{"providerId": source.provider.ID, "rootId": node.ID, "name": node.Name, "token": source.token}
+	for _, m := range s.savedLocked() {
+		if m.ProviderID == source.provider.ID && m.RootID == node.ID {
+			input["id"] = m.ID
+		}
+	}
+	s.mu.Unlock()
+	return s.connectWithCredential(input, source.credential, &seq)
 }
 func (s *directoryPluginService) remove(id string) {
 	s.mu.Lock()
@@ -767,7 +887,7 @@ func (a *App) DirectoryCall(method string, args map[string]any) map[string]any {
 		list := []map[string]any{}
 		for _, providerID := range s.providerOrder {
 			p := s.providers[providerID]
-			list = append(list, map[string]any{"id": p.ID, "name": p.Name, "version": p.Version, "rootKind": p.Root.Kind, "inputHint": p.InputHint, "apiVersion": 1})
+			list = append(list, map[string]any{"id": p.ID, "name": p.Name, "version": p.Version, "rootKind": p.Root.Kind, "defaultRootId": p.Root.DefaultID, "browserAuth": strings.HasPrefix(p.ID, "feishu-"), "inputHint": p.InputHint, "apiVersion": 1})
 		}
 		value = list
 	case "mounts":
@@ -815,6 +935,8 @@ func (a *App) DirectoryCall(method string, args map[string]any) map[string]any {
 		value, err = s.details(mountID, nodeID)
 	case "open":
 		value, err = s.open(mountID, nodeID)
+	case "pin":
+		value, err = s.pin(mountID, nodeID)
 	case "remove":
 		s.remove(mountID)
 		value = true

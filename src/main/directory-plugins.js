@@ -15,11 +15,15 @@ function providers(manifest = catalog) {
   for (const p of manifest.providers) {
     const url = new URL(p.apiOrigin);
     if (!id(p.id) || registry.has(p.id) || url.protocol !== 'https:' || url.origin !== p.apiOrigin
-      || url.username || !Array.isArray(p.documentHosts) || !p.documentHosts.length || !p.success || !p.success.field || !p.root || !['directory', 'document'].includes(p.root.kind)) throw fail('PLUGIN_MANIFEST');
-    for (const op of [p.list, p.details, ...(p.initialize ? [p.initialize] : [])]) {
+      || url.username || !Array.isArray(p.documentHosts) || !p.documentHosts.length || !p.success || !p.success.field || !p.root || p.root.kind !== 'directory') throw fail('PLUGIN_MANIFEST');
+    for (const op of [p.list, ...(p.details ? [p.details] : []), ...(p.initialize ? [p.initialize] : [])]) {
       if (!op || !['GET', 'POST'].includes(op.method) || !/^\/(?!\/)[a-z0-9_/$:.-]+$/i.test(op.path) || op.path.split('/').includes('..')
         || !op.fields || !op.entries) throw fail('PLUGIN_MANIFEST');
     }
+    if (!p.details && !p.documentLink) throw fail('PLUGIN_MANIFEST');
+    if (p.documentLink && (!['GET', 'POST'].includes(p.documentLink.method) || !/^\/(?!\/)[a-z0-9_/$:.-]+$/i.test(p.documentLink.path) || p.documentLink.path.split('/').includes('..') || !p.documentLink.url)) throw fail('PLUGIN_MANIFEST');
+    if (p.authentication && (p.authentication.type !== 'query' || p.authentication.parameter !== 'access_token')) throw fail('PLUGIN_MANIFEST');
+    if (p.list.pagination && p.list.pagination.type !== 'offset-filter') throw fail('PLUGIN_MANIFEST');
     registry.set(p.id, p);
   }
   return registry;
@@ -45,7 +49,7 @@ function normalize(raw, provider, fields) {
   const node = {};
   for (const [key, field] of Object.entries(fields)) {
     const value = field.startsWith('=') ? field.slice(1) : get(raw, field);
-    node[key] = key === 'hasChildren' && typeof value === 'boolean' ? value : text(value, key === 'url' ? 4096 : 256);
+    node[key] = key === 'modifiedAt' && Number.isFinite(value) ? String(value) : key === 'hasChildren' && typeof value === 'boolean' ? value : text(value, key === 'url' ? 4096 : 256);
   }
   if (!remoteID(node.id) || !remoteID(node.type) || !node.name) throw fail('BAD_RESPONSE');
   for (const key of ['scopeId', 'documentId', 'documentType']) if (node[key] && !remoteID(node[key])) throw fail('BAD_RESPONSE');
@@ -56,7 +60,7 @@ function normalize(raw, provider, fields) {
 }
 
 function rootConfig(provider, raw) {
-  let rootId = raw, rootType = provider.root.defaultType;
+  let rootId = raw || provider.root.defaultId, rootType = provider.root.defaultType;
   if (/^https:/i.test(raw || '')) {
     const url = new URL(safeDocumentUrl(raw, provider));
     const path = url.pathname.replace(/^\/|\/$/g, '');
@@ -110,7 +114,8 @@ function createDirectoryPlugins({ store, fetch: fetcher = globalThis.fetch, mani
   async function request(s, op, node, cursor = '') {
     if (s.abort.signal.aborted) throw fail('SUPERSEDED');
     if (s.pending >= 4) throw fail('BUSY');
-    const vars = { nodeId: node.id, nodeType: node.type, cursor, scopeId: node.scopeId || s.scopeId || '', documentId: node.documentId || node.id, documentType: node.documentType || node.type };
+    const pagination = s.provider.list.pagination && cursor ? JSON.parse(cursor) : {};
+    const vars = { parentId: s.provider.root.omitDefaultId && node.id === s.provider.root.defaultId ? '' : node.id, offset: pagination.offset ?? '', filter: pagination.filter || '', nodeId: node.id, nodeType: node.type, cursor, scopeId: node.scopeId || s.scopeId || '', documentId: node.documentId || node.id, documentType: node.documentType || node.type };
     const requestPath = op.path.replace(/\$(nodeId|nodeType|scopeId|documentId|documentType)\b/g, (_m, key) => { if (!remoteID(vars[key])) throw fail('BAD_RESPONSE'); return encodeURIComponent(vars[key]); });
     const url = new URL(requestPath, s.provider.apiOrigin);
     for (const [k, v] of Object.entries(substitute(op.query || {}, vars))) if (v !== '') url.searchParams.set(k, String(v));
@@ -120,8 +125,12 @@ function createDirectoryPlugins({ store, fetch: fetcher = globalThis.fetch, mani
     const timer = setTimeout(abort, 15000);
     s.pending++;
     try {
+      const token = s.credential ? await s.credential.token(s.abort.signal) : s.token;
+      const headers = { 'Content-Type': 'application/json' };
+      if (s.provider.authentication?.type === 'query') url.searchParams.set(s.provider.authentication.parameter, token);
+      else headers.Authorization = 'Bearer ' + token;
       const response = await fetcher(url.toString(), { method: op.method, redirect: 'error', signal: controller.signal,
-        headers: { Authorization: 'Bearer ' + (s.credential ? await s.credential.token(s.abort.signal) : s.token), 'Content-Type': 'application/json' },
+        headers,
         ...(op.body ? { body: JSON.stringify(substitute(op.body, vars)) } : {}) });
       if (response.status === 401) throw fail('AUTH_REQUIRED');
       if (response.status === 403) throw fail('FORBIDDEN');
@@ -143,6 +152,8 @@ function createDirectoryPlugins({ store, fetch: fetcher = globalThis.fetch, mani
       try { body = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { throw fail('BAD_RESPONSE'); }
       if (!body || typeof body !== 'object' || Array.isArray(body)) throw fail('BAD_RESPONSE');
       if ((s.provider.authCodes || []).includes(get(body, s.provider.success.field))) throw fail('AUTH_REQUIRED');
+      const mappedError = s.provider.errorCodes?.[get(body, s.provider.success.field)];
+      if (mappedError) throw fail(mappedError);
       if (get(body, s.provider.success.field) !== s.provider.success.value) throw fail('PROVIDER_ERROR');
       if (s.abort.signal.aborted) throw fail('SUPERSEDED');
       return body;
@@ -167,8 +178,16 @@ function createDirectoryPlugins({ store, fetch: fetcher = globalThis.fetch, mani
     const raw = get(body, s.provider.list.entries);
     if (!Array.isArray(raw) || raw.length > 200) throw fail('BAD_RESPONSE');
     const entries = raw.map((entry) => normalize(entry, s.provider, s.provider.list.fields));
-    const nextCursor = get(body, s.provider.list.hasMore) ? text(get(body, s.provider.list.cursor), 2048) : '';
-    if (get(body, s.provider.list.hasMore) && (!nextCursor || nextCursor === cursor)) throw fail('BAD_RESPONSE');
+    let nextCursor = '';
+    if (s.provider.list.pagination) {
+      const spec = s.provider.list.pagination, offset = get(body, spec.offset), filter = get(body, spec.filter);
+      if (!Number.isSafeInteger(offset) || offset < -1 || (offset !== -1 && !['folder', 'file'].includes(filter))) throw fail('BAD_RESPONSE');
+      if (offset !== -1) nextCursor = JSON.stringify({ offset, filter });
+    } else {
+      nextCursor = get(body, s.provider.list.hasMore) ? text(get(body, s.provider.list.cursor), 2048) : '';
+      if (get(body, s.provider.list.hasMore) && !nextCursor) throw fail('BAD_RESPONSE');
+    }
+    if (nextCursor && nextCursor === cursor) throw fail('BAD_RESPONSE');
     if (s.nodes.size + entries.length > 10000) throw fail('LIMIT');
     entries.forEach((entry) => s.nodes.set(entry.id, entry));
     if (nextCursor) { if (!s.cursors.has(nodeId)) s.cursors.set(nodeId, new Set()); s.cursors.get(nodeId).add(nextCursor); }
@@ -177,19 +196,20 @@ function createDirectoryPlugins({ store, fetch: fetcher = globalThis.fetch, mani
     s.cache.set(cacheKey, { until: Date.now() + 60000, value });
     return value;
   }
-  async function connect(input) {
+  async function connect(input, credentialOverride = null, expectedGeneration = generation) {
     const seq = generation;
+    if (expectedGeneration !== seq) throw fail('SUPERSEDED');
     if (!project) throw fail('NO_WORKSPACE');
     await mounts();
     const previous = input.id && saved.find((m) => m.id === input.id);
     if (input.id && !previous) throw fail('NOT_FOUND');
     const provider = registry.get(previous ? previous.providerId : input.providerId);
-    if (!provider || (!input.authId && (!text(input.token, 4096) || /\s/.test(input.token))) || (input.authId && (provider.apiOrigin !== 'https://open.feishu.cn' || !provider.id.startsWith('feishu-')))) throw fail('BAD_REQUEST');
+    if (!provider || (!input.authId && !credentialOverride && (!text(input.token, 4096) || /\s/.test(input.token))) || (input.authId && (provider.apiOrigin !== 'https://open.feishu.cn' || !provider.id.startsWith('feishu-')))) throw fail('BAD_REQUEST');
     const config = previous || { id: randomUUID(), providerId: input.providerId,
       ...rootConfig(provider, input.rootId), name: text(input.name) || provider.name };
     if (!previous && saved.length >= 32) throw fail('LIMIT');
     let root = { id: config.rootId, name: config.name, type: config.rootType || provider.root.defaultType, kind: provider.root.kind };
-    const credential = input.authId ? auth.take(input.authId) : null;
+    const credential = credentialOverride || (input.authId ? auth.take(input.authId) : null);
     const s = { provider, credential, attemptId: text(input.attemptId, 128), token: input.token, nodes: new Map([[root.id, root]]), cache: new Map(), cursors: new Map(), abort: new AbortController(), pending: 0 };
     // 先验证凭据和根目录，成功才保存挂载；失败不覆盖已有连接。
     connecting.add(s);
@@ -202,8 +222,7 @@ function createDirectoryPlugins({ store, fetch: fetcher = globalThis.fetch, mani
         s.nodes.set(root.id, root); s.scopeId = root.scopeId;
 
       }
-      if (root.kind === 'directory') await page(s, root.id);
-      else { const detail = await documentDetails(s, root); safeDocumentUrl(detail.url, provider); }
+      await page(s, root.id);
       return await mutate(async () => {
         if (seq !== generation) throw fail('SUPERSEDED');
         if (previous && !saved.some((m) => m.id === previous.id)) throw fail('NOT_FOUND');
@@ -229,7 +248,7 @@ function createDirectoryPlugins({ store, fetch: fetcher = globalThis.fetch, mani
   }
   async function details(mountId, nodeId) {
     const s = session(mountId), node = nodeFor(s, nodeId);
-    if (node.kind !== 'directory') return documentDetails(s, node);
+    if (node.kind !== 'directory') return s.provider.details ? documentDetails(s, node) : { ...node };
     if (!s.provider.initialize) return { ...node };
     const body = await request(s, s.provider.initialize, node);
     const detail = normalize(get(body, s.provider.initialize.node), s.provider, s.provider.initialize.fields);
@@ -248,14 +267,29 @@ function createDirectoryPlugins({ store, fetch: fetcher = globalThis.fetch, mani
   }
   return {
     activate, mounts, connect, details, remove,
+    pin: async (mountId, nodeId) => {
+      const s = session(mountId), node = nodeFor(s, nodeId);
+      if (node.kind !== 'directory') throw fail('BAD_REQUEST');
+      const seq = generation;
+      await mounts();
+      if (seq !== generation || s.abort.signal.aborted) throw fail('SUPERSEDED');
+      const previous = saved.find((m) => m.providerId === s.provider.id && m.rootId === node.id);
+      return connect({ id: previous?.id, providerId: s.provider.id, rootId: node.id, name: node.name, token: s.token }, s.credential, seq);
+    },
     authStart: (input) => { if (!project) throw fail('NO_WORKSPACE'); return auth.start(input); },
     authPoll: (input) => auth.poll(input.authId),
     cancel: (attemptId) => { auth.cancel(attemptId); for (const s of connecting) if (s.attemptId === attemptId) s.abort.abort(); return true; },
-    providers: () => [...registry.values()].map(({ id, name, version, root, inputHint }) => ({ id, name, version, rootKind: root.kind, inputHint, apiVersion: 1 })),
+    providers: () => [...registry.values()].map(({ id, name, version, root, inputHint }) => ({ id, name, version, rootKind: root.kind, defaultRootId: root.defaultId || '', browserAuth: id.startsWith('feishu-'), inputHint, apiVersion: 1 })),
     list: (mountId, nodeId, cursor, refresh) => page(session(mountId), nodeId, cursor, refresh),
     open: async (mountId, nodeId) => {
       const s = session(mountId), node = nodeFor(s, nodeId);
       if (node.kind !== 'document' && !node.documentId) throw fail('BAD_REQUEST');
+      if (s.provider.documentLink) {
+        const body = await request(s, s.provider.documentLink, node);
+        const url = get(body, s.provider.documentLink.url);
+        if (!url) throw fail('LINK_UNAVAILABLE');
+        return { name: text(get(body, s.provider.documentLink.name)) || node.name, url: safeDocumentUrl(url, s.provider) };
+      }
       const detail = await documentDetails(s, node);
       return { name: detail.name, url: safeDocumentUrl(detail.url, s.provider) };
     }
@@ -274,6 +308,7 @@ async function invokeDirectoryPlugin(service, method, args = {}) {
     else if (method === 'list') value = await service.list(args.mountId, args.nodeId, args.cursor || '', args.refresh === true);
     else if (method === 'details') value = await service.details(args.mountId, args.nodeId);
     else if (method === 'open') value = await service.open(args.mountId, args.nodeId);
+    else if (method === 'pin') value = await service.pin(args.mountId, args.nodeId);
     else if (method === 'remove') { await service.remove(args.mountId); value = true; }
     else return { error: 'BAD_REQUEST' };
     return { value };
