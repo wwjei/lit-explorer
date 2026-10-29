@@ -82,20 +82,22 @@ type directoryCache struct {
 	until time.Time
 }
 type directorySession struct {
-	scopeID   string
-	attemptID string
-	cursors   map[string]map[string]bool
-	mount     directoryMount
-	provider  directoryProvider
-	token     string
-	seq       int
-	ctx       context.Context
-	cancel    context.CancelFunc
-	nodes     map[string]directoryNode
-	cache     map[string]directoryCache
-	pending   int
+	credential *feishuFlow
+	scopeID    string
+	attemptID  string
+	cursors    map[string]map[string]bool
+	mount      directoryMount
+	provider   directoryProvider
+	token      string
+	seq        int
+	ctx        context.Context
+	cancel     context.CancelFunc
+	nodes      map[string]directoryNode
+	cache      map[string]directoryCache
+	pending    int
 }
 type directoryPluginService struct {
+	auth          *feishuAuth
 	providerOrder []string
 	connecting    map[*directorySession]bool
 	mu            sync.Mutex
@@ -209,6 +211,7 @@ func directoryNormalize(raw any, p directoryProvider, fields map[string]string) 
 }
 func newDirectoryPlugins() *directoryPluginService {
 	s := &directoryPluginService{connecting: map[*directorySession]bool{}, providers: map[string]directoryProvider{}, sessions: map[string]*directorySession{}, client: &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return fmt.Errorf("REDIRECT_DENIED") }}}
+	s.auth = newFeishuAuth(s.client)
 	raw, err := frontendFS.ReadFile("frontend/src/shared/directory-providers.json")
 	if err != nil {
 		return s
@@ -243,6 +246,7 @@ func newDirectoryPlugins() *directoryPluginService {
 	return s
 }
 func (s *directoryPluginService) activate(root string) {
+	s.auth.clear()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, session := range s.sessions {
@@ -358,7 +362,14 @@ func (s *directoryPluginService) request(session *directorySession, op directory
 	if err != nil {
 		return nil, fmt.Errorf("BAD_REQUEST")
 	}
-	req.Header.Set("Authorization", "Bearer "+session.token)
+	token := session.token
+	if session.credential != nil {
+		token, err = s.auth.token(session.credential, session.ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := s.client.Do(req)
 	if err != nil {
@@ -552,7 +563,8 @@ func (s *directoryPluginService) connect(input map[string]any) (any, error) {
 		m.RootType = rootType
 	}
 	token := directoryText(input["token"], 4096)
-	if !exists || !directoryRemoteID(m.RootID) || token == "" || strings.ContainsAny(token, " \t\r\n") {
+	authID := directoryText(input["authId"], 4096)
+	if !exists || !directoryRemoteID(m.RootID) || (authID == "" && (token == "" || strings.ContainsAny(token, " \t\r\n"))) || (authID != "" && (p.APIOrigin != "https://open.feishu.cn" || !strings.HasPrefix(p.ID, "feishu-"))) {
 		return nil, fmt.Errorf("BAD_REQUEST")
 	}
 	if m.ID == "" {
@@ -572,6 +584,14 @@ func (s *directoryPluginService) connect(input map[string]any) (any, error) {
 	}
 	root := directoryNode{ID: m.RootID, Name: m.Name, Type: rootType, Kind: p.Root.Kind}
 	session := &directorySession{attemptID: directoryText(input["attemptId"], 128), cursors: map[string]map[string]bool{}, mount: m, provider: p, token: token, seq: seq, ctx: ctx, cancel: cancel, nodes: map[string]directoryNode{root.ID: root}, cache: map[string]directoryCache{}}
+	if authID != "" {
+		var err error
+		session.credential, err = s.auth.take(authID)
+		if err != nil {
+			cancel()
+			return nil, err
+		}
+	}
 	s.mu.Lock()
 	s.connecting[session] = true
 	s.mu.Unlock()
@@ -753,6 +773,7 @@ func (a *App) DirectoryCall(method string, args map[string]any) map[string]any {
 	case "mounts":
 		value = s.mounts()
 	case "cancel":
+		s.auth.cancelFlow(directoryText(args["attemptId"], 4096))
 		s.mu.Lock()
 		for session := range s.connecting {
 			if session.attemptID == directoryText(args["attemptId"], 128) {
@@ -761,6 +782,26 @@ func (a *App) DirectoryCall(method string, args map[string]any) map[string]any {
 		}
 		s.mu.Unlock()
 		value = true
+	case "authStart":
+		s.mu.Lock()
+		hasRoot := s.root != ""
+		seq := s.seq
+		s.mu.Unlock()
+		if !hasRoot {
+			err = fmt.Errorf("NO_WORKSPACE")
+		} else {
+			value, err = s.auth.start(args)
+			s.mu.Lock()
+			stale := seq != s.seq
+			s.mu.Unlock()
+			if stale {
+				s.auth.cancelFlow(directoryText(args["attemptId"], 4096))
+				value = nil
+				err = fmt.Errorf("SUPERSEDED")
+			}
+		}
+	case "authPoll":
+		value, err = s.auth.poll(directoryText(args["authId"], 4096))
 	case "connect":
 		value, err = s.connect(args)
 	case "list":

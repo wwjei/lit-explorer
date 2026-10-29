@@ -519,6 +519,73 @@ function loadRenderer() {
     ok('文档与目录配置均不包含令牌',!JSON.stringify(state).includes('fixture-secret'));
   });
 
+  await run('S11', '飞书设备授权：本机凭据、注册、取消与刷新', async () => {
+    const { createFeishuAuth, verificationURL } = require('../src/main/feishu-auth');
+    const fixture = require('./fixtures/feishu-auth.json');
+    let clock = 100000, queue = [], calls = [];
+    const auth = createFeishuAuth({ now: () => clock, fetch: async (raw, options) => {
+      calls.push({ url: raw, form: Object.fromEntries(new URLSearchParams(options.body)), headers: options.headers });
+      return new Response(JSON.stringify(queue.shift()), { status: 200 });
+    } });
+    const rejected = async (label, task, code) => {
+      let actual; try { await task(); } catch (err) { actual = err.code; } eq(label, actual, code);
+    };
+    queue = [fixture.registration, fixture.registered, fixture.device, fixture.pending, fixture.slow, fixture.token];
+    const started = await auth.start({mode:'personal',attemptId:'attempt'});
+    eq('先创建本机个人应用', started.phase, 'registration');
+    ok('注册链接只指向飞书官方', started.url.startsWith('https://open.feishu.cn/page/cli?'));
+    eq('提前轮询不发送网络请求', (await auth.poll('attempt')).phase, 'registration');
+    eq('宿主执行轮询间隔', calls.length, 1);
+    clock += 1000;
+    eq('创建应用后进入设备授权', (await auth.poll('attempt')).phase, 'authorization');
+    eq('只读权限声明一致', calls[2].form.scope, require('../src/shared/feishu-auth.json').scopes);
+    ok('应用密钥仅发给认证端点', calls[2].headers.Authorization.startsWith('Basic '));
+    clock += 1000; eq('等待确认', (await auth.poll('attempt')).phase, 'authorization');
+    clock += 1000; eq('slow_down 增加轮询间隔', (await auth.poll('attempt')).interval, 6);
+    clock += 6000;
+    const ready = await auth.poll('attempt');
+    eq('用户确认后已就绪', ready.phase, 'ready');
+    ok('界面响应不含凭据', !/access-fixture|refresh-fixture|local-app-secret|login-device/.test(JSON.stringify(ready)));
+    const credential = auth.take('attempt'), controller = new AbortController();
+    await rejected('授权结果只能交给一个挂载', () => auth.take('attempt'), 'AUTH_REQUIRED');
+    eq('宿主内部领取 Bearer 令牌', await credential.token(controller.signal), 'access-fixture');
+    clock += 100000; queue = [fixture.refreshed];
+    eqJson('并发读取共享一次刷新', await Promise.all([credential.token(controller.signal), credential.token(controller.signal)]), ['access-refreshed','access-refreshed']);
+    eq('刷新使用 refresh_token', calls.at(-1).form.grant_type, 'refresh_token');
+    eq('旋转前使用当前刷新令牌', calls.at(-1).form.refresh_token, 'refresh-fixture');
+    const before = calls.length;
+    await credential.token(controller.signal); eq('有效期内不重复刷新', calls.length, before);
+    clock += 7200000; queue = [fixture.denied];
+    await rejected('刷新被撤销后要求重新授权', () => credential.token(controller.signal), 'AUTH_REQUIRED');
+    const revokedCalls = calls.length;
+    await rejected('已失效凭据不反复交换', () => credential.token(controller.signal), 'AUTH_REQUIRED');
+    eq('撤销后不再发送刷新请求', calls.length, revokedCalls);
+    controller.abort(); await rejected('断开连接后禁止读取凭据', () => credential.token(controller.signal), 'SUPERSEDED');
+    queue = [fixture.device, fixture.denied];
+    await auth.start({mode:'application',attemptId:'denied',appId:'cli_fixture',appSecret:'own-secret'}); clock += 1000;
+    await rejected('拒绝授权只返回稳定错误码', () => auth.poll('denied'), 'AUTH_DENIED');
+    queue = [fixture.device];
+    await auth.start({mode:'application',attemptId:'expired',appId:'cli_fixture',appSecret:'own-secret'}); clock += 241000;
+    await rejected('设备码到期终止', () => auth.poll('expired'), 'AUTH_EXPIRED');
+    queue = [fixture.device, {...fixture.token, token_type:'DPoP'}];
+    await auth.start({mode:'application',attemptId:'dpop',appId:'cli_fixture',appSecret:'own-secret'}); clock += 1000;
+    await rejected('不把 DPoP 当作 Bearer', () => auth.poll('dpop'), 'AUTH_UNSUPPORTED');
+    queue = [fixture.device];
+    await auth.start({mode:'application',attemptId:'cancel',appId:'cli_fixture',appSecret:'own-secret'}); auth.clear();
+    await rejected('切项目清除待授权凭据', () => auth.poll('cancel'), 'AUTH_REQUIRED');
+    for (const url of ['https://evil.test/auth','https://accounts.feishu.cn.evil.test','https://x@accounts.feishu.cn','http://accounts.feishu.cn']) {
+      await rejected('拒绝不可信授权地址 '+url, () => verificationURL(url), 'UNSAFE_URL');
+    }
+    let inFlight;
+    const blocked = createFeishuAuth({ fetch: (_url, options) => new Promise((_resolve,reject) => {
+      inFlight = options.signal; options.signal.addEventListener('abort', () => reject(new Error('abort')));
+    }) });
+    const job = blocked.start({mode:'personal',attemptId:'blocked'});
+    blocked.cancel('blocked');
+    await rejected('关闭表单中止 begin 请求', () => job, 'SUPERSEDED');
+    ok('底层请求被取消', inFlight.aborted);
+  });
+
   done();
 })().catch((err) => {
   console.error(err);

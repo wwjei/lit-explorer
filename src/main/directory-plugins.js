@@ -69,8 +69,9 @@ function rootConfig(provider, raw) {
   return { rootId, rootType };
 }
 
-function createDirectoryPlugins({ store, fetch: fetcher = globalThis.fetch, manifest = catalog }) {
+function createDirectoryPlugins({ store, fetch: fetcher = globalThis.fetch, manifest = catalog, authNow }) {
   const registry = providers(manifest);
+  const auth = require('./feishu-auth').createFeishuAuth({ fetch: fetcher, now: authNow });
   let project = '';
   let generation = 0;
   let saved = [];
@@ -78,7 +79,7 @@ function createDirectoryPlugins({ store, fetch: fetcher = globalThis.fetch, mani
   const connecting = new Set();
   let mutations = Promise.resolve();
   const key = (p) => process.platform === 'win32' ? p.toLowerCase() : p;
-  function disconnectAll() { for (const s of [...sessions.values(), ...connecting]) s.abort.abort(); sessions.clear(); connecting.clear(); }
+  function disconnectAll() { auth.clear(); for (const s of [...sessions.values(), ...connecting]) s.abort.abort(); sessions.clear(); connecting.clear(); }
   function activate(root) { disconnectAll(); project = root; generation++; saved = []; }
   async function mounts() {
     const root = project, seq = generation;
@@ -120,7 +121,7 @@ function createDirectoryPlugins({ store, fetch: fetcher = globalThis.fetch, mani
     s.pending++;
     try {
       const response = await fetcher(url.toString(), { method: op.method, redirect: 'error', signal: controller.signal,
-        headers: { Authorization: 'Bearer ' + s.token, 'Content-Type': 'application/json' },
+        headers: { Authorization: 'Bearer ' + (s.credential ? await s.credential.token(s.abort.signal) : s.token), 'Content-Type': 'application/json' },
         ...(op.body ? { body: JSON.stringify(substitute(op.body, vars)) } : {}) });
       if (response.status === 401) throw fail('AUTH_REQUIRED');
       if (response.status === 403) throw fail('FORBIDDEN');
@@ -183,12 +184,13 @@ function createDirectoryPlugins({ store, fetch: fetcher = globalThis.fetch, mani
     const previous = input.id && saved.find((m) => m.id === input.id);
     if (input.id && !previous) throw fail('NOT_FOUND');
     const provider = registry.get(previous ? previous.providerId : input.providerId);
-    if (!provider || !text(input.token, 4096) || /\s/.test(input.token)) throw fail('BAD_REQUEST');
+    if (!provider || (!input.authId && (!text(input.token, 4096) || /\s/.test(input.token))) || (input.authId && (provider.apiOrigin !== 'https://open.feishu.cn' || !provider.id.startsWith('feishu-')))) throw fail('BAD_REQUEST');
     const config = previous || { id: randomUUID(), providerId: input.providerId,
       ...rootConfig(provider, input.rootId), name: text(input.name) || provider.name };
     if (!previous && saved.length >= 32) throw fail('LIMIT');
     let root = { id: config.rootId, name: config.name, type: config.rootType || provider.root.defaultType, kind: provider.root.kind };
-    const s = { provider, attemptId: text(input.attemptId, 128), token: input.token, nodes: new Map([[root.id, root]]), cache: new Map(), cursors: new Map(), abort: new AbortController(), pending: 0 };
+    const credential = input.authId ? auth.take(input.authId) : null;
+    const s = { provider, credential, attemptId: text(input.attemptId, 128), token: input.token, nodes: new Map([[root.id, root]]), cache: new Map(), cursors: new Map(), abort: new AbortController(), pending: 0 };
     // 先验证凭据和根目录，成功才保存挂载；失败不覆盖已有连接。
     connecting.add(s);
     try {
@@ -246,7 +248,9 @@ function createDirectoryPlugins({ store, fetch: fetcher = globalThis.fetch, mani
   }
   return {
     activate, mounts, connect, details, remove,
-    cancel: (attemptId) => { for (const s of connecting) if (s.attemptId === attemptId) s.abort.abort(); return true; },
+    authStart: (input) => { if (!project) throw fail('NO_WORKSPACE'); return auth.start(input); },
+    authPoll: (input) => auth.poll(input.authId),
+    cancel: (attemptId) => { auth.cancel(attemptId); for (const s of connecting) if (s.attemptId === attemptId) s.abort.abort(); return true; },
     providers: () => [...registry.values()].map(({ id, name, version, root, inputHint }) => ({ id, name, version, rootKind: root.kind, inputHint, apiVersion: 1 })),
     list: (mountId, nodeId, cursor, refresh) => page(session(mountId), nodeId, cursor, refresh),
     open: async (mountId, nodeId) => {
@@ -263,6 +267,8 @@ async function invokeDirectoryPlugin(service, method, args = {}) {
     let value;
     if (method === 'providers') value = service.providers();
     else if (method === 'mounts') value = await service.mounts();
+    else if (method === 'authStart') value = await service.authStart(args);
+    else if (method === 'authPoll') value = await service.authPoll(args);
     else if (method === 'connect') value = await service.connect(args);
     else if (method === 'cancel') value = service.cancel(args.attemptId);
     else if (method === 'list') value = await service.list(args.mountId, args.nodeId, args.cursor || '', args.refresh === true);
