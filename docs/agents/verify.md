@@ -179,3 +179,5 @@ MyGo 版装到 `%LOCALAPPDATA%\Programs\Lit Explorer MyGo`，产物是单个 exe
 ## 外部参考目录回归
 
 单元段 S8 验证原生选择结果登记、去重、恢复、只读 SVG、真实路径越界、移除撤权与切项目时丢弃旧选择框结果。集成段 R2 验证快捷访问添加、外部目录浏览、Markdown 链接预览、返回项目与重开恢复、移除。MyGo 的 `TestReferenceReadOnly` 与 `TestReferencePersistenceAndRemoval` 覆盖对应授权与持久化边界。
+
+目录插件回归：S9 验证通用清单、飞书请求、权限 / 分页 / URL / 令牌隔离与第二种字段映射，S10 验证具体文档和 Wiki 节点 / 实体标识。D1 驱动四种快捷项的界面流程，并检查令牌清空、临时链接不持久化、移除源保留其他预览。MyGo 对应测试共用 `test/fixtures/feishu-directory.json`；真实账号权限、API 可用性与网页登录仍需联调。

@@ -1,112 +1,134 @@
-# 外部目录插件与云文档目录设计
+# 外部目录插件体系与服务接入
 
-状态：方案待排期，尚未实现插件运行时或任何云服务适配器。本轮代码仅支持用户选择的本地参考目录。
+状态：V1 已实现，内置飞书适配清单；实际账号权限与网页登录仍需服务账号联调。金山等服务尚未实现具体适配。本文定义当前契约和其他插件的接入步骤。
 
-## 目标与使用流程
+## 挂载模型与操作流程
 
-项目可以挂载多个参考来源。来源既可以是本地文件夹，也可以是通过 API 提供目录树的云文档文件夹。用户在快捷访问中添加来源，逐层浏览子目录，点击云文档后在 Lit 网页预览中打开服务返回的文件链接。浏览参考内容时项目身份、其他固定预览和项目设置保持不变。
+插件描述一个服务入口的 API 和数据映射；挂载是用户将某个具体对象加入某个项目的快捷访问。远程对象的标识与本地文件路径始终分开。用户在快速访问中选择“添加云文档或 Wiki 目录”，选入口类型、填写对象链接和访问令牌。
 
-推荐新增“添加参考来源”入口，先选择“本地目录”或一个已启用的云目录适配器，再完成账号连接、选取根目录和命名。来源归属于项目；同一账号连接可以复用，但各项目的挂载与权限范围独立。标题显示来源名与只读标记，目录面包屑提供“返回项目目录”。右键可重命名、刷新、重新连接或移除。
+挂载分成两种：
 
-第一版只读，不包含云端编辑 API、上传、删除、同步到本地、全文索引和离线附件下载。网页内服务自身提供的编辑能力按云服务的权限执行，Lit 的目录适配器不代替服务决定文档写权限。
+- **document**：某个具体文档。点击快捷项后重新解析访问链接，直接在网页预览中打开。
+- **directory**：某个文件夹或 Wiki 节点。点击后打开目录浏览界面，支持逐层进入、分页、刷新和详情。Wiki 节点可以同时有子节点和关联文档，通过“打开当前文档”或子项的“打开文档”按钮访问。
 
-## 来源与节点模型
+项目持久化 providerId、挂载 id、根对象 id、根对象类型和展示名。访问令牌只在宿主进程内存中保存，切换项目、重启、令牌失效或移除来源后需要重新连接。解析出来的在线 URL 不写进项目导航或固定列布局，避免短期签名链接落盘；云文档固定预览仅在本次会话保留。网页登录账号和 API 访问令牌分别管理。
 
-将目录数据来源抽象为 provider，项目中的一次挂载称为 mount。沿用现有本地文件预览与网页预览能力，但远程节点不伪装成本地路径。
+本地参考目录继续由原生选择框授权；当前的本地实现保持文件路径和真实路径边界。云目录插件没有文件系统访问接口，不把 node id 交给 fs IPC。
 
-| 对象 | 建议字段 | 约定 |
+## 共享插件清单与宿主
+
+插件清单位于 `src/shared/directory-providers.json`，两个 shell 使用同一份配置。Electron 的宿主在 `src/main/directory-plugins.js`，MyGo 的宿主在 `mygo/directory_plugins.go`，前端 `src/renderer/cloud-directories.js` 只处理标准化对象。
+
+V1 为随应用构建的声明式插件：静态审查清单后注册，不支持页面注入清单、任意脚本执行或直接下载执行第三方包。新增一个符合 V1 能力的服务只需添加清单和契约夹具，无须改导航界面。使用请求签名、OAuth 或其他认证方式的服务需要扩展两端宿主并升级契约，不能在清单中塞可执行表达式。
+
+| 概念 | 字段 | 约束 |
 | --- | --- | --- |
-| ProviderManifest | id、version、displayName、apiVersion、capabilities、allowedOrigins | 稳定 provider id；声明目录接口和网页打开能力 |
-| Mount | id、projectId、providerId、connectionId、rootNodeId、displayName | 项目仅持有连接引用，不持有密码或令牌 |
-| NodeRef | mountId、nodeId | 目录身份使用服务端稳定 id，禁止依赖名称拼接身份 |
-| DirectoryEntry | ref、parentRef、name、kind、modifiedAt?、size?、version? | kind 为 directory 或 document；时间、大小允许缺失 |
-| BrowseState | mountId、trail、selection、scroll、pinnedViews | 与当前本地项目的身份分离，切项目时恢复 |
+| Catalog | apiVersion、providers | 当前 apiVersion 为 1；变更主版本需显式支持 |
+| Provider | id、name、version、inputHint、apiOrigin、documentHosts、root、list、details、initialize?、success、authCodes | id 稳定；API origin 与文档域名分开声明 |
+| Root | kind、defaultType、urlTypes | kind 为 document / directory；URL 前缀映射到根对象类型，也可直接输入对象标识 |
+| Mount | id、providerId、rootId、rootType?、name | 按项目隔离；连接状态是运行时信息 |
+| Node | id、name、type、kind、url?、modifiedAt?、scopeId?、documentId?、documentType? | id 为不含路径分隔符、空白和查询字符的稳定远程标识；与本地路径无关 |
+| Page | directory、entries、nextCursor | 宿主标准化后返回，界面不认识服务原始字段 |
 
-现有本地参考目录未来可映射为内置 local provider。迁移时为已保存目录生成稳定 mount id，继续沿用原生选择框和真实路径校验；不把云 nodeId 传入任何文件系统 IPC。一个挂载中的 nodeId 必须在该连接与根目录范围内验证，不能通过拼接 nodeId 越过所选云目录。
+`scopeId` 是服务的目录命名空间，例如飞书 Wiki 的 space_id；它由接口响应产生，页面不能自行替换。`hasChildren` 是可选的布尔字段，Wiki 叶子节点会作为可直接点击打开的文档展示。`documentId/documentType` 表示目录节点背后的实体文档，使“目录”和“可打开文档”可以同时成立。
 
-## 最小适配器接口
+## 操作模板
 
-接口均为异步调用，接受取消信号；结果使用明确的结构和错误码。宿主在每次请求提交时记录项目、mount、导航和请求版本，旧响应不能覆盖切换后的页面。
+每个 list / details 操作包含：
 
-```ts
-interface DirectoryProvider {
-  connect(input: ConnectionInput): Promise<ConnectionRef>;
-  listRoots(connection: ConnectionRef, cursor?: string): Promise<Page<DirectoryEntry>>;
-  listChildren(directory: NodeRef, cursor?: string): Promise<Page<DirectoryEntry>>;
-  resolveDocument(document: NodeRef): Promise<OpenTarget>;
-}
+- `method`：GET 或 POST；`path`：固定相对路径，可使用已编码的标识变量；`query` 和 `body`：查询 / JSON 模板。
+- `entries`：响应数组的点分字段路径；`fields`：标准字段到服务字段路径的映射。以 `=` 开头的字段是固定字面值，如 `"type": "=wiki"`。
+- list 额外声明 `cursor`、`hasMore` 字段路径。
+- 可选 initialize 用于解析根对象，使用 `node` 指定响应中的单个节点对象路径；Wiki 通过它获得知识空间和实体文档身份。
+- `success.field/value` 描述业务成功标志，允许不同服务使用不同响应外层结构；`authCodes` 列出凭据失效的数值业务码，HTTP 401 / 403 / 404 / 429 也会被归一化。
 
-type OpenTarget =
-  | { type: 'web'; url: string; expiresAt?: string }
-  | { type: 'unsupported'; reason: string };
-```
+可用变量仅为 `$nodeId`、`$nodeType`、`$scopeId`、`$documentId`、`$documentType` 和 `$cursor`。query/body 中整段以 `$` 开头的字符串会被替换；path 中的标识单独编码。文档标识缺省取当前节点 id/type。分页标记只能使用该目录已返回的标记，不能通过传入别的 cursor 扩大范围。
 
-`listRoots` 用于选择来源根；首期也可接受用户从服务界面复制的根目录 id，由适配器验证归属。目录列表使用不透明分页 cursor，稳定去重；点击“加载更多”继续读取，不一次拉取整个知识库。对没有目录层级的服务可提供一个虚拟根，保持同一浏览交互。
+当前 details 支持对文档查询最新元数据和 URL；普通文件夹详情来自列表元数据，Wiki 目录详情通过 initialize 节点接口刷新。某服务若需独立文件夹详情接口，应增加明确的目录详情操作并同时扩展两个宿主，不伪造服务接口。
 
-`resolveDocument` 在用户打开文件时才请求链接。列表 API 中出现的 URL 仅作为提示，不作为永久的文档身份；短期签名 URL 不持久化。文档被移动或重命名时仍按 nodeId 打开。返回纯下载 URL、非网页附件或不支持的类型时明确提示，第一版不自动下载执行。
+桥接只暴露 `directoryCall(method, args)`，method 限于 providers / mounts / connect / list / details / open / remove / cancel；没有“发送任意 HTTP 请求”。同一个 Node 宿主分派函数用于 Electron IPC 与测试，MyGo 实现相同的数据约定。
 
-### 云文档示例
+## 飞书内置推演
 
-以下是适配器返回宿主的数据形状，具体云服务 API 的请求与鉴权由该适配器完成。
+四个入口共享认证、请求调度和元数据映射，由清单组合出不同挂载语义，避免在界面或宿主中按飞书 id 分支。
+
+| providerId | 快捷项含义 | 输入示例 |
+| --- | --- | --- |
+| feishu-drive | 指定文件夹目录 | `https://tenant.feishu.cn/drive/folder/<folder_token>` |
+| feishu-document | 指定普通云文档 | `https://tenant.feishu.cn/docx/<token>`，也支持 docs / sheets / base / mindnotes / slides / file 前缀 |
+| feishu-wiki | 指定 Wiki 节点及其子树 | `https://tenant.feishu.cn/wiki/<node_token>` |
+| feishu-wiki-document | 指定 Wiki 节点自己的文档 | 同上，点击快捷项直接打开实体文档 |
+
+实现核对了飞书官方 Go SDK 的字段和路径：
+
+1. `GET /open-apis/drive/v1/files`：folder_token、page_token、page_size；返回 data.files、data.has_more、data.next_page_token。
+2. `POST /open-apis/drive/v1/metas/batch_query`：request_docs 中传 doc_token/doc_type，with_url 为 true；返回 data.metas 中的实际文档 URL。
+3. `GET /open-apis/wiki/v2/spaces/get_node`：输入 Wiki token，得到 node_token、space_id、obj_token、obj_type 和标题。
+4. `GET /open-apis/wiki/v2/spaces/<space_id>/nodes`：以 parent_node_token 浏览指定节点的子项，返回 data.items、data.has_more、data.page_token。
+
+Wiki 的 node_token 与 obj_token 不同：导航用前者，打开文档时用后者查询真实元数据链接。当前打开的是元数据接口返回的实体文档 URL，不猜测租户域名或自行拼接页面地址。Wiki 内的浏览路径保留在来源目录视图中。
+
+参考：
+
+- [云空间目录列表官方文档](https://open.feishu.cn/document/server-docs/docs/drive-v1/file/list)
+- [获取文档元数据官方文档](https://open.feishu.cn/document/server-docs/docs/drive-v1/meta/batch_query)
+- [Wiki 获取节点官方文档](https://open.feishu.cn/document/server-docs/docs/wiki-v2/space/get_node)
+- [Wiki 子节点列表官方文档](https://open.feishu.cn/document/server-docs/docs/wiki-v2/space-node/list)
+- [官方 Drive SDK 请求实现](https://github.com/larksuite/oapi-sdk-go/blob/v3_main/service/drive/v1/resource.go)
+- [官方 Wiki SDK 请求实现](https://github.com/larksuite/oapi-sdk-go/blob/v3_main/service/wiki/v2/resource.go)
+
+### 账号与权限
+
+首版接受飞书的 user_access_token 或 tenant_access_token，不接收 app_secret，不自动交换或续期令牌。通过飞书应用 / API 调试台获取访问令牌，并按所用接口官方文档启用云空间、文档元数据或知识库的相应读取权限。应用还必须能访问所选目录或文档；tenant token 不会自动继承用户个人空间权限，文档可能需要共享给应用。
+
+连接时先验证根对象，再保存挂载。单文档验证元数据；文件夹验证首屏；Wiki 先验证节点再读取子项或实体文档。401 或已知 token 失效码会断开该连接并提示重连；403 提示权限范围。没有真实账号凭据的测试只验证官方响应契约和界面流程，不代表某个租户的应用权限配置已经可用。
+
+## 其他插件接入方案（含金山）
+
+1. 收集目标服务的官方文档和脱敏样例：认证、具体文档链接结构、目录列表与分页、目录 / 文件详情、实际文档访问链接、错误码和限流策略。
+2. 判断是否符合 V1：HTTPS JSON API、Bearer 会话令牌、GET/POST、稳定对象 id、固定 API origin、明确的文档域名。符合时在共享清单添加 provider；目录和具体文档可分别提供 root.kind 配置。
+3. 填写 root.urlTypes、可选 initialize、list/details 操作、成功码和字段映射。需要空间 / 团队等额外命名空间时从初始化响应映射 scopeId；目录节点关联实体文档时映射 documentId/documentType。
+4. 若金山接口要求请求签名、交互 OAuth、应用密钥交换或不同的层级详情操作，先扩展版本化契约和两个宿主，再加入服务清单。不得为省事把令牌发给自定义任意 URL，或让插件在渲染进程执行请求签名和保存密钥。
+5. 加入脱敏 JSON 夹具。复用以下契约用例：根对象验证、目录 / 单文档语义、分页、重名、目录与实体 id 不同、详情和在线链接、权限失败、限流、响应体上限、错误域名、删除 / 项目切换与连接中取消。
+6. 两种 shell 都跑同一份夹具；界面用公共桥接测试。最后用实际账号验证应用授权、链接有效期、网页登录、服务拒绝嵌入时的“在浏览器中打开”。
+
+示例结构（占位域名与字段仅示意，不能当作金山真实接口）：
 
 ```json
 {
-  "entries": [
-    {"nodeId": "folder-7", "name": "产品资料", "kind": "directory"},
-    {"nodeId": "doc-42", "name": "接口说明", "kind": "document"}
-  ],
-  "nextCursor": "opaque-page-token"
+  "id": "example-documents",
+  "name": "示例文档服务",
+  "version": "1.0.0",
+  "apiOrigin": "https://api.example.com",
+  "documentHosts": ["docs.example.com"],
+  "root": {"kind": "directory", "defaultType": "folder", "urlTypes": {"folder": "folder"}},
+  "success": {"field": "status", "value": "ok"},
+  "directoryType": "folder",
+  "list": {
+    "method": "GET", "path": "/v1/folders/$nodeId/items", "query": {"cursor": "$cursor"},
+    "entries": "payload.nodes", "cursor": "payload.cursor", "hasMore": "payload.more",
+    "fields": {"id": "id", "name": "label", "type": "kind", "url": "link"}
+  },
+  "details": {
+    "method": "GET", "path": "/v1/documents/$nodeId", "entries": "payload.nodes",
+    "fields": {"id": "id", "name": "label", "type": "kind", "url": "link"}
+  }
 }
 ```
 
-用户点击 `doc-42` 后，`resolveDocument` 返回 `{ "type": "web", "url": "https://docs.example.com/document/doc-42" }`。宿主校验地址，再通过现有网页窗格展示；可以固定，与本地源码并排。无法嵌入、登录失败或不支持网页窗格的平台提供“在浏览器中打开”。网页登录会话与目录 API 账号可能不同，需要提示用户切换到相应账号，不能把 API 令牌注入网页帮助登录。
+Node 契约测试已用不同的 origin、路径、成功标志和字段映射运行第二个示例插件，验证通用宿主没有依赖飞书 providerId 或飞书目录字段。金山真实清单应在拿到官方接口信息并完成实际账号验证后提交。
 
-## 插件配置与运行边界
+## 权限、缓存与失败边界
 
-推荐第一阶段只提供内置适配器与声明式 HTTP 适配配置，由宿主主进程执行受限请求；不加载用户任意 JavaScript，不给适配器 Node、Shell 或本地文件读写能力。插件清单版本与接口版本分开，未知主版本拒绝加载并保留来源配置供用户恢复。
+- 清单随应用构建并审查，页面不能改 API origin、注册插件或写入 directoryMounts。API 请求固定 origin、携带 Bearer，仅在宿主执行；不跟随重定向，不把原始认证错误、凭据或请求体写入日志。
+- 会话按项目和挂载隔离，只接受根节点与服务列表中已发现的节点。单文档挂载不能拿来列举其他文档。移除来源和切项目会取消请求并丢弃凭据；关闭连接表单会取消尚在验证的连接。
+- 文档 URL 只允许 HTTPS 和插件声明的域名 / 子域名，拒绝用户名密码、异常端口、控制字符和 file/data/javascript 等协议。在线页面仍使用现有隔离网页视图，不能取得本地 pv 桥接。
+- 请求超时 15 秒，每连接最多 4 个并发，响应 JSON 上限 2 MiB，每页最多 200 个节点，会话最多发现 10000 个节点。目录缓存 60 秒、最多 128 页；刷新可以绕过缓存。没有自动限流重试，收到 429 由用户稍后手动重试。
+- 页面与接口响应使用请求版本检查，旧响应不会覆盖当前项目 / 目录。关闭和移除会清理对应界面；移除某个来源仅关闭其预览，保留其他本地或云来源的阅读内容。
+- 参考目录只读与 SVG 可写根的权限不因云插件变化。插件不提供上传、删除云端文档或同步本地的 API。
 
-声明式配置可描述认证类型、固定 API origin、目录请求模板和响应字段映射。配置不能携带任意可执行表达式，也不能通过目录接口响应动态扩大目标域名。要求复杂业务逻辑的服务先作为受审查的内置适配器；第三方可执行插件另立设计，采用隔离进程、能力白名单和安装信任流程后再开放。
+## 验证与后续工作
 
-目录请求与云文档网页分别校验 URL：
+单元段 S9/S10 和 MyGo `TestDirectoryPluginFeishuContract` / `TestDirectoryPluginDocumentAndWiki` 使用 `test/fixtures/feishu-directory.json`。界面段 D1 覆盖四种快捷项、分页 / 详情、Wiki 节点和实体文档的区别、令牌清空、临时链接不落布局、移除来源保留本地固定预览。
 
-- API 只允许 HTTPS 和清单声明的 origin；每次重定向重新校验，不向其他 origin 转发认证头。拒绝 loopback、私网地址与 DNS 重绑定目标；未来确需企业内网服务时，通过显式配置的独立连接授权，而不是默认开放。
-- 网页目标只允许安全的 http(s) 地址，拒绝用户信息、控制字符与危险协议，遵守现有网页窗格隔离和下载策略。返回 file / javascript / data / 自定义协议时拒绝打开。
-- JSON 响应校验字段类型、长度、数量、层级和体积；名称当纯文本显示。错误信息与日志不包含令牌或带签名的完整链接。
-- 本地 provider 继续校验真实路径，符号链接只能指向已授权范围。参考目录只读，不因为添加云 provider 而扩大 SVG 写入范围。
-- 移除挂载立即撤销其请求权限、取消进行中的任务并关闭其预览。账号断开使关联挂载进入“需要连接”状态；切项目只保留当前项目挂载的活动权限。
-
-## 认证与持久化
-
-优先使用服务支持的 OAuth PKCE；已有企业网关可使用用户主动配置的访问令牌。连接由主进程管理，令牌存操作系统凭据库，不进入 state.json、页面 DOM、URL、项目导出或日志。页面只接收 connectionId、账号展示名与连接状态；用户可以单独断开账号并清除凭据。
-
-第一版需要在 Electron 和 MyGo 两端各实现凭据存储与请求代理，渲染层仍使用同一接口。不能安全保存凭据的平台只提供本次会话连接；不退化为明文落盘。网页窗格使用自己的浏览器会话，Electron 与 MyGo 的隔离差异继续按已有实现说明。
-
-项目持久化仅记录挂载、provider/manifest 版本、连接引用、稳定节点 id 与浏览位置。API base URL 和挂载配置的变更需要经宿主验证，页面不能写一段配置便获得新的网络目的地址权限。凭据加载失败时保留来源条目，提示重新连接。
-
-## 缓存、刷新与失败处理
-
-目录缓存按 connectionId、mountId、nodeId、cursor 分区，默认仅存在内存；建议 TTL 为 60 秒，服务支持时使用 ETag / version 条件请求。账号切换、断开或挂载移除时清空对应缓存。若未来增加磁盘缓存，需单独设计敏感文档信息的保存与清理规则。
-
-统一刷新按钮失效当前展开目录的缓存，并重新获取列表；已打开网页调用现有重新加载能力。每个来源独立反馈，某个云服务失败不影响本地目录和其他来源。刷新保留仍存在的选中项与阅读位置；失去权限的条目不能继续展示缓存正文。
-
-| 错误 | 用户行为与重试策略 |
-| --- | --- |
-| AUTH_REQUIRED / TOKEN_EXPIRED | 显示“重新连接”，串行刷新凭据后最多重试一次 |
-| FORBIDDEN | 显示“没有权限”，不循环重试 |
-| NOT_FOUND | 保留可返回的父级路径，提示目录或文档已移除 |
-| RATE_LIMITED | 遵守 Retry-After，显示可重试时间，取消后停止 |
-| NETWORK / TIMEOUT | 有缓存时标为过期并展示；提供手动重试 |
-| UNSUPPORTED | 显示原因与安全的浏览器打开入口（若有） |
-
-单个请求建议超时 15 秒，每连接最多 4 个并发请求；后台不轮询未展开目录。分页中途失败保留已经成功的页，重试失败页时不重复条目。
-
-## 分阶段实施与验收
-
-1. 定义共享 provider 契约，先将本地参考目录适配为 local provider，锁住授权、移除、切项目和浏览位置恢复行为。
-2. 加入主进程连接管理、凭据存储、HTTP 代理与挂载配置校验，两种 shell 同时实现。
-3. 用一个提供“目录列表 API + 文档网页链接”的真实云服务实现首个适配器，再确定通用字段映射的边界。
-4. 完成目录分页、缓存刷新、错误卡片与固定网页预览，最后开放更多声明式适配配置。
-
-验收至少覆盖：深层目录与分页、同名文档、重命名后 nodeId 稳定、签名链接到期后重新解析、账号切换、401 / 403 / 404 / 429、断网恢复、点击后切项目的旧响应、移除挂载时正在加载、API 重定向泄露认证信息、恶意 URL / 节点名称、重启凭据恢复，以及 Electron / MyGo 各自的网页登录与浏览器退路。
-
-首个适配器落地前需要补齐的服务信息：目录与文档接口示例、认证方式、根目录范围规则、链接有效期，以及该站点允许的网页打开方式。这些属于接入配置，不阻塞本方案或本地参考目录功能。
+后续可独立推进：OAuth PKCE 与系统凭据库存储、金山等真实服务适配、来源改名、断开连接入口、云目录浏览位置的跨重启恢复、更完整的目录详情操作，以及经隔离和签名验证的第三方可执行插件。V1 不实现这些能力，不把声明式清单扩展等同于任意第三方代码的安装运行。

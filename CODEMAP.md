@@ -142,3 +142,12 @@
 - `mygo/references.go`：`ReferenceDirs / AddReferenceDir / RemoveReferenceDir` 为同形 bridge 能力，`seqMu` 保护活动项目与目录授权的提交。
 - `fs-api.js` / `mygo/fsapi.go` 区分可读根与可写根，参考目录不会进入 SVG 可写范围；`app.js` 的 `rootForPath / browseRoot / refreshFavorites` 区分项目身份与浏览来源。
 - 云目录插件的后续方案见 [设计文档](docs/design/external-directory-plugins.md)。
+
+## 目录插件与飞书
+
+- `src/shared/directory-providers.json`：共享版本化插件清单，包含飞书文件夹、单文档、Wiki 目录和 Wiki 单文档映射。
+- `src/main/directory-plugins.js`：`createDirectoryPlugins / invokeDirectoryPlugin` 管理挂载、会话令牌、节点与分页授权、请求、缓存、取消和标准化。
+- `mygo/directory_plugins.go`：同形宿主和 `App.DirectoryCall`；从 staging 后的共享清单加载插件。
+- `src/renderer/cloud-directories.js`：`PV.cloud` 管理来源配置表单、目录列表、详情、分页和在线文档打开；`app.js` 注入预览与快捷访问回调。
+- `pane.js` 的 `savedPaneData` 排除云来源预览，避免解析出的临时 URL 持久化；项目导航的云文档选中态同样不写入磁盘。
+- 接口推演、其他服务接入步骤与限制见 [目录插件体系](docs/design/external-directory-plugins.md)。

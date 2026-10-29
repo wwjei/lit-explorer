@@ -124,3 +124,9 @@ MyGo 版（`mygo/`）与 Electron 版共用渲染层，但系统边界要各自�
   没有 Electron 的独立 `persist:web-docs` 分区；站点权限走 WebView2 默认策略，
   没有按站询问剪贴板读取。`WebSync` 里的地址仍过 `validWebURL()`（只放行 `http(s)`、
   拒绝控制字符与带账号密码的地址）。不要图省事把 `pv` 桥接注入子 webview。
+
+## 目录插件
+
+插件只能从随应用构建的 `src/shared/directory-providers.json` 注册，页面不能写目录插件清单、API 地址或 `directoryMounts`。`directories:call` / `App.DirectoryCall` 仅分派固定业务方法，不提供通用 HTTP。令牌只存在宿主会话内存中，未知目录节点与分页标记被拒，切项目 / 移除 / 关闭连接表单会取消相关请求。
+
+请求不得跟随重定向；响应体有上限。文档 URL 只允许 HTTPS 和插件文档域名，参数错误与 HTTP 错误返回稳定错误码，不回显认证信息。云预览带 `cloudMountId`，`savedPaneData()` 和项目导航不保存解析出的临时 URL。新增插件同时维护 Node / Go 的契约夹具；JSON 清单能力不足时扩展宿主契约，不在渲染层执行任意请求或脚本。

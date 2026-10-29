@@ -25,7 +25,7 @@ lit explorer：本地项目文件浏览器（多栏目录导航 + 内嵌预览�
 | 改版本号、打 tag、发 Release | [docs/agents/release.md](docs/agents/release.md) |
 | 跑测试（含 MyGo 文件 / 主进程回归）、写界面探针、装包验证改动 | [docs/agents/verify.md](docs/agents/verify.md) |
 | 改产品行为，写文档与注释 | [docs/agents/conventions.md](docs/agents/conventions.md) |
-| 外部参考目录与云目录插件设计 | `src/main/reference-dirs.js`、`mygo/references.go`、[云目录方案](docs/design/external-directory-plugins.md) |
+| 外部参考目录与云目录插件 | `src/main/reference-dirs.js`、`src/main/directory-plugins.js`、`src/shared/directory-providers.json`、`mygo/references.go`、`mygo/directory_plugins.go`、[插件契约与接入方案](docs/design/external-directory-plugins.md) |
 | 想做的功能、要拍板的事 | [further_notes.md](further_notes.md) |
 | 顺手要清的小问题 | [PENDING.md](PENDING.md) |
 | 已知的依赖 / 安全债，以及什么时候要重新看 | [docs/security-debt.md](docs/security-debt.md) |
