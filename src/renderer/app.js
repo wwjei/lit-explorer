@@ -37,6 +37,7 @@
 
   const state = {
     root: null,
+    referenceDirs: [],
     rootName: '',
     path: [],        // 每级目录节点，path[0] 是工作区根
     cols: [],        // 每栏的加载状态与原始条目
@@ -97,7 +98,38 @@
   }
 
   function webNodeFromFav(fav) {
-    return { name: fav.name, kind: WEB_KIND, url: fav.url, path: fav.url, isDir: false };
+    return { name: fav.name, kind: WEB_KIND, url: fav.url, path: fav.url, isDir: false,
+      ...(fav.cloudMountId ? { cloudMountId: fav.cloudMountId, cloudNodeId: fav.cloudNodeId } : {}) };
+  }
+
+  function rootForPath(path) {
+    return [state.root, ...state.referenceDirs].find((root) => root && PV.paths.within(root, path));
+  }
+
+  function refreshFavorites() {
+    state.favs = normalizeFavorites([
+      ...(state.favoritesByRoot[favKey(state.root)] || []),
+      ...state.referenceDirs.map((path) => ({ path, name: PV.paths.baseName(path), isDir: true, kind: 'folder' }))
+    ]);
+  }
+
+  async function updateReferences(dirs) {
+    state.referenceDirs = dirs || [];
+    refreshFavorites();
+    // 撤销后丢弃缓存正文与固定列，避免继续展示失去授权的内容。
+    PV.pane.clearPins();
+    PV.pane.resetTemp();
+    await browseRoot(state.root);
+  }
+
+  async function browseRoot(root) {
+    state.path = [{ path: root, name: PV.paths.baseName(root), isDir: true, kind: 'folder' }];
+    state.cols = [];
+    state.sel = null;
+    state.mode = 'preview';
+    render();
+    await loadColumn(0);
+    scheduleSaveNav();
   }
 
   function normalizeFavorites(list) {
@@ -132,8 +164,8 @@
           };
         }
         if (!fav) continue;
-        // 收藏按当前工作区归属：越界的旧条目直接丢掉
-        if (state.root && !PV.paths.within(state.root, fav.path)) continue;
+        // 收藏按当前项目及其参考目录归属：未授权的旧条目直接丢掉
+        if (state.root && !rootForPath(fav.path)) continue;
       }
       const key = isWebFav(fav) ? 'w:' + fav.url : 'p:' + PV.paths.key(fav.path);
       if (seen.has(key)) continue;
@@ -165,6 +197,15 @@
 
   function toggleFavorite(target) {
     if (!target || !target.path) return;
+    if (state.referenceDirs.some((p) => PV.paths.same(p, target.path))) {
+      const project = state.root;
+      pv.removeReferenceDir(target.path).then(async (result) => {
+        if (project !== state.root) return;
+        if (result.error) { toast('移除参考目录失败：' + result.error); return; }
+        await updateReferences(result.dirs);
+      }).catch((err) => toast(err.message));
+      return;
+    }
     const node = findLoadedNode(target.path) || target;
     const at = state.favs.findIndex((f) => f.path && PV.paths.same(f.path, node.path));
     if (at >= 0) {
@@ -186,9 +227,10 @@
   async function openFavorite(fav) {
     if (!state.root || !fav) return;
     if (isWebFav(fav)) { openWebFavorite(fav); return; }
-    const parts = PV.paths.partsUnder(state.root, fav.path);
+    const base = rootForPath(fav.path);
+    const parts = base ? PV.paths.partsUnder(base, fav.path) : null;
     if (!parts) { toast('快速访问项不在当前工作区内'); return; }
-    if (!parts.length) { goToPathIndex(-1); return; }
+    if (!parts.length) { await browseRoot(base); return; }
 
     // 目标位于隐藏目录里时先恢复显示，否则导航后列中不会出现对应行
     if (state.hideDot && parts.some((p) => p.charAt(0) === '.')) {
@@ -196,8 +238,7 @@
       pv.setState({ hideDot: false });
     }
 
-    const rootNode = state.path[0]
-      || { name: state.rootName, path: state.root, isDir: true, kind: 'folder' };
+    const rootNode = { name: PV.paths.baseName(base), path: base, isDir: true, kind: 'folder' };
     state.path = [rootNode];
     state.cols = [];
     state.sel = null;
@@ -450,7 +491,7 @@
   function favRowHtml(f, selKey) {
     const key = favIdentity(f);
     const web = isWebFav(f);
-    const title = web ? f.url : f.path;
+    const title = web ? f.url : (state.referenceDirs.some((p) => PV.paths.same(p, f.path)) ? '外部参考目录（只读）：' : '') + f.path;
     return '<div class="row fav-row' + (key === selKey ? ' is-sel' : '') + (web ? ' is-web' : '')
       + '" data-fav-key="' + esc(key) + '" title="' + esc(title) + '" role="button">'
       + nodeIcon(web
@@ -476,10 +517,14 @@
     const selKey = state.sel
       ? (state.sel.node.kind === WEB_KIND ? state.sel.node.url : state.sel.node.path)
       : '';
-    const rows = state.favs.length
-      ? state.favs.map((f) => favRowHtml(f, selKey)).join('')
+    const rows = state.favs.length || PV.cloud.rows()
+      ? state.favs.map((f) => favRowHtml(f, selKey)).join('') + PV.cloud.rows()
       : '<div class="col-note">右键或行尾闪电图标加入快速访问；点标题栏的 + 添加网页链接</div>';
-    const add = '<button class="col-toggle fav-add" data-web-add title="添加网页链接" aria-label="添加网页链接">'
+    const add = (state.path[0] && !PV.paths.same(state.path[0].path, state.root)
+      ? '<button class="col-toggle" data-project-root title="返回项目目录" aria-label="返回项目目录">' + icon('arrowLeft', '', 14) + '</button>' : '')
+      + '<button class="col-toggle fav-add" data-cloud-add title="添加云目录" aria-label="添加云目录">' + icon('globe', '', 14) + '</button>'
+      + '<button class="col-toggle fav-add" data-reference-add title="添加外部目录" aria-label="添加外部目录">' + icon('folder', '', 14) + icon('plus', '', 10) + '</button>'
+      + '<button class="col-toggle fav-add" data-web-add title="添加网页链接" aria-label="添加网页链接">'
       + icon('globe', '', 12) + icon('plus', 'fav-plus', 10) + '</button>';
     const swap = state.favTop
       ? ''
@@ -602,7 +647,7 @@
     const btn = $('#btn-refresh');
     btn.disabled = true;
     try {
-      await Promise.all([Promise.all(PV.pane.visiblePanes().map(pollPane)), pollOpenDirs()]);
+      await Promise.all([Promise.all(PV.pane.visiblePanes().map(pollPane)), pollOpenDirs(), PV.cloud.refresh()]);
       if (root !== state.root) return;
       const jobs = state.path.map((folder, i) => {
         if (!dirtyDirs.has(folder.path)) return Promise.resolve();
@@ -638,7 +683,8 @@
     state.cols = [];
     state.sel = null;
     state.mode = 'preview';
-    state.favs = normalizeFavorites(state.favoritesByRoot[favKey(dir)]);
+    state.referenceDirs = [];
+    state.favs = [];
     // 固定列装的是上一个工作区的文件，换工作区后一律清掉
     PV.pane.clearPins();
     PV.find.close();
@@ -648,6 +694,12 @@
     dirKnown.clear();
     // 切换条：当前项立刻高亮；新项目有空位就加进去
     PV.projects.noteOpened(dir);
+    render();
+    await PV.cloud.setProject(dir);
+    const references = await pv.referenceDirs();
+    if (state.root !== dir) return;
+    state.referenceDirs = references;
+    refreshFavorites();
     const nav = PV.projects.navOf(dir);
     setWelcome(false);
     render();
@@ -706,7 +758,7 @@
   function currentNav() {
     return {
       path: state.path.map((f) => f.path),
-      sel: state.sel ? state.sel.node.path : null,
+      sel: state.sel && !state.sel.node.cloudMountId ? state.sel.node.path : null,
       mode: state.mode,
       // 固定列、列宽、分屏比例都跟着项目走：切走时一起存，切回来原样恢复
       layout: PV.pane.layoutSnapshot()
@@ -729,6 +781,9 @@
   /** 逐级恢复：从根目录开始，按保存的路径一层层进去，再选中文件与模式 */
   async function restoreNav(nav) {
     const levels = Array.isArray(nav && nav.path) ? nav.path : [];
+    if (levels[0] && state.referenceDirs.some((p) => PV.paths.same(p, levels[0]))) {
+      await browseRoot(levels[0]);
+    }
     for (let i = 1; i < levels.length; i++) {
       const col = state.cols[i - 1];
       if (!col || col.state !== 'ready' || !col.entries) break;
@@ -1137,6 +1192,19 @@
     }
 
     // 快速访问面板标题栏：添加网页链接
+    if (e.target.closest('[data-project-root]')) { browseRoot(state.root); return; }
+    if (e.target.closest('[data-reference-add]')) {
+      const project = state.root;
+      if (!project) { toast('请先打开项目'); return; }
+      pv.addReferenceDir().then((result) => {
+        if (project !== state.root || result.canceled) return;
+        if (result.error) { toast('添加参考目录失败：' + (result.message || result.error)); return; }
+        state.referenceDirs = result.dirs;
+        refreshFavorites();
+        renderFavorites();
+      }).catch((err) => toast(err.message));
+      return;
+    }
     if (e.target.closest('[data-web-add]')) {
       openWebForm(null, e.target.closest('[data-web-add]'));
       return;
@@ -1507,6 +1575,20 @@
   /* ============================ 把模块接起来 ============================ */
   // pane.js 管窗格的生命周期与布局，preview-body.js 管正文与头部画成什么样；
   // 它们需要的应用状态都由这里提供。
+  PV.cloud.init({
+    changed: renderFavorites,
+    toast,
+    openWeb: openWebFavorite,
+    clearPreviews: function (mountId) {
+      if (state.sel && state.sel.node.cloudMountId === mountId) state.sel = null;
+      for (const pane of PV.pane.allPanes().slice()) {
+        if (!pane.node || pane.node.cloudMountId !== mountId) continue;
+        if (pane.pinned) PV.pane.unpinPane(pane);
+        else PV.pane.resetTemp();
+      }
+      render();
+    }
+  });
   PV.body.init({
     toast: toast,
     root: function () { return state.root; },
@@ -1515,16 +1597,18 @@
     openLocal: async function (mdPath, href) {
       const root = state.root;
       const target = PV.paths.resolveLink(mdPath, href);
-      if (!target || !PV.paths.within(state.root, target)) throw new Error('链接不在工作区内');
+      const base = target && rootForPath(target);
+      if (!base) throw new Error('链接不在项目或参考目录内');
       const slash = target.lastIndexOf('/');
       const result = await pv.list(target.slice(0, slash));
       if (root !== state.root) return;
       const node = result && result.entries && result.entries.find((n) => PV.paths.same(n.path, target));
       if (!node || node.isDir) throw new Error('目标不是可预览的文件或已不存在');
       // 按目录链导航，保持目标文件与列表同时可见。
-      const parts = PV.paths.partsUnder(state.root, node.path);
-      if (!parts) throw new Error('链接不在工作区内');
-      state.path = state.path.slice(0, 1);
+      const parts = PV.paths.partsUnder(base, node.path);
+      if (!parts) throw new Error('链接不在项目或参考目录内');
+      state.path = [{ path: base, name: PV.paths.baseName(base), isDir: true, kind: 'folder' }];
+      state.cols = [];
       for (let i = 0; i < parts.length - 1; i++) {
         await loadColumn(i);
         const dir = state.cols[i].entries.find((n) => n.isDir && n.name === parts[i]);
@@ -1533,6 +1617,7 @@
       }
       await selectNode(node, parts.length - 1, { revealPreview: true });
     },
+    canWrite: function (node) { return !!node && PV.paths.within(state.root, node.path); },
     loaded: noteLoaded
   });
   PV.pane.init({
@@ -1545,7 +1630,7 @@
     capabilities: PV.body.capabilities,
     afterLayout: function () { if (PV.web) PV.web.schedule(); },
     layoutChanged: function () { scheduleSaveNav(); },
-    allowPinnedPath: function (path) { return PV.paths.partsUnder(state.root, path) !== null; }
+    allowPinnedPath: function (path) { return !!rootForPath(path); }
   });
   PV.projects.init({
     toast: toast,
@@ -1622,7 +1707,7 @@
     PV.projects.setActive(state.root || '');
     // 主进程有可能在读取设置期间就已经把工作区打开了，这时补上该工作区的快速访问项
     if (state.root) {
-      state.favs = normalizeFavorites(state.favoritesByRoot[favKey(state.root)]);
+      refreshFavorites();
       PV.projects.noteOpened(state.root);
       const nav = navRestored ? null : PV.projects.navOf(state.root);
       render();

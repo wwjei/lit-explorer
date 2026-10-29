@@ -6,15 +6,13 @@
 
 新增文件系统相关能力时：
 
-- 路径必须过 `assertAllowed()`（`src/main/fs-api.js`），只能访问已登记为工作区的根目录内部。
+- 路径必须过 `assertAllowed()`（`src/main/fs-api.js`），只能访问当前项目已授权的工作区和参考目录根内部。
   它比较的是 **`realpath` 之后的真实路径**：junction / 符号链接会指向根目录之外，
   而读写由文件系统跟随链接，只做字符串前缀判断挡不住。新增入口时不要绕开它，
   也不要自己写 `startsWith` 判断。
-- 已授权根**只有当前工作区一个**：`openWorkspace()` 在登记新根之前会调
-  `resetAllowedRoots()` 清掉上一个。不要把它改成只增不减的集合——那样在 A 里打开过的
-  目录，切到 B 之后仍然可读。清空与登记必须像现在这样「先异步 `resolveReal()`，再用
-  `allowResolvedRoot()` 同步登记」，并用 `workspaceSeq` 丢掉被后一次切换取代的请求；
-  否则两次切换交错时，先发起的那次会在后一次清空之后把自己的根加回去，留下两个授权根。
+- 可读根包含当前工作区与用户通过原生选择框为该项目添加的参考目录。工作区切换仍先异步解析真实路径，再在序号检查后同步清空并登记整组根；旧请求不能留下旧项目的授权。
+- 参考目录独立保存在主进程维护的 `referenceDirs` 设置中，页面补丁白名单不接收该字段。新增只能走原生选择框，删除立即撤销该根（仍被其他已授权根覆盖的路径可继续访问）。重开时重新解析并校验目录；不要把普通 favorites 路径当授权依据。
+- `allowResolvedRoot()` 登记工作区读写根，`allowReferenceRoot()` 只登记可读根。SVG 保存必须同时落在可写根中，不能因为参考目录可读就开放写入。两种 shell 的实现与测试须同步。
 - **渲染进程能写进设置的东西必须过白名单**（`src/main/state-sanitize.js`）。`app:set-state`
   不能直接 `store.patch(changes)`：`state.window` 会在下次启动时当 `BrowserWindow` 参数，
   `projects[].path` 会在下次启动时被 `offerRoot`。窗口只取 `{x,y,width,height}`，
@@ -126,3 +124,13 @@ MyGo 版（`mygo/`）与 Electron 版共用渲染层，但系统边界要各自�
   没有 Electron 的独立 `persist:web-docs` 分区；站点权限走 WebView2 默认策略，
   没有按站询问剪贴板读取。`WebSync` 里的地址仍过 `validWebURL()`（只放行 `http(s)`、
   拒绝控制字符与带账号密码的地址）。不要图省事把 `pv` 桥接注入子 webview。
+
+## 目录插件
+
+插件只能从随应用构建的 `src/shared/directory-providers.json` 注册，页面不能写目录插件清单、API 地址或 `directoryMounts`。`directories:call` / `App.DirectoryCall` 仅分派固定业务方法，不提供通用 HTTP。令牌不返回页面；飞书仅在会话内存中，金山可由宿主经系统保护保存。未知目录节点与分页标记被拒，切项目 / 移除 / 关闭连接表单会取消相关请求。
+
+请求不得跟随重定向；响应体有上限。文档 URL 只允许 HTTPS 和插件文档域名，参数错误与 HTTP 错误返回稳定错误码，不回显认证信息。云预览带 `cloudMountId`，`savedPaneData()` 和项目导航不保存解析出的临时 URL。新增插件同时维护 Node / Go 的契约夹具；JSON 清单能力不足时扩展宿主契约，不在渲染层执行任意请求或脚本。
+
+飞书设备授权由 `feishu-auth.js` / `feishu_auth.go` 实现，状态经 `authStart/authPoll` 返回，原始令牌与应用密钥不返回页面、不持久化。只允许固定认证域名和官方中国区确认页，连接时一次性消费 authId，且仅可交给飞书 API origin 的内置来源。关闭表单 / 切项目必须取消授权请求；并发刷新合并。平台资格尚待实测，详见 [授权设计](../design/feishu-client-authorization.md)。
+
+金山原生模块通过固定官方引导页与 exchange 完成授权，只调用四个读取工具；不启动 CLI、不读取浏览器或其他应用凭据。`kdocsAuthStart/Poll/Logout` 只返回状态与临时链接。金山凭据可经 Electron safeStorage / Go Windows DPAPI 加密保存；Linux basic_text 不允许明文降级。切项目取消请求但保留安全账号，退出显式删除，失效时移除；连接绑定凭据指纹，不能跨账号复用旧节点。普通设置与布局不接收这些凭据，具体边界见 [金山插件](../design/kdocs-directory-plugin.md)。

@@ -717,7 +717,8 @@
   /** 固定列的数据形态：顺序、宽度、上下比例、每格的内容与模式 */
   function savedPaneData(pane) {
     const node = pane.node;
-    if (!node || typeof node.path !== 'string' || !node.path) return null;
+    // 云文档链接可能临时签名；持久化挂载身份，不把解析出的 URL 写进布局。
+    if (!node || node.cloudMountId || typeof node.path !== 'string' || !node.path) return null;
     const item = {
       path: node.path,
       kind: node.kind || 'txt',

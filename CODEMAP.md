@@ -135,3 +135,27 @@
 - `src/renderer/changes.js`：`PV.changes.create()` 注入工作区状态与回调，负责目录及预览版本监测；刷新调度与按钮呈现在 `app.js`。
 - `src/main/folder-menu.js`：当前用户 Windows 文件夹菜单注册与取消；安装 / 卸载钩子在 `build/installer.nsh`。MyGo 对应逻辑在 `main.go`。
 - `PV.highlight.mount().find()`：在完整源码中查找，按命中行滚动虚拟视图并保留语法颜色；`find.js` 共用查询条与快捷键。
+
+## 外部参考目录
+
+- `src/main/reference-dirs.js`：`createReferenceDirs()` 管理原生选择框授权、每项目持久化、恢复与移除；`main.js` 在工作区提交前准备参考目录，并在序号检查后同步登记。
+- `mygo/references.go`：`ReferenceDirs / AddReferenceDir / RemoveReferenceDir` 为同形 bridge 能力，`seqMu` 保护活动项目与目录授权的提交。
+- `fs-api.js` / `mygo/fsapi.go` 区分可读根与可写根，参考目录不会进入 SVG 可写范围；`app.js` 的 `rootForPath / browseRoot / refreshFavorites` 区分项目身份与浏览来源。
+- 云目录插件的后续方案见 [设计文档](docs/design/external-directory-plugins.md)。
+
+## 目录插件、飞书与金山
+
+- `src/shared/directory-providers.json`：共享版本化插件清单，包含飞书文件夹 / Wiki 目录和金山个人文件夹映射；金山使用内置 Skill transport（原生 HTTP，不运行 CLI）；默认根、节点映射和分页在清单声明。
+- `src/main/directory-plugins.js`：`createDirectoryPlugins / invokeDirectoryPlugin` 管理挂载、会话令牌、节点与分页授权、请求、缓存、取消和标准化。
+- `mygo/directory_plugins.go`：同形宿主和 `App.DirectoryCall`；从 staging 后的共享清单加载插件。
+- `src/renderer/cloud-directories.js`：`PV.cloud` 管理来源配置表单、目录列表、详情、分页和在线文档打开；`app.js` 注入预览与快捷访问回调。
+- `pane.js` 的 `savedPaneData` 排除云来源预览，避免解析出的临时 URL 持久化；项目导航的云文档选中态同样不写入磁盘。
+- 接口推演、其他服务接入步骤与限制见 [目录插件体系](docs/design/external-directory-plugins.md)。
+
+## 飞书客户端设备授权
+
+`src/main/feishu-auth.js` / `mygo/feishu_auth.go`：`start/poll/take/token/cancel/clear`；共享配置 `src/shared/feishu-auth.json`。目录桥接新增 `authStart` / `authPoll`，`connect` 可消费一次性 `authId`，原始凭据不返回界面。方案、资格边界和真实测试资源见 [客户端授权设计](docs/design/feishu-client-authorization.md)。
+
+金山插件的官方接口、对象 ID 与鉴权边界见 [金山目录设计](docs/design/kdocs-directory-plugin.md)。目录宿主 `pin` / bridge `pin` 仅将已发现子目录独立挂载；单文档 provider 已移除，文档快捷项走原有网页链接。
+
+`src/main/kdocs-plugin.js` / `mygo/kdocs_plugin.go`：`start/poll/identity/invoke/logout`，官方浏览器引导页 + Skill exchange + 四个只读工具；协议配置在 `src/shared/kdocs-skill.json`。安全持久化由 `protected-credentials.js` 注入 Electron safeStorage，Go Windows 用 `kdocs_protection_windows.go` 的 DPAPI。目录桥接 `kdocsAuthStart/kdocsAuthPoll/kdocsLogout` 不返回原始凭据。

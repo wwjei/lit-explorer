@@ -344,6 +344,335 @@ function loadRenderer() {
     eq('数字按数值排序', p.compareNodes({ name: 'a10', isDir: false }, { name: 'a2', isDir: false }) > 0, true);
   });
 
+  await run('S8', '外部参考目录的授权、撤销与只读边界', async () => {
+    const fsApi = require('../src/main/fs-api');
+    const { createReferenceDirs } = require('../src/main/reference-dirs');
+    const project = freshDir('reference-project');
+    const other = freshDir('reference-other');
+    const external = freshDir('reference-external');
+    const file = path.join(external, 'ref.svg');
+    fs.writeFileSync(file, '<svg/>');
+    let state = {};
+    let pick = async () => external;
+    const service = createReferenceDirs({ fsApi,
+      store: { load: async () => state, patch: async (p) => { state = { ...state, ...p }; } },
+      pick: () => pick()
+    });
+    fsApi.resetAllowedRoots();
+    const root = await fsApi.allowRoot(project);
+    service.activate(root, []);
+    const added = await service.add();
+    eq('选择框添加真实目录', added.dirs.length, 1);
+    eq('参考文件可读取', (await fsApi.readFileForPreview(file)).text, '<svg/>');
+    let error;
+    try { await fsApi.writeSvgFile(file, '<svg/>', {}); } catch (err) { error = err.code; }
+    eq('参考目录不可写入 SVG', error, 'EREAD_ONLY');
+    await service.add();
+    eq('重复目录不重复保存', service.list().length, 1);
+    const prepared = await service.prepare(root);
+    eq('可从主进程设置恢复目录', prepared.length, 1);
+    const link = path.join(external, 'escape');
+    if (linkDir(other, link)) {
+      error = null;
+      try { await fsApi.assertAllowed(path.join(link, 'secret')); } catch (err) { error = err.code; }
+      ok('参考目录中的链接不能越界', !!error, error);
+    }
+    const sanitized = require('../src/main/state-sanitize').sanitizePatch({ referenceDirs: { [root]: [other] } }, () => true);
+    eq('页面设置不能伪造参考目录授权', Object.keys(sanitized).length, 0);
+    await service.remove(external);
+    error = null;
+    try { await fsApi.assertAllowed(file); } catch (err) { error = err.code; }
+    ok('移除后立即不可读', !!error, error);
+    let choose;
+    pick = () => new Promise((resolve) => { choose = resolve; });
+    const pending = service.add();
+    fsApi.resetAllowedRoots();
+    const next = await fsApi.allowRoot(other);
+    service.activate(next, []);
+    choose(external);
+    eq('项目切换后丢弃旧选择框结果', (await pending).error, 'SUPERSEDED');
+    eq('新项目没有旧项目的参考目录', service.list().length, 0);
+    fsApi.resetAllowedRoots();
+  });
+
+  await run('S9', '目录插件契约、飞书接口、权限及凭据隔离', async () => {
+    const {createDirectoryPlugins, safeDocumentUrl, providers} = require('../src/main/directory-plugins');
+    const manifest = require('../src/shared/directory-providers.json');
+    const fixture = require('./fixtures/feishu-directory.json');
+    let state = {}, requests = [], mode = 'normal';
+    const store = {load: async()=>state, patch: async(p)=>{state={...state,...p};}};
+    const fetch = async(raw, options)=>{
+      const url=new URL(raw); requests.push({url,options});
+      if (mode==='auth') return new Response('{}',{status:401});
+      if (mode==='huge') return new Response('x'.repeat(2*1024*1024+1));
+      let data;
+      if (url.pathname.endsWith('batch_query')) data=JSON.parse(JSON.stringify(fixture.details));
+      else if (url.searchParams.get('folder_token')==='folderA') data=fixture.nestedPage;
+      else data=url.searchParams.get('page_token') ? fixture.lastPage : fixture.firstPage;
+      if (mode==='unsafe') data.data.metas[0].url='https://feishu.cn.evil.example/docx/docA';
+      return new Response(JSON.stringify(data));
+    };
+    const api=createDirectoryPlugins({store,fetch});
+    api.activate('/project-a');
+    const mount=await api.connect({providerId:'feishu-drive',rootId:'root',name:'资料库',token:'fixture-secret'});
+    eq('内置飞书插件可发现',api.providers()[0].id,'feishu-drive');
+    ok('设置中不包含访问令牌',!JSON.stringify(state).includes('fixture-secret'),state);
+    const first=await api.list(mount.id,'root','');
+    eq('列表标准化目录节点',first.entries[0].kind,'directory');
+    eq('连接首屏命中缓存，不重复请求',requests.length,1);
+    eq('分页标记来自官方响应字段',first.nextCursor,'next-page');
+    const second=await api.list(mount.id,'root',first.nextCursor);
+    eq('第二页正确归一化',second.entries[0].type,'sheet');
+    const nested=await api.list(mount.id,'folderA','');
+    eq('已发现的子目录可以浏览',nested.entries[0].id,'docB');
+    const opened=await api.open(mount.id,'docA');
+    eq('打开文档重新获取实际在线链接',opened.url,'https://tenant.feishu.cn/docx/docA');
+    eq('打开使用最新标题',opened.name,'设计说明（最新）');
+    const request=requests[requests.length-1];
+    eq('元数据接口是 POST',request.options.method,'POST');
+    eqJson('飞书请求开启 with_url',JSON.parse(request.options.body),{request_docs:[{doc_token:'docA',doc_type:'docx'}],with_url:true});
+    ok('认证仅发给固定 API 域名且不跟随重定向',requests.every(r=>r.url.origin==='https://open.feishu.cn'&&r.options.headers.Authorization==='Bearer fixture-secret'&&r.options.redirect==='error'));
+    async function rejected(title,fn,expected) { let code;try {await fn();}catch(err){code=err.code;}eq(title,code,expected); }
+    await rejected('不能查询未发现节点',()=>api.list(mount.id,'outside',''),'OUTSIDE_MOUNT');
+    await rejected('不能伪造其他目录的分页标记',()=>api.list(mount.id,'root','forged'),'OUTSIDE_MOUNT');
+    mode='unsafe';await rejected('不能打开伪装的文档域名',()=>api.open(mount.id,'docA'),'UNSAFE_URL');
+    mode='huge';await rejected('API 响应体有上限',()=>api.list(mount.id,'root','',true),'RESPONSE_TOO_LARGE');
+    mode='auth';await rejected('令牌过期使用稳定错误码',()=>api.list(mount.id,'root','',true),'AUTH_REQUIRED');
+    eq('令牌过期后清除连接',(await api.mounts())[0].connected,false);
+    mode='normal';await api.connect({id:mount.id,token:'fixture-secret'});
+    api.activate('/project-b');
+    await rejected('切项目后旧连接不能读取',()=>api.list(mount.id,'root',''),'AUTH_REQUIRED');
+    eq('其他项目不显示旧挂载',(await api.mounts()).length,0);
+    api.activate('/project-a');
+    eq('重开仅恢复配置，不恢复凭据',(await api.mounts())[0].connected,false);
+    await api.connect({id:mount.id,token:'fixture-secret'});
+    await api.remove(mount.id);
+    eq('移除后持久化记录清空',(await api.mounts()).length,0);
+    await rejected('移除后不再读取',()=>api.list(mount.id,'root',''),'AUTH_REQUIRED');
+    let invalid;try {safeDocumentUrl('file:///etc/passwd',manifest.providers[0]);}catch(err){invalid=err.code;}
+    eq('文档打开禁止本机文件协议',invalid,'UNSAFE_URL');
+    let bad;try{providers({...manifest,apiVersion:99});}catch(err){bad=err.code;}
+    eq('未知插件契约版本拒绝加载',bad,'PLUGIN_VERSION');
+    let release;
+    const pending=createDirectoryPlugins({store,fetch:(_u,options)=>new Promise((resolve,reject)=>{
+      release=()=>resolve(new Response(JSON.stringify(fixture.firstPage)));
+      options.signal.addEventListener('abort',()=>reject(new Error('aborted')));
+    })});
+    pending.activate('/project-a');
+    const connect=pending.connect({providerId:'feishu-drive',rootId:'root',name:'等待',token:'fixture-secret'});
+    while(!release) await new Promise(resolve=>setImmediate(resolve));
+    pending.activate('/project-b');
+    await rejected('切换项目会取消连接中的请求',()=>connect,'SUPERSEDED');
+    release=null; pending.activate('/project-a');
+    const cancelConnect=pending.connect({providerId:'feishu-drive',rootId:'root',name:'取消',token:'fixture-secret',attemptId:'attempt-a'});
+    while(!release) await new Promise(resolve=>setImmediate(resolve));
+    pending.cancel('attempt-a');
+    await rejected('关闭表单会取消验证中的连接',()=>cancelConnect,'SUPERSEDED');
+
+    // 用不同的 origin、路径和 JSON 字段验证宿主没有写死飞书协议。
+    const custom=JSON.parse(JSON.stringify(manifest)); const p=custom.providers[0];
+    p.id='fixture-provider';p.name='示例插件';p.apiOrigin='https://api.example.com';p.documentHosts=['docs.example.com'];p.success={field:'status',value:'ok'};
+    p.list.path='/v1/folders/$nodeId/items';p.list.query={cursor:'$cursor'};p.list.entries='payload.nodes';p.list.cursor='payload.cursor';p.list.hasMore='payload.more';p.list.fields={id:'id',name:'label',type:'kind',url:'link'};
+    p.details.path='/v1/metadata';p.details.entries='payload.nodes';p.details.fields=p.list.fields;
+    const generic=createDirectoryPlugins({store,manifest:custom,fetch:async(url)=>{
+      ok('其他插件可使用自己的 API 路径',url.startsWith('https://api.example.com/v1/folders/root/items'),url);
+      return new Response(JSON.stringify({status:'ok',payload:{nodes:[{id:'example',label:'通用节点',kind:'folder'}],more:false}}));
+    }});
+    generic.activate('/generic');
+    const example=await generic.connect({providerId:'fixture-provider',rootId:'root',name:'通用来源',token:'fixture-secret'});
+    eq('同一插件宿主可加载不同服务的字段映射',(await generic.list(example.id,'root','')).entries[0].name,'通用节点');
+  });
+
+  await run('S10', 'Wiki 目录挂载与移除单文档入口', async () => {
+    const {createDirectoryPlugins}=require('../src/main/directory-plugins');
+    const fixture=require('./fixtures/feishu-directory.json');
+    let state={},calls=[];
+    const api=createDirectoryPlugins({store:{load:async()=>state,patch:async(p)=>{state={...state,...p};}},fetch:async(raw,options)=>{
+      const url=new URL(raw);calls.push({url,options});let data;
+      if(url.pathname.endsWith('get_node')) data=fixture.wikiRoot;
+      else if(url.pathname.includes('/wiki/')) data=fixture.wikiPage;
+      else {
+        const doc=JSON.parse(options.body).request_docs[0];
+        data={code:0,data:{metas:[{doc_token:doc.doc_token,doc_type:doc.doc_type,title:'在线文档 '+doc.doc_token,url:'https://tenant.feishu.cn/docx/'+doc.doc_token}]}};
+      }
+      return new Response(JSON.stringify(data));
+    }});
+    api.activate('/specific');
+    for (const providerId of ['feishu-document','feishu-wiki-document']) {
+      let error; try { await api.connect({providerId,rootId:'docA',token:'fixture-secret'}); } catch (err) {error=err.code;}
+      eq('已取消单文档入口 '+providerId,error,'BAD_REQUEST');
+    }
+    const wiki=await api.connect({providerId:'feishu-wiki',rootId:'https://tenant.feishu.cn/wiki/wikiRoot',name:'我的 Wiki 目录',token:'fixture-secret'});
+    eq('Wiki 节点作为目录入口',wiki.rootKind,'directory');
+    const page=await api.list(wiki.id,'wikiRoot','');
+    eq('Wiki 目录返回子节点',page.entries[0].id,'wikiChild');
+    eq('Wiki 叶子文档可直接点击打开',page.entries[0].kind,'document');
+    eq('Wiki 子节点保留实际文档标识',page.entries[0].documentId,'wikiDocChild');
+    ok('Wiki 查询绑定解析得到的知识空间',calls.some(c=>c.url.pathname==='/open-apis/wiki/v2/spaces/space123/nodes'&&c.url.searchParams.get('parent_node_token')==='wikiRoot'));
+    eq('Wiki 节点自身也能打开文档',(await api.open(wiki.id,'wikiRoot')).url,'https://tenant.feishu.cn/docx/wikiDocRoot');
+    eq('Wiki 子项打开实体文档链接',(await api.open(wiki.id,'wikiChild')).url,'https://tenant.feishu.cn/docx/wikiDocChild');
+    eq('Wiki 目录详情来自节点接口',(await api.details(wiki.id,'wikiRoot')).name,'知识库入口');
+    ok('文档与目录配置均不包含令牌',!JSON.stringify(state).includes('fixture-secret'));
+  });
+
+  await run('S12', '内置金山插件：浏览器授权、目录与独立文件夹', async () => {
+    const {createDirectoryPlugins,invokeDirectoryPlugin}=require('../src/main/directory-plugins');
+    const fixture=require('./fixtures/kdocs-skill.json');
+    let saved={},calls=[],clock=100000,mode='normal',secure=null;
+    const api=createDirectoryPlugins({authNow:()=>clock,kdocsCredentials:{load:async()=>secure,save:async(v)=>{secure=v;return true;},remove:async()=>{secure=null;}},store:{load:async()=>saved,patch:async(p)=>{saved={...saved,...p};}},fetch:async(raw,options)=>{
+      const url=new URL(raw),body=JSON.parse(options.body);calls.push({url,options,body});
+      let data;
+      if(url.hostname==='api.wps.cn') data=fixture.authorized;
+      else data=fixture[mode]|| (body.tool==='get_file_link'?fixture.link:body.tool==='get_file_info'?(body.args.file_id==='folder_A'?fixture.folderDetails:fixture.fileDetails):body.tool==='list_files'?fixture.nestedPage:body.args.page_token?fixture.lastPage:fixture.firstPage);
+      return new Response(JSON.stringify(data));
+    }});
+    api.activate('/kdocs');
+    const descriptor=api.providers().find(p=>p.id==='kdocs-skill');
+    ok('金山使用专用浏览器认证',descriptor.kdocsAuth&&!descriptor.browserAuth);
+    eq('旧开放平台插件不再暴露',api.providers().some(p=>p.id==='kdocs-personal'),false);
+    const auth=(await invokeDirectoryPlugin(api,'kdocsAuthStart',{attemptId:'login'})).value;
+    ok('授权页面是官方引导页',auth.url.startsWith('https://mcp-center.wps.cn/kdocs-auth/auth-guide?auth_code='));
+    clock+=1000;
+    const ready=await api.kdocsAuthPoll({authId:auth.authId});
+    eq('用户确认后就绪',ready.phase,'ready');
+    ok('授权结果不含 token',!JSON.stringify(ready).includes('skill-fixture-secret'));
+    const root=await api.connect({providerId:'kdocs-skill',rootId:'',name:'我的金山文档'});
+    const first=await api.list(root.id,root.rootId,'');
+    eq('根目录使用 list_my_files',calls.at(-1).body.tool,'list_my_files');
+    eq('修改时间正确标准化',first.entries[0].modifiedAt,'1700000010');
+    eq('原生分页标记正确',first.nextCursor,'next-page');
+    const last=await api.list(root.id,root.rootId,first.nextCursor);
+    eq('下一页通过官方 page_token 传递',calls.at(-1).body.args.page_token,'next-page');
+    eq('分页结束',last.nextCursor,'');
+    eq('不能伪造分页',(await invokeDirectoryPlugin(api,'list',{mountId:root.id,nodeId:root.rootId,cursor:'forged'})).error,'OUTSIDE_MOUNT');
+    await api.list(root.id,'folder_A','');
+    eq('子目录携带 drive_id',calls.at(-1).body.args.drive_id,'drive_A');
+    eq('详情使用 get_file_info',(await api.details(root.id,'file_A')).name,'接口说明');
+    eq('详情请求工具正确',calls.at(-1).body.tool,'get_file_info');
+    const pinned=await api.pin(root.id,'folder_A');
+    eq('子目录独立加入快捷访问',pinned.rootId,'folder_A');
+    eq('重复添加复用原项',(await api.pin(root.id,'folder_A')).id,pinned.id);
+    eq('文件不能作为目录项',(await invokeDirectoryPlugin(api,'pin',{mountId:root.id,nodeId:'file_A'})).error,'BAD_REQUEST');
+    await api.remove(root.id);
+    eq('移除原入口后仍可打开',(await api.open(pinned.id,'file_A')).url,'https://www.kdocs.cn/l/fixtureDoc');
+    ok('只调用四个读取工具',calls.filter(c=>c.url.hostname==='mcp-center.wps.cn').every(c=>['list_my_files','list_files','get_file_info','get_file_link'].includes(c.body.tool)));
+    ok('协议使用固定 HTTPS 端点且禁止重定向',calls.every(c=>c.url.protocol==='https:'&&c.options.redirect==='error'));
+    ok('普通项目设置中没有凭据',!JSON.stringify(saved).includes('skill-fixture-secret'));
+    mode='limited';eq('限流归一化',(await invokeDirectoryPlugin(api,'list',{mountId:pinned.id,nodeId:'folder_A',refresh:true})).error,'RATE_LIMITED');
+    mode='forbidden';eq('权限归一化',(await invokeDirectoryPlugin(api,'open',{mountId:pinned.id,nodeId:'file_A'})).error,'FORBIDDEN');
+    mode='expired';eq('失效令牌断开连接',(await invokeDirectoryPlugin(api,'list',{mountId:pinned.id,nodeId:'folder_A',refresh:true})).error,'AUTH_REQUIRED');
+    eq('失效凭据从安全存储移除',secure,null);
+  });
+
+  await run('S13', '金山原生授权边界与系统保护存储', async () => {
+    const {createKdocsPlugin}=require('../src/main/kdocs-plugin');
+    const {protectedCredentials}=require('../src/main/protected-credentials');
+    const fixture=require('./fixtures/kdocs-skill.json');
+    const file=path.join(freshDir('kdocs-credentials'),'credential.bin');
+    const store=protectedCredentials({file,available:()=>true,encrypt:(s)=>Buffer.from(s).map(v=>v^170),decrypt:(b)=>Buffer.from(b.map(v=>v^170)).toString()});
+    let clock=100000,replies=[],calls=0;
+    const plugin=createKdocsPlugin({now:()=>clock,credentials:store,fetch:async()=>{calls++;return new Response(JSON.stringify(replies.shift()));}});
+    const reject=async(label,fn,code)=>{let actual;try{await fn();}catch(err){actual=err.code;}eq(label,actual,code);};
+    const a=await plugin.start({attemptId:'native'});
+    eq('过早轮询不会发送请求',(await plugin.poll('native')).phase,'authorization');
+    eq('轮询节流生效',calls,0);
+    replies=[fixture.pending,fixture.authorized];clock+=1000;
+    eq('等待用户确认',(await plugin.poll(a.authId)).phase,'authorization');clock+=1000;
+    const ready=await plugin.poll(a.authId);
+    ok('系统保护可用时保持登录',ready.persistent);
+    ok('磁盘不是明文 token',!fs.readFileSync(file).includes(Buffer.from('skill-fixture-secret')));
+    const restored=createKdocsPlugin({now:()=>clock,credentials:store,fetch:async()=>{throw Error('unexpected network');}});
+    eq('重启可复用安全保存的授权',(await restored.start({attemptId:'restored'})).phase,'ready');
+    await restored.logout();eq('退出删除安全凭据',fs.existsSync(file),false);
+    const beforeIdentity=await plugin.identity(new AbortController().signal);
+    await plugin.start({attemptId:'other-account',forceLogin:true});replies=[fixture.authorizedOther];clock+=1000;await plugin.poll('other-account');
+    await reject('旧连接不能换用新账号的凭据',()=>plugin.invoke('list',{id:'@my-documents'},'',new AbortController().signal,beforeIdentity),'AUTH_REQUIRED');
+    ok('旧连接失败不会删除新账号授权',(await plugin.identity(new AbortController().signal))!==beforeIdentity);
+    await plugin.start({attemptId:'denied',forceLogin:true});replies=[fixture.cancelled];clock+=1000;
+    await reject('用户取消终止授权',()=>plugin.poll('denied'),'AUTH_DENIED');
+    await plugin.start({attemptId:'enterprise',forceLogin:true});replies=[fixture.enterprise];clock+=1000;
+    await reject('企业账号不反复重试',()=>plugin.poll('enterprise'),'KDOCS_PERSONAL_ONLY');
+    await plugin.start({attemptId:'expired',forceLogin:true});clock+=301000;
+    await reject('授权码五分钟过期',()=>plugin.poll('expired'),'AUTH_EXPIRED');
+    await plugin.start({attemptId:'closed',forceLogin:true});plugin.clear();
+    await reject('切项目取消待授权',()=>plugin.poll('closed'),'AUTH_REQUIRED');
+    const memoryFile=path.join(path.dirname(file),'must-not-exist.bin');
+    const memoryStore=protectedCredentials({file:memoryFile,available:()=>false});
+    eq('安全存储不可用时禁止明文降级',await memoryStore.save({token:'secret'}),false);
+    eq('不生成明文凭据文件',fs.existsSync(memoryFile),false);
+    const blocked=createKdocsPlugin({now:()=>clock,fetch:(_u,o)=>new Promise((resolve,reject)=>{o.signal.addEventListener('abort',()=>reject(Error('abort')));})});
+    await blocked.start({attemptId:'pending'});clock+=1000;const pending=blocked.poll('pending');
+    await Promise.resolve();blocked.clear();
+    await reject('关闭授权中断在途请求',()=>pending,'SUPERSEDED');
+  });
+
+  await run('S11', '飞书设备授权：本机凭据、注册、取消与刷新', async () => {
+    const { createFeishuAuth, verificationURL } = require('../src/main/feishu-auth');
+    const fixture = require('./fixtures/feishu-auth.json');
+    let clock = 100000, queue = [], calls = [];
+    const auth = createFeishuAuth({ now: () => clock, fetch: async (raw, options) => {
+      calls.push({ url: raw, form: Object.fromEntries(new URLSearchParams(options.body)), headers: options.headers });
+      return new Response(JSON.stringify(queue.shift()), { status: 200 });
+    } });
+    const rejected = async (label, task, code) => {
+      let actual; try { await task(); } catch (err) { actual = err.code; } eq(label, actual, code);
+    };
+    queue = [fixture.registration, fixture.registered, fixture.device, fixture.pending, fixture.slow, fixture.token];
+    const started = await auth.start({mode:'personal',attemptId:'attempt'});
+    eq('先创建本机个人应用', started.phase, 'registration');
+    ok('注册链接只指向飞书官方', started.url.startsWith('https://open.feishu.cn/page/cli?'));
+    eq('提前轮询不发送网络请求', (await auth.poll('attempt')).phase, 'registration');
+    eq('宿主执行轮询间隔', calls.length, 1);
+    clock += 1000;
+    eq('创建应用后进入设备授权', (await auth.poll('attempt')).phase, 'authorization');
+    eq('只读权限声明一致', calls[2].form.scope, require('../src/shared/feishu-auth.json').scopes);
+    ok('应用密钥仅发给认证端点', calls[2].headers.Authorization.startsWith('Basic '));
+    clock += 1000; eq('等待确认', (await auth.poll('attempt')).phase, 'authorization');
+    clock += 1000; eq('slow_down 增加轮询间隔', (await auth.poll('attempt')).interval, 6);
+    clock += 6000;
+    const ready = await auth.poll('attempt');
+    eq('用户确认后已就绪', ready.phase, 'ready');
+    ok('界面响应不含凭据', !/access-fixture|refresh-fixture|local-app-secret|login-device/.test(JSON.stringify(ready)));
+    const credential = auth.take('attempt'), controller = new AbortController();
+    await rejected('授权结果只能交给一个挂载', () => auth.take('attempt'), 'AUTH_REQUIRED');
+    eq('宿主内部领取 Bearer 令牌', await credential.token(controller.signal), 'access-fixture');
+    clock += 100000; queue = [fixture.refreshed];
+    eqJson('并发读取共享一次刷新', await Promise.all([credential.token(controller.signal), credential.token(controller.signal)]), ['access-refreshed','access-refreshed']);
+    eq('刷新使用 refresh_token', calls.at(-1).form.grant_type, 'refresh_token');
+    eq('旋转前使用当前刷新令牌', calls.at(-1).form.refresh_token, 'refresh-fixture');
+    const before = calls.length;
+    await credential.token(controller.signal); eq('有效期内不重复刷新', calls.length, before);
+    clock += 7200000; queue = [fixture.denied];
+    await rejected('刷新被撤销后要求重新授权', () => credential.token(controller.signal), 'AUTH_REQUIRED');
+    const revokedCalls = calls.length;
+    await rejected('已失效凭据不反复交换', () => credential.token(controller.signal), 'AUTH_REQUIRED');
+    eq('撤销后不再发送刷新请求', calls.length, revokedCalls);
+    controller.abort(); await rejected('断开连接后禁止读取凭据', () => credential.token(controller.signal), 'SUPERSEDED');
+    queue = [fixture.device, fixture.denied];
+    await auth.start({mode:'application',attemptId:'denied',appId:'cli_fixture',appSecret:'own-secret'}); clock += 1000;
+    await rejected('拒绝授权只返回稳定错误码', () => auth.poll('denied'), 'AUTH_DENIED');
+    queue = [fixture.device];
+    await auth.start({mode:'application',attemptId:'expired',appId:'cli_fixture',appSecret:'own-secret'}); clock += 241000;
+    await rejected('设备码到期终止', () => auth.poll('expired'), 'AUTH_EXPIRED');
+    queue = [fixture.device, {...fixture.token, token_type:'DPoP'}];
+    await auth.start({mode:'application',attemptId:'dpop',appId:'cli_fixture',appSecret:'own-secret'}); clock += 1000;
+    await rejected('不把 DPoP 当作 Bearer', () => auth.poll('dpop'), 'AUTH_UNSUPPORTED');
+    queue = [fixture.device];
+    await auth.start({mode:'application',attemptId:'cancel',appId:'cli_fixture',appSecret:'own-secret'}); auth.clear();
+    await rejected('切项目清除待授权凭据', () => auth.poll('cancel'), 'AUTH_REQUIRED');
+    for (const url of ['https://evil.test/auth','https://accounts.feishu.cn.evil.test','https://x@accounts.feishu.cn','http://accounts.feishu.cn']) {
+      await rejected('拒绝不可信授权地址 '+url, () => verificationURL(url), 'UNSAFE_URL');
+    }
+    let inFlight;
+    const blocked = createFeishuAuth({ fetch: (_url, options) => new Promise((_resolve,reject) => {
+      inFlight = options.signal; options.signal.addEventListener('abort', () => reject(new Error('abort')));
+    }) });
+    const job = blocked.start({mode:'personal',attemptId:'blocked'});
+    blocked.cancel('blocked');
+    await rejected('关闭表单中止 begin 请求', () => job, 'SUPERSEDED');
+    ok('底层请求被取消', inFlight.aborted);
+  });
+
   done();
 })().catch((err) => {
   console.error(err);

@@ -1,0 +1,6 @@
+{
+  "version": "2.7.1",
+  "authorizationPage": "https://mcp-center.wps.cn/kdocs-auth/auth-guide",
+  "exchangeEndpoint": "https://api.wps.cn/office/v5/ai/skill_hub/wps_auth/exchange",
+  "toolEndpoint": "https://mcp-center.wps.cn/skill_hub/api/v1/tool"
+}

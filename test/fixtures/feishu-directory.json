@@ -1,0 +1,101 @@
+{
+  "firstPage": {
+    "code": 0,
+    "data": {
+      "files": [
+        {
+          "token": "folderA",
+          "name": "资料",
+          "type": "folder",
+          "parent_token": "root",
+          "modified_time": "1700000000"
+        },
+        {
+          "token": "docA",
+          "name": "设计说明",
+          "type": "docx",
+          "parent_token": "root",
+          "url": "https://tenant.feishu.cn/docx/docA",
+          "modified_time": "1700000010"
+        }
+      ],
+      "has_more": true,
+      "next_page_token": "next-page"
+    }
+  },
+  "lastPage": {
+    "code": 0,
+    "data": {
+      "files": [
+        {
+          "token": "sheetA",
+          "name": "计划",
+          "type": "sheet",
+          "parent_token": "root"
+        }
+      ],
+      "has_more": false
+    }
+  },
+  "nestedPage": {
+    "code": 0,
+    "data": {
+      "files": [
+        {
+          "token": "docB",
+          "name": "接口",
+          "type": "docx",
+          "parent_token": "folderA"
+        }
+      ],
+      "has_more": false
+    }
+  },
+  "details": {
+    "code": 0,
+    "data": {
+      "metas": [
+        {
+          "doc_token": "docA",
+          "doc_type": "docx",
+          "title": "设计说明（最新）",
+          "url": "https://tenant.feishu.cn/docx/docA",
+          "latest_modify_time": "1700000030"
+        }
+      ],
+      "failed_list": []
+    }
+  },
+  "wikiRoot": {
+    "code": 0,
+    "data": {
+      "node": {
+        "space_id": "space123",
+        "node_token": "wikiRoot",
+        "obj_token": "wikiDocRoot",
+        "obj_type": "docx",
+        "title": "知识库入口",
+        "has_child": true,
+        "obj_edit_time": "1700000010"
+      }
+    }
+  },
+  "wikiPage": {
+    "code": 0,
+    "data": {
+      "items": [
+        {
+          "space_id": "space123",
+          "node_token": "wikiChild",
+          "obj_token": "wikiDocChild",
+          "obj_type": "docx",
+          "title": "子文档",
+          "has_child": false,
+          "obj_edit_time": "1700000020"
+        }
+      ],
+      "has_more": false,
+      "page_token": ""
+    }
+  }
+}

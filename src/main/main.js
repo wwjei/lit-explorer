@@ -3,7 +3,7 @@
 // 大目录批量 stat 会密集使用线程池，提前放大以免成为瓶颈
 process.env.UV_THREADPOOL_SIZE = process.env.UV_THREADPOOL_SIZE || '16';
 
-const { app, BrowserWindow, Menu, dialog, ipcMain, shell, clipboard, protocol, nativeImage } = require('electron');
+const { app, BrowserWindow, Menu, dialog, ipcMain, shell, clipboard, protocol, nativeImage, net } = require('electron');
 const path = require('node:path');
 const fsp = require('node:fs/promises');
 
@@ -285,6 +285,20 @@ async function captureAndQuit() {
  * 工作区
  * ------------------------------------------------------------------ */
 /** 每次切换工作区递增；后发起的切换获胜，先发起的不许再登记授权根 */
+const kdocsCredentials = require('./protected-credentials').protectedCredentials({
+  file: path.join(app.getPath('userData'), 'credentials', 'kdocs.bin'),
+  available: () => { const secure = require('electron').safeStorage; return secure.isEncryptionAvailable() && (process.platform !== 'linux' || secure.getSelectedStorageBackend?.() !== 'basic_text'); },
+  encrypt: (value) => require('electron').safeStorage.encryptString(value),
+  decrypt: (value) => require('electron').safeStorage.decryptString(value)
+});
+const directoryPlugins = require('./directory-plugins').createDirectoryPlugins({ store, kdocsCredentials, fetch: (url, options) => net.fetch(url, options) });
+const referenceDirs = require('./reference-dirs').createReferenceDirs({
+  fsApi, store,
+  pick: async () => {
+    const result = await dialog.showOpenDialog(win, { title: '添加外部参考目录', properties: ['openDirectory'] });
+    return result.canceled ? null : result.filePaths[0];
+  }
+});
 let workspaceSeq = 0;
 
 async function openWorkspace(dir, options = {}) {
@@ -307,9 +321,12 @@ async function openWorkspace(dir, options = {}) {
   // 先异步解析，再同步「清空 + 登记」：两次切换重叠时，先发起的那次若在
   // 后一次清空之后才登记，就会留下两个授权根（A 已切走却仍然可读）。
   const root = await fsApi.resolveReal(abs);
+  const references = await referenceDirs.prepare(root);
   if (seq !== workspaceSeq) return { error: 'SUPERSEDED' };
   fsApi.resetAllowedRoots();
   fsApi.allowResolvedRoot(root);
+  referenceDirs.activate(root, references);
+  directoryPlugins.activate(root);
   // 打开过的目录也算「给过渲染进程」：它之后可以再打开一次
   fsApi.offerRoot(root);
   const state = await store.load();
@@ -324,6 +341,13 @@ async function openWorkspace(dir, options = {}) {
  * IPC
  * ------------------------------------------------------------------ */
 function registerIpc() {
+  ipcMain.handle('directories:call', (_e, method, args) =>
+    require('./directory-plugins').invokeDirectoryPlugin(directoryPlugins, method, args));
+  ipcMain.handle('references:list', () => referenceDirs.list());
+  ipcMain.handle('references:add', async () => {
+    try { return await referenceDirs.add(); } catch (err) { return { error: err.code || 'EREFERENCE', message: err.message }; }
+  });
+  ipcMain.handle('references:remove', (_e, dir) => referenceDirs.remove(dir));
   ipcMain.handle('workspace:sample', () => fsApi.offerRoot(assetPath('sample-project')));
 
   ipcMain.handle('workspace:pick', () => pickFolderAndOpen());

@@ -175,3 +175,13 @@ MyGo 版装到 `%LOCALAPPDATA%\Programs\Lit Explorer MyGo`，产物是单个 exe
 里面，没有 `app.asar`）：直接运行 `dist/Lit-Explorer-MyGo-<版本>-portable.exe` 就能验证
 打包结果。它需要系统 WebView2 Runtime；缺的时候窗口起不来而不是弹提示。
 两个版本可以同时安装，但各自有单实例锁与独立的 `userData`。
+
+## 外部参考目录回归
+
+单元段 S8 验证原生选择结果登记、去重、恢复、只读 SVG、真实路径越界、移除撤权与切项目时丢弃旧选择框结果。集成段 R2 验证快捷访问添加、外部目录浏览、Markdown 链接预览、返回项目与重开恢复、移除。MyGo 的 `TestReferenceReadOnly` 与 `TestReferencePersistenceAndRemoval` 覆盖对应授权与持久化边界。
+
+目录插件回归：S9 验证通用清单、飞书请求、权限 / 分页 / URL / 令牌隔离与第二种字段映射，S10 验证 Wiki 节点 / 实体标识和单文档入口移除。D1 驱动文件夹 / Wiki 快捷项的界面流程，并检查令牌清空、临时链接不持久化、移除源保留其他预览。MyGo 对应测试共用 `test/fixtures/feishu-directory.json`；真实账号权限、API 可用性与网页登录仍需联调。
+
+飞书设备授权回归为 S11 / D2，Go 为 `TestFeishuDevice*`。使用共享 `test/fixtures/feishu-auth.json` 模拟注册、授权、拒绝、过期和刷新，不创建真实应用；真实资源及验证步骤见 [授权设计](../design/feishu-client-authorization.md)。
+
+金山原生插件回归为 S12/S13、D3 和 Go `TestKdocsNative*`，共用 `test/fixtures/kdocs-skill.json`，覆盖授权、节流 / 取消 / 到期、系统保护与不降级明文、账号绑定、目录 / 详情 / 在线链接、子目录快捷项、退出和失效凭据移除。不使用真实凭据；真实资源与 Windows 安全存储验收见 [金山设计](../design/kdocs-directory-plugin.md)。
