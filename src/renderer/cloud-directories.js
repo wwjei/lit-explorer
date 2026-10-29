@@ -11,6 +11,7 @@
     NETWORK: '无法连接服务，请检查网络后重试', TIMEOUT: '请求超时，请重试',
     OUTSIDE_MOUNT: '该对象不属于当前挂载的已发现目录', UNSAFE_URL: '服务返回了不允许打开的链接',
     BAD_RESPONSE: '服务返回的数据不符合插件约定', PROVIDER_ERROR: '云服务拒绝了请求，请核对权限和根目录标识',
+    LINK_UNAVAILABLE: '此文档没有可用的分享链接，请先在金山文档中确认分享设置；Lit 不会自动创建或修改分享',
     LIMIT: '目录数据或挂载数量超过上限', BUSY: '请求处理中，请稍后重试'
   };
   let project = '', epoch = 0, requestId = 0;
@@ -77,11 +78,11 @@
     requestId++;
     current = null;
     const options = providers.map((p) => '<option value="' + esc(p.id) + '"' + (mount && mount.providerId === p.id ? ' selected' : '') + '>' + esc(p.name) + '</option>').join('');
-    show('<form class="cloud-connect"><h3>' + (mount ? '重新连接 ' + esc(mount.name) : '添加云文档或 Wiki 目录') + '</h3>'
+    show('<form class="cloud-connect"><h3>' + (mount ? '重新连接 ' + esc(mount.name) : '添加云目录') + '</h3>'
       + '<label>目录插件<select name="providerId"' + (mount ? ' disabled' : '') + '>' + options + '</select></label>'
       + '<label>名称<input name="name" maxlength="120" required value="' + esc(mount ? mount.name : '云文档') + '"' + (mount ? ' readonly' : '') + '></label>'
-      + '<label>文档或目录链接 / 标识<input name="rootId" maxlength="4096" required value="' + esc(mount ? mount.rootId : '') + '"' + (mount ? ' readonly' : '') + '></label>'
-      + '<p class="cloud-input-hint"></p><p>令牌需具备对应的云文档 / 知识库读取权限，并能访问选择的文档或目录。单文档入口只打开该文档；Wiki 节点可以浏览子项，也能打开节点自身的文档。</p>'
+      + '<label>目录链接 / 标识<input name="rootId" maxlength="4096" required value="' + esc(mount ? mount.rootId : '') + '"' + (mount ? ' readonly' : '') + '></label>'
+      + '<p class="cloud-input-hint"></p><p>令牌需具备对应的云文档 / 知识库读取权限，并能访问选择的文档或目录。单个文档请通过网页链接添加到快捷访问。Wiki 目录也能打开节点自身的文档。</p>'
       + '<label>授权方式<select name=authMode><option value=personal>浏览器创建个人应用并授权（实验）</option><option value=application>使用自己的飞书应用（实验）</option><option value=token>手动输入访问令牌</option></select></label>'
       + '<p data-auth-personal>将跳转飞书官方页面创建个人应用，再确认只读云文档权限。此流程仍需真实租户验证；组织可能限制创建应用。</p>'
       + '<div data-auth-application hidden><label>App ID<input name=appId maxlength=256 autocomplete=off></label><label>App Secret<input name=appSecret type=password maxlength=4096 autocomplete=off></label></div>'
@@ -137,8 +138,6 @@
         await browse(result);
       } catch (err) { credentials.appSecret = ''; input.token = ''; pv.directoryCall('cancel', { attemptId: input.attemptId }).catch(() => {}); if (pendingAttempt === input.attemptId) pendingAttempt = ''; if (seq === epoch && req === requestId) { message(err.message); button.disabled = false; form.elements.authMode.disabled = false; form.elements.providerId.disabled = !!mount; } }
     });
-    const updateHint = () => { const provider = providers.find((p) => p.id === dialog.querySelector('[name=providerId]').value); dialog.querySelector('.cloud-input-hint').textContent = provider && provider.inputHint || '填写此来源的链接或标识'; };
-    dialog.querySelector('[name=providerId]').addEventListener('change', updateHint); updateHint();
     const updateAuth = () => {
       const form = dialog.querySelector('form'), mode = form.elements.authMode.value;
       dialog.querySelector('[data-auth-personal]').hidden = mode !== 'personal';
@@ -147,15 +146,24 @@
       form.elements.token.required = mode === 'token';
       form.elements.appId.required = form.elements.appSecret.required = mode === 'application';
     };
-    dialog.querySelector('[name=authMode]').addEventListener('change', updateAuth); updateAuth();
+    const updateProvider = () => {
+      const form = dialog.querySelector('form'), provider = providers.find((p) => p.id === form.elements.providerId.value);
+      dialog.querySelector('.cloud-input-hint').textContent = provider?.inputHint || '填写目录链接或标识';
+      form.elements.rootId.required = !provider?.defaultRootId;
+      form.elements.rootId.placeholder = provider?.defaultRootId ? '留空浏览我的文档' : '';
+      for (const option of form.elements.authMode.options) if (option.value !== 'token') { option.hidden = option.disabled = !provider?.browserAuth; }
+      if (!provider?.browserAuth) form.elements.authMode.value = 'token';
+      updateAuth();
+    };
+    dialog.querySelector('[name=providerId]').addEventListener('change', updateProvider);
+    dialog.querySelector('[name=authMode]').addEventListener('change', updateAuth); updateProvider();
     dialog.querySelector('[name=name]').focus();
   }
   async function browse(mount) {
     if (!mount.connected) { connectForm(mount); return; }
     current = { mount, trail: trails.get(mount.id) || [{ id: mount.rootId, name: mount.name }], entries: [], next: '', directory: { id: mount.rootId, kind: mount.rootKind, name: mount.name } };
-    if (mount.rootKind === 'document') { show('<div class="cloud-message" aria-live="polite"></div>'); await openNode(-1, false); return; }
     show('<div class="cloud-navigation"><button class="btn-quiet" data-cloud-up>上一级</button><strong class="cloud-path"></strong>'
-      + '<button class="btn-quiet" data-cloud-current-document hidden>打开当前文档</button><button class="btn-quiet" data-cloud-refresh>刷新</button></div><div class="cloud-message" aria-live="polite"></div>'
+      + '<button class="btn-quiet" data-cloud-pin hidden>将此目录加入快捷访问</button><button class="btn-quiet" data-cloud-current-document hidden>打开当前文档</button><button class="btn-quiet" data-cloud-refresh>刷新</button></div><div class="cloud-message" aria-live="polite"></div>'
       + '<div class="cloud-entries"></div><button class="btn-quiet" data-cloud-next hidden>加载更多</button><pre class="cloud-details" hidden></pre>');
     await load(false);
   }
@@ -174,6 +182,7 @@
       state.entries = [...new Map([...(append ? state.entries : []), ...result.entries].map((n) => [n.id, n])).values()];
       state.next = result.nextCursor;
       state.directory = result.directory;
+      dialog.querySelector('[data-cloud-pin]').hidden = node.id === state.mount.rootId;
       dialog.querySelector('[data-cloud-current-document]').hidden = !state.directory.documentId;
       trails.set(state.mount.id, state.trail.slice());
       dialog.querySelector('.cloud-entries').innerHTML = state.entries.map((n, i) => '<div class="cloud-entry"><button class="btn-quiet cloud-entry-open" data-cloud-entry="' + i + '">'
@@ -209,7 +218,7 @@
   dialog.addEventListener('cancel', (event) => { event.preventDefault(); close(); });
   dialog.addEventListener('keydown', (event) => event.stopPropagation());
   document.addEventListener('click', (event) => {
-    const target = event.target.closest('[data-cloud-add],[data-cloud-mount],[data-cloud-remove],[data-cloud-close],[data-cloud-up],[data-cloud-next],[data-cloud-refresh],[data-cloud-entry],[data-cloud-detail],[data-cloud-document],[data-cloud-current-document],[data-cloud-reconnect]');
+    const target = event.target.closest('[data-cloud-pin],[data-cloud-add],[data-cloud-mount],[data-cloud-remove],[data-cloud-close],[data-cloud-up],[data-cloud-next],[data-cloud-refresh],[data-cloud-entry],[data-cloud-detail],[data-cloud-document],[data-cloud-current-document],[data-cloud-reconnect]');
     if (!target) return;
     const run = async () => {
       if (target.hasAttribute('data-cloud-close')) { close(); return; }
@@ -226,6 +235,14 @@
       if (target.hasAttribute('data-cloud-up') && current && current.trail.length > 1) { current.trail.pop(); await load(false); return; }
       if (target.hasAttribute('data-cloud-next')) { await load(true); return; }
       if (target.hasAttribute('data-cloud-refresh')) { await load(false, true); return; }
+      if (target.hasAttribute('data-cloud-pin') && current) {
+        const state = current, seq = epoch, req = ++requestId; target.disabled = true;
+        try {
+          await call('pin', { mountId: state.mount.id, nodeId: state.directory.id });
+          if (seq === epoch && req === requestId) { await reloadMounts(); message('已加入快捷访问'); }
+        } finally { if (target.isConnected) target.disabled = false; }
+        return;
+      }
       if (target.hasAttribute('data-cloud-current-document')) { await openNode(-1, false, true); return; }
       if (target.hasAttribute('data-cloud-document')) { await openNode(+target.dataset.cloudDocument, false, true); return; }
       if (target.hasAttribute('data-cloud-entry')) { await openNode(+target.dataset.cloudEntry, false); return; }
@@ -238,5 +255,5 @@
     if (row && !event.target.closest('button') && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); event.stopImmediatePropagation(); row.click(); }
   });
   PV.cloud = { init: (options) => { hooks = options; }, setProject, rows,
-    refresh: () => current ? current.mount.rootKind === 'document' ? openNode(-1, false, true) : load(false, true) : Promise.resolve() };
+    refresh: () => current ? load(false, true) : Promise.resolve() };
 })();

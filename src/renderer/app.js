@@ -522,7 +522,7 @@
       : '<div class="col-note">右键或行尾闪电图标加入快速访问；点标题栏的 + 添加网页链接</div>';
     const add = (state.path[0] && !PV.paths.same(state.path[0].path, state.root)
       ? '<button class="col-toggle" data-project-root title="返回项目目录" aria-label="返回项目目录">' + icon('arrowLeft', '', 14) + '</button>' : '')
-      + '<button class="col-toggle fav-add" data-cloud-add title="添加云文档或 Wiki 目录" aria-label="添加云文档或 Wiki 目录">' + icon('globe', '', 14) + '</button>'
+      + '<button class="col-toggle fav-add" data-cloud-add title="添加云目录" aria-label="添加云目录">' + icon('globe', '', 14) + '</button>'
       + '<button class="col-toggle fav-add" data-reference-add title="添加外部目录" aria-label="添加外部目录">' + icon('folder', '', 14) + icon('plus', '', 10) + '</button>'
       + '<button class="col-toggle fav-add" data-web-add title="添加网页链接" aria-label="添加网页链接">'
       + icon('globe', '', 12) + icon('plus', 'fav-plus', 10) + '</button>';
