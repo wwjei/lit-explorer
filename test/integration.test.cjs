@@ -572,7 +572,7 @@ async function main() {
       const connect=async(provider,root,name)=>{
         document.querySelector('[data-cloud-add]').click();
         await waitFor(()=>document.querySelector('.cloud-connect'));
-        type('providerId',provider);type('rootId',root);type('name',name);type('token','fixture-secret');
+        type('providerId',provider);type('rootId',root);type('name',name);type('authMode','token'); document.querySelector('[name=authMode]').dispatchEvent(new Event('change')); type('token','fixture-secret');
         document.querySelector('.cloud-connect').requestSubmit();
         return document.querySelector('.cloud-connect [name=token]')?.value==='';
       };
@@ -630,6 +630,61 @@ async function main() {
     ipcMain.removeHandler('directories:call');ipcMain.handle('directories:call',(_e,method)=>({value:method==='mounts'||method==='providers'?[]:true}));
     await runPage('PV.cloud.setProject('+JSON.stringify(f.ws)+')');
     await clearPinnedColumns(runPage);
+  });
+
+  await run('D2', '飞书浏览器授权连接具体文档与关闭取消', async () => {
+    const f=await prepare(), runPage=await renderer();
+    const {createDirectoryPlugins,invokeDirectoryPlugin}=require('../src/main/directory-plugins');
+    const fixture=require('./fixtures/feishu-auth.json'), directory=require('./fixtures/feishu-directory.json');
+    let saved={}, clock=100000, opened=[], replies=[], cancelled=false, fast=true;
+    const service=createDirectoryPlugins({authNow:()=>clock,store:{load:async()=>saved,patch:async(p)=>{saved={...saved,...p};}},fetch:async(raw,options)=>{
+      const url=new URL(raw);
+      if(url.host==='accounts.feishu.cn') return new Response(JSON.stringify(replies.shift()));
+      eq('目录请求由宿主填入授权令牌',options.headers.Authorization,'Bearer access-fixture');
+      return new Response(JSON.stringify(directory.details));
+    }});
+    service.activate(f.ws);
+    ipcMain.removeHandler('directories:call');
+    ipcMain.handle('directories:call',async(_e,method,args)=>{
+      if(method==='authPoll') clock+=1000;
+      if(method==='cancel') cancelled=true;
+      const result=await invokeDirectoryPlugin(service,method,args);
+      if(fast && result.value?.interval) result.value.interval=0.001;
+      return result;
+    });
+    ipcMain.removeHandler('web:open-external');
+    ipcMain.handle('web:open-external',(_e,url)=>{opened.push(url);return true;});
+    stubList(f.ws,['auth-placeholder.md']);stubRead(()=>({text:'# AUTH',size:6}));
+    createdWin.webContents.send('workspace:opened',f.ws);
+    replies=[fixture.registration,fixture.registered,fixture.device,fixture.token];
+    const result=await runPage(`(async()=>{
+      await waitFor(()=>document.querySelector('.row:not(.fav-row)')?.textContent.includes('auth-placeholder.md'));
+      document.querySelector('[data-cloud-add]').click();
+      const form=document.querySelector('.cloud-connect');
+      form.elements.providerId.value='feishu-document'; form.elements.rootId.value='https://tenant.feishu.cn/docx/docA';
+      form.elements.name.value='浏览器授权文档'; form.requestSubmit();
+      await waitFor(()=>!document.querySelector('dialog.cloud-dialog').open && document.querySelector('.cloud-fav')?.textContent.includes('浏览器授权文档'));
+      return {noSecret:!document.body.textContent.includes('access-fixture'), preview:PV.pane.allPanes().some(p=>p.node?.url?.includes('/docx/docA'))};
+    })()`);
+    eq('注册与授权分别打开官方浏览器页面',opened.length,2);
+    ok('两次确认后打开具体文档',result.preview,result);
+    ok('访问令牌未进入界面',result.noSecret,result);
+    ok('授权凭据不写入设置',!/access-fixture|refresh-fixture|local-app-secret/.test(JSON.stringify(saved)));
+    fast=false; replies=[fixture.device];
+    await runPage(`(async()=>{
+      document.querySelector('[data-cloud-add]').click();const form=document.querySelector('.cloud-connect');
+      form.elements.rootId.value='root';form.elements.authMode.value='application';form.elements.authMode.dispatchEvent(new Event('change'));
+      form.elements.appId.value='cli_fixture';form.elements.appSecret.value='own-secret';form.requestSubmit();
+      await waitFor(()=>document.querySelector('.cloud-message')?.textContent.includes('确认云文档'));
+      if(form.elements.appSecret.value!=='') throw Error('secret not cleared');
+      document.querySelector('[data-cloud-close]').click();
+    })()`);
+    await waitPage(runPage,`!document.querySelector('dialog.cloud-dialog').open`);
+    await runPage("pv.directoryCall('providers')");
+    ok('关闭表单取消待授权流程',cancelled);
+    ipcMain.removeHandler('web:open-external');ipcMain.handle('web:open-external',()=>({ok:true}));
+    ipcMain.removeHandler('directories:call');ipcMain.handle('directories:call',(_e,method)=>({value:method==='mounts'||method==='providers'?[]:true}));
+    await runPage('PV.cloud.setProject('+JSON.stringify(f.ws)+')');await clearPinnedColumns(runPage);
   });
 
   await run('R1', '全局刷新只重读变化的预览', async () => {

@@ -3,7 +3,10 @@
   'use strict';
   const esc = PV.highlight.escapeAttr;
   const errors = {
-    AUTH_REQUIRED: '连接已过期，请重新输入访问令牌', FORBIDDEN: '没有权限，请检查应用权限和文档共享范围',
+    AUTH_REQUIRED: '连接已过期，请重新授权',
+    AUTH_DENIED: '你已拒绝授权，可重新连接', AUTH_EXPIRED: '授权已过期，请重新开始',
+    AUTH_FAILED: '飞书拒绝授权，请检查应用能力、权限和发布状态',
+    AUTH_UNSUPPORTED: '当前账户地区或令牌类型暂不支持此实验授权方式', FORBIDDEN: '没有权限，请检查应用权限和文档共享范围',
     NOT_FOUND: '目录或文档已不存在', RATE_LIMITED: '服务请求过于频繁，请稍后重试',
     NETWORK: '无法连接服务，请检查网络后重试', TIMEOUT: '请求超时，请重试',
     OUTSIDE_MOUNT: '该对象不属于当前挂载的已发现目录', UNSAFE_URL: '服务返回了不允许打开的链接',
@@ -11,7 +14,8 @@
     LIMIT: '目录数据或挂载数量超过上限', BUSY: '请求处理中，请稍后重试'
   };
   let project = '', epoch = 0, requestId = 0;
-  let pendingAttempt = '';
+  let pendingAttempt = '', authTimer = null, authWake = null;
+  function stopAuthWait() { clearTimeout(authTimer); if (authWake) authWake(); authWake = null; }
   let mounts = [], providers = [], hooks = {}, current = null;
   const trails = new Map();
   const dialog = document.createElement('dialog');
@@ -23,6 +27,7 @@
     return response.value;
   }
   function close() {
+    stopAuthWait();
     if (pendingAttempt) { pv.directoryCall('cancel', { attemptId: pendingAttempt }).catch(() => {}); pendingAttempt = ''; }
     requestId++;
     current = null;
@@ -67,6 +72,8 @@
   }
   function connectForm(mount) {
     if (!project) { hooks.toast('请先打开项目'); return; }
+    if (pendingAttempt) pv.directoryCall('cancel', { attemptId: pendingAttempt }).catch(() => {});
+    pendingAttempt = ''; stopAuthWait();
     requestId++;
     current = null;
     const options = providers.map((p) => '<option value="' + esc(p.id) + '"' + (mount && mount.providerId === p.id ? ' selected' : '') + '>' + esc(p.name) + '</option>').join('');
@@ -75,19 +82,52 @@
       + '<label>名称<input name="name" maxlength="120" required value="' + esc(mount ? mount.name : '云文档') + '"' + (mount ? ' readonly' : '') + '></label>'
       + '<label>文档或目录链接 / 标识<input name="rootId" maxlength="4096" required value="' + esc(mount ? mount.rootId : '') + '"' + (mount ? ' readonly' : '') + '></label>'
       + '<p class="cloud-input-hint"></p><p>令牌需具备对应的云文档 / 知识库读取权限，并能访问选择的文档或目录。单文档入口只打开该文档；Wiki 节点可以浏览子项，也能打开节点自身的文档。</p>'
-      + '<label>访问令牌<input name="token" type="password" maxlength="4096" required autocomplete="off" spellcheck="false"></label>'
-      + '<p>令牌仅在本次连接会话中保留；切换项目或重启后需重新连接。目录 API 的身份与网页登录账号分别管理。</p>'
+      + '<label>授权方式<select name=authMode><option value=personal>浏览器创建个人应用并授权（实验）</option><option value=application>使用自己的飞书应用（实验）</option><option value=token>手动输入访问令牌</option></select></label>'
+      + '<p data-auth-personal>将跳转飞书官方页面创建个人应用，再确认只读云文档权限。此流程仍需真实租户验证；组织可能限制创建应用。</p>'
+      + '<div data-auth-application hidden><label>App ID<input name=appId maxlength=256 autocomplete=off></label><label>App Secret<input name=appSecret type=password maxlength=4096 autocomplete=off></label></div>'
+      + '<label data-auth-token hidden>访问令牌<input name="token" type="password" maxlength="4096" autocomplete="off" spellcheck="false"></label>'
+      + '<p>凭据只在本机宿主内存中保留；浏览器授权可在会话内自动续期，切换项目或重启后需重新授权。API 身份与文档网页登录分别管理。</p>'
       + '<div class="cloud-message" aria-live="polite"></div><button class="btn-primary" type="submit">连接目录</button></form>');
     dialog.querySelector('form').addEventListener('submit', async (event) => {
       event.preventDefault();
+      if (event.target.querySelector('[type=submit]').disabled) return;
       const seq = epoch, req = ++requestId, form = event.target;
       pendingAttempt = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
       const input = { attemptId: pendingAttempt, id: mount && mount.id, providerId: form.elements.providerId.value,
         name: form.elements.name.value.trim(), rootId: form.elements.rootId.value.trim(), token: form.elements.token.value.trim() };
-      form.elements.token.value = '';
+      const mode = form.elements.authMode.value;
+      const credentials = { mode, attemptId: pendingAttempt, appId: form.elements.appId.value.trim(), appSecret: form.elements.appSecret.value.trim() };
+      form.elements.token.value = ''; form.elements.appSecret.value = '';
+      form.elements.authMode.disabled = true; form.elements.providerId.disabled = true;
       const button = form.querySelector('[type=submit]'); button.disabled = true;
       message('正在验证目录连接…');
       try {
+        if (mode !== 'token') {
+          input.token = '';
+          let status;
+          try { status = await call('authStart', credentials); } finally { credentials.appSecret = ''; }
+          if (seq !== epoch || req !== requestId) return;
+          let opened = '';
+          while (seq === epoch && req === requestId) {
+            if (status.phase === 'ready') { input.authId = status.authId; break; }
+            if (status.url !== opened) {
+              opened = status.url;
+              await pv.openExternalUrl(status.url);
+            }
+            if (seq !== epoch || req !== requestId) return;
+            message((status.phase === 'registration' ? '请在浏览器确认创建个人应用。' : '请在浏览器确认云文档读取授权。') + (status.userCode ? ' 确认码：' + status.userCode : ''));
+            const box = dialog.querySelector('.cloud-message');
+            const link = document.createElement('button'); link.type = 'button'; link.className = 'btn-quiet'; link.textContent = '重新打开授权页';
+            link.addEventListener('click', () => pv.openExternalUrl(status.url).catch((err) => message(err.message)));
+            box.appendChild(link);
+            await new Promise((resolve) => { authWake = resolve; authTimer = setTimeout(resolve, status.interval * 1000); });
+            authWake = null;
+            if (seq !== epoch || req !== requestId) return;
+            status = await call('authPoll', { authId: status.authId });
+          }
+          if (seq !== epoch || req !== requestId) return;
+          message('授权成功，正在验证目录…');
+        }
         const job = call('connect', input);
         input.token = '';
         const result = await job;
@@ -95,11 +135,20 @@
         if (seq !== epoch || req !== requestId) return;
         await reloadMounts();
         await browse(result);
-      } catch (err) { input.token = ''; if (pendingAttempt === input.attemptId) pendingAttempt = ''; if (seq === epoch && req === requestId) { message(err.message); button.disabled = false; } }
+      } catch (err) { credentials.appSecret = ''; input.token = ''; pv.directoryCall('cancel', { attemptId: input.attemptId }).catch(() => {}); if (pendingAttempt === input.attemptId) pendingAttempt = ''; if (seq === epoch && req === requestId) { message(err.message); button.disabled = false; form.elements.authMode.disabled = false; form.elements.providerId.disabled = !!mount; } }
     });
     const updateHint = () => { const provider = providers.find((p) => p.id === dialog.querySelector('[name=providerId]').value); dialog.querySelector('.cloud-input-hint').textContent = provider && provider.inputHint || '填写此来源的链接或标识'; };
     dialog.querySelector('[name=providerId]').addEventListener('change', updateHint); updateHint();
-    dialog.querySelector('[name=token]').focus();
+    const updateAuth = () => {
+      const form = dialog.querySelector('form'), mode = form.elements.authMode.value;
+      dialog.querySelector('[data-auth-personal]').hidden = mode !== 'personal';
+      dialog.querySelector('[data-auth-application]').hidden = mode !== 'application';
+      dialog.querySelector('[data-auth-token]').hidden = mode !== 'token';
+      form.elements.token.required = mode === 'token';
+      form.elements.appId.required = form.elements.appSecret.required = mode === 'application';
+    };
+    dialog.querySelector('[name=authMode]').addEventListener('change', updateAuth); updateAuth();
+    dialog.querySelector('[name=name]').focus();
   }
   async function browse(mount) {
     if (!mount.connected) { connectForm(mount); return; }
