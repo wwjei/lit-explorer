@@ -135,3 +135,10 @@
 - `src/renderer/changes.js`：`PV.changes.create()` 注入工作区状态与回调，负责目录及预览版本监测；刷新调度与按钮呈现在 `app.js`。
 - `src/main/folder-menu.js`：当前用户 Windows 文件夹菜单注册与取消；安装 / 卸载钩子在 `build/installer.nsh`。MyGo 对应逻辑在 `main.go`。
 - `PV.highlight.mount().find()`：在完整源码中查找，按命中行滚动虚拟视图并保留语法颜色；`find.js` 共用查询条与快捷键。
+
+## 外部参考目录
+
+- `src/main/reference-dirs.js`：`createReferenceDirs()` 管理原生选择框授权、每项目持久化、恢复与移除；`main.js` 在工作区提交前准备参考目录，并在序号检查后同步登记。
+- `mygo/references.go`：`ReferenceDirs / AddReferenceDir / RemoveReferenceDir` 为同形 bridge 能力，`seqMu` 保护活动项目与目录授权的提交。
+- `fs-api.js` / `mygo/fsapi.go` 区分可读根与可写根，参考目录不会进入 SVG 可写范围；`app.js` 的 `rootForPath / browseRoot / refreshFavorites` 区分项目身份与浏览来源。
+- 云目录插件的后续方案见 [设计文档](docs/design/external-directory-plugins.md)。

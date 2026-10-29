@@ -175,3 +175,7 @@ MyGo 版装到 `%LOCALAPPDATA%\Programs\Lit Explorer MyGo`，产物是单个 exe
 里面，没有 `app.asar`）：直接运行 `dist/Lit-Explorer-MyGo-<版本>-portable.exe` 就能验证
 打包结果。它需要系统 WebView2 Runtime；缺的时候窗口起不来而不是弹提示。
 两个版本可以同时安装，但各自有单实例锁与独立的 `userData`。
+
+## 外部参考目录回归
+
+单元段 S8 验证原生选择结果登记、去重、恢复、只读 SVG、真实路径越界、移除撤权与切项目时丢弃旧选择框结果。集成段 R2 验证快捷访问添加、外部目录浏览、Markdown 链接预览、返回项目与重开恢复、移除。MyGo 的 `TestReferenceReadOnly` 与 `TestReferencePersistenceAndRemoval` 覆盖对应授权与持久化边界。

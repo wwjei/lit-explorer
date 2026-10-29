@@ -6,15 +6,13 @@
 
 新增文件系统相关能力时：
 
-- 路径必须过 `assertAllowed()`（`src/main/fs-api.js`），只能访问已登记为工作区的根目录内部。
+- 路径必须过 `assertAllowed()`（`src/main/fs-api.js`），只能访问当前项目已授权的工作区和参考目录根内部。
   它比较的是 **`realpath` 之后的真实路径**：junction / 符号链接会指向根目录之外，
   而读写由文件系统跟随链接，只做字符串前缀判断挡不住。新增入口时不要绕开它，
   也不要自己写 `startsWith` 判断。
-- 已授权根**只有当前工作区一个**：`openWorkspace()` 在登记新根之前会调
-  `resetAllowedRoots()` 清掉上一个。不要把它改成只增不减的集合——那样在 A 里打开过的
-  目录，切到 B 之后仍然可读。清空与登记必须像现在这样「先异步 `resolveReal()`，再用
-  `allowResolvedRoot()` 同步登记」，并用 `workspaceSeq` 丢掉被后一次切换取代的请求；
-  否则两次切换交错时，先发起的那次会在后一次清空之后把自己的根加回去，留下两个授权根。
+- 可读根包含当前工作区与用户通过原生选择框为该项目添加的参考目录。工作区切换仍先异步解析真实路径，再在序号检查后同步清空并登记整组根；旧请求不能留下旧项目的授权。
+- 参考目录独立保存在主进程维护的 `referenceDirs` 设置中，页面补丁白名单不接收该字段。新增只能走原生选择框，删除立即撤销该根（仍被其他已授权根覆盖的路径可继续访问）。重开时重新解析并校验目录；不要把普通 favorites 路径当授权依据。
+- `allowResolvedRoot()` 登记工作区读写根，`allowReferenceRoot()` 只登记可读根。SVG 保存必须同时落在可写根中，不能因为参考目录可读就开放写入。两种 shell 的实现与测试须同步。
 - **渲染进程能写进设置的东西必须过白名单**（`src/main/state-sanitize.js`）。`app:set-state`
   不能直接 `store.patch(changes)`：`state.window` 会在下次启动时当 `BrowserWindow` 参数，
   `projects[].path` 会在下次启动时被 `offerRoot`。窗口只取 `{x,y,width,height}`，
