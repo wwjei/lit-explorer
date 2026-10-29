@@ -285,7 +285,13 @@ async function captureAndQuit() {
  * 工作区
  * ------------------------------------------------------------------ */
 /** 每次切换工作区递增；后发起的切换获胜，先发起的不许再登记授权根 */
-const directoryPlugins = require('./directory-plugins').createDirectoryPlugins({ store, fetch: (url, options) => net.fetch(url, options) });
+const kdocsCredentials = require('./protected-credentials').protectedCredentials({
+  file: path.join(app.getPath('userData'), 'credentials', 'kdocs.bin'),
+  available: () => { const secure = require('electron').safeStorage; return secure.isEncryptionAvailable() && (process.platform !== 'linux' || secure.getSelectedStorageBackend?.() !== 'basic_text'); },
+  encrypt: (value) => require('electron').safeStorage.encryptString(value),
+  decrypt: (value) => require('electron').safeStorage.decryptString(value)
+});
+const directoryPlugins = require('./directory-plugins').createDirectoryPlugins({ store, kdocsCredentials, fetch: (url, options) => net.fetch(url, options) });
 const referenceDirs = require('./reference-dirs').createReferenceDirs({
   fsApi, store,
   pick: async () => {

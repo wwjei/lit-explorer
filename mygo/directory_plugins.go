@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"strings"
@@ -21,6 +22,7 @@ import (
 )
 
 type directoryOperation struct {
+	Operation  string `json:"operation"`
 	URL        string `json:"url"`
 	Name       string `json:"name"`
 	Pagination *struct {
@@ -39,6 +41,7 @@ type directoryOperation struct {
 	Fields  map[string]string `json:"fields"`
 }
 type directoryProvider struct {
+	Transport      string `json:"transport"`
 	Authentication *struct {
 		Type      string `json:"type"`
 		Parameter string `json:"parameter"`
@@ -97,21 +100,23 @@ type directoryCache struct {
 	until time.Time
 }
 type directorySession struct {
-	credential *feishuFlow
-	scopeID    string
-	attemptID  string
-	cursors    map[string]map[string]bool
-	mount      directoryMount
-	provider   directoryProvider
-	token      string
-	seq        int
-	ctx        context.Context
-	cancel     context.CancelFunc
-	nodes      map[string]directoryNode
-	cache      map[string]directoryCache
-	pending    int
+	kdocsIdentity string
+	credential    *feishuFlow
+	scopeID       string
+	attemptID     string
+	cursors       map[string]map[string]bool
+	mount         directoryMount
+	provider      directoryProvider
+	token         string
+	seq           int
+	ctx           context.Context
+	cancel        context.CancelFunc
+	nodes         map[string]directoryNode
+	cache         map[string]directoryCache
+	pending       int
 }
 type directoryPluginService struct {
+	kdocs         *kdocsPlugin
 	auth          *feishuAuth
 	providerOrder []string
 	connecting    map[*directorySession]bool
@@ -230,6 +235,12 @@ func directoryNormalize(raw any, p directoryProvider, fields map[string]string) 
 func newDirectoryPlugins() *directoryPluginService {
 	s := &directoryPluginService{connecting: map[*directorySession]bool{}, providers: map[string]directoryProvider{}, sessions: map[string]*directorySession{}, client: &http.Client{Timeout: 15 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return fmt.Errorf("REDIRECT_DENIED") }}}
 	s.auth = newFeishuAuth(s.client)
+	dir, _ := appPathUserData()
+	file := ""
+	if dir != "" {
+		file = filepath.Join(dir, "credentials", "kdocs.bin")
+	}
+	s.kdocs = newKdocsPlugin(file, s.client)
 	raw, err := frontendFS.ReadFile("frontend/src/shared/directory-providers.json")
 	if err != nil {
 		return s
@@ -242,6 +253,13 @@ func newDirectoryPlugins() *directoryPluginService {
 		return s
 	}
 	for _, p := range catalog.Providers {
+		if p.Transport == "kdocs-skill" {
+			if p.ID == "kdocs-skill" && p.Root.Kind == "directory" && p.List.Operation == "list" && p.Details.Operation == "details" && p.DocumentLink != nil && p.DocumentLink.Operation == "open" && len(p.DocumentHosts) > 0 {
+				s.providers[p.ID] = p
+				s.providerOrder = append(s.providerOrder, p.ID)
+			}
+			continue
+		}
 		origin, err := url.Parse(p.APIOrigin)
 		if err != nil || origin.Scheme != "https" || origin.User != nil || origin.Host == "" || origin.Path != "" || origin.RawQuery != "" || origin.Fragment != "" || !directoryID.MatchString(p.ID) || len(p.DocumentHosts) == 0 || p.Success.Field == "" || p.Root.Kind != "directory" {
 			continue
@@ -282,6 +300,7 @@ func newDirectoryPlugins() *directoryPluginService {
 }
 func (s *directoryPluginService) activate(root string) {
 	s.auth.clear()
+	s.kdocs.clear()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, session := range s.sessions {
@@ -361,6 +380,9 @@ func (s *directoryPluginService) request(session *directorySession, op directory
 	session.pending++
 	s.mu.Unlock()
 	defer func() { s.mu.Lock(); session.pending--; s.mu.Unlock() }()
+	if session.provider.Transport == "kdocs-skill" {
+		return s.kdocs.invoke(session.ctx, op.Operation, node, cursor, session.kdocsIdentity)
+	}
 	space := node.ScopeID
 	if space == "" {
 		space = session.scopeID
@@ -653,7 +675,10 @@ func (s *directoryPluginService) connectWithCredential(input map[string]any, cre
 	}
 	token := directoryText(input["token"], 4096)
 	authID := directoryText(input["authId"], 4096)
-	if !exists || !directoryRemoteID(m.RootID) || (authID == "" && credential == nil && (token == "" || strings.ContainsAny(token, " \t\r\n"))) || (authID != "" && (p.APIOrigin != "https://open.feishu.cn" || !strings.HasPrefix(p.ID, "feishu-"))) {
+	if !exists || !directoryRemoteID(m.RootID) || (p.Transport != "kdocs-skill" && authID == "" && credential == nil && (token == "" || strings.ContainsAny(token, " \t\r\n"))) || (authID != "" && (p.APIOrigin != "https://open.feishu.cn" || !strings.HasPrefix(p.ID, "feishu-"))) {
+		return nil, fmt.Errorf("BAD_REQUEST")
+	}
+	if p.Transport == "kdocs-skill" && (token != "" || authID != "") {
 		return nil, fmt.Errorf("BAD_REQUEST")
 	}
 	if m.ID == "" {
@@ -685,6 +710,38 @@ func (s *directoryPluginService) connectWithCredential(input map[string]any, cre
 	s.connecting[session] = true
 	s.mu.Unlock()
 	defer func() { s.mu.Lock(); delete(s.connecting, session); s.mu.Unlock() }()
+	if p.Transport == "kdocs-skill" {
+		identity, err := s.kdocs.identity(ctx)
+		if err != nil {
+			cancel()
+			return nil, err
+		}
+		session.kdocsIdentity = identity
+		if root.ID != p.Root.DefaultID {
+			body, err := s.request(session, p.Details, root, "")
+			if err != nil {
+				cancel()
+				return nil, err
+			}
+			items, ok := directoryGet(body, p.Details.Entries).([]any)
+			if !ok || len(items) != 1 {
+				cancel()
+				return nil, fmt.Errorf("BAD_RESPONSE")
+			}
+			resolved, err := directoryNormalize(items[0], p, p.Details.Fields)
+			if err != nil {
+				cancel()
+				return nil, err
+			}
+			if resolved.ID != root.ID || resolved.Kind != "directory" {
+				cancel()
+				return nil, fmt.Errorf("BAD_REQUEST")
+			}
+			root = resolved
+			root.Name = m.Name
+			session.nodes[root.ID] = root
+		}
+	}
 	if p.Initialize != nil {
 		body, err := s.request(session, *p.Initialize, root, "")
 		if err != nil {
@@ -774,6 +831,24 @@ func (s *directoryPluginService) details(mountID, nodeID string) (directoryNode,
 	session, node, err := s.getNode(mountID, nodeID)
 	if err != nil {
 		return node, err
+	}
+	if session.provider.Transport == "kdocs-skill" && node.ID != session.provider.Root.DefaultID {
+		body, err := s.request(session, session.provider.Details, node, "")
+		if err != nil {
+			return node, err
+		}
+		items, ok := directoryGet(body, session.provider.Details.Entries).([]any)
+		if !ok || len(items) != 1 {
+			return node, fmt.Errorf("BAD_RESPONSE")
+		}
+		detail, err := directoryNormalize(items[0], session.provider, session.provider.Details.Fields)
+		if err != nil {
+			return node, err
+		}
+		if detail.ID != node.ID || detail.Kind != node.Kind {
+			return node, fmt.Errorf("BAD_RESPONSE")
+		}
+		return detail, nil
 	}
 	if node.Kind != "directory" && session.provider.Details.Method != "" {
 		return s.documentDetails(session, node)
@@ -887,13 +962,14 @@ func (a *App) DirectoryCall(method string, args map[string]any) map[string]any {
 		list := []map[string]any{}
 		for _, providerID := range s.providerOrder {
 			p := s.providers[providerID]
-			list = append(list, map[string]any{"id": p.ID, "name": p.Name, "version": p.Version, "rootKind": p.Root.Kind, "defaultRootId": p.Root.DefaultID, "browserAuth": strings.HasPrefix(p.ID, "feishu-"), "inputHint": p.InputHint, "apiVersion": 1})
+			list = append(list, map[string]any{"id": p.ID, "name": p.Name, "version": p.Version, "rootKind": p.Root.Kind, "defaultRootId": p.Root.DefaultID, "browserAuth": strings.HasPrefix(p.ID, "feishu-"), "kdocsAuth": p.Transport == "kdocs-skill", "inputHint": p.InputHint, "apiVersion": 1})
 		}
 		value = list
 	case "mounts":
 		value = s.mounts()
 	case "cancel":
 		s.auth.cancelFlow(directoryText(args["attemptId"], 4096))
+		s.kdocs.cancel(directoryText(args["attemptId"], 128))
 		s.mu.Lock()
 		for session := range s.connecting {
 			if session.attemptID == directoryText(args["attemptId"], 128) {
@@ -902,6 +978,49 @@ func (a *App) DirectoryCall(method string, args map[string]any) map[string]any {
 		}
 		s.mu.Unlock()
 		value = true
+	case "kdocsAuthStart":
+		s.mu.Lock()
+		hasRoot, seq := s.root != "", s.seq
+		force, _ := args["forceLogin"].(bool)
+		if force {
+			for id, session := range s.sessions {
+				if session.provider.Transport == "kdocs-skill" {
+					session.cancel()
+					delete(s.sessions, id)
+				}
+			}
+		}
+		s.mu.Unlock()
+		if !hasRoot {
+			err = fmt.Errorf("NO_WORKSPACE")
+		} else {
+			value, err = s.kdocs.start(args)
+			s.mu.Lock()
+			stale := seq != s.seq
+			s.mu.Unlock()
+			if stale {
+				s.kdocs.cancel(directoryText(args["attemptId"], 128))
+				err = fmt.Errorf("SUPERSEDED")
+				value = nil
+			}
+		}
+	case "kdocsAuthPoll":
+		value, err = s.kdocs.poll(directoryText(args["authId"], 128))
+	case "kdocsLogout":
+		s.mu.Lock()
+		for id, session := range s.sessions {
+			if session.provider.Transport == "kdocs-skill" {
+				session.cancel()
+				delete(s.sessions, id)
+			}
+		}
+		for session := range s.connecting {
+			if session.provider.Transport == "kdocs-skill" {
+				session.cancel()
+			}
+		}
+		s.mu.Unlock()
+		value, err = s.kdocs.logout()
 	case "authStart":
 		s.mu.Lock()
 		hasRoot := s.root != ""
@@ -916,6 +1035,7 @@ func (a *App) DirectoryCall(method string, args map[string]any) map[string]any {
 			s.mu.Unlock()
 			if stale {
 				s.auth.cancelFlow(directoryText(args["attemptId"], 4096))
+				s.kdocs.cancel(directoryText(args["attemptId"], 128))
 				value = nil
 				err = fmt.Errorf("SUPERSEDED")
 			}

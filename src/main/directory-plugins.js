@@ -13,6 +13,10 @@ function providers(manifest = catalog) {
   if (manifest.apiVersion !== 1 || !Array.isArray(manifest.providers)) throw fail('PLUGIN_VERSION');
   const registry = new Map();
   for (const p of manifest.providers) {
+    if (p.transport === 'kdocs-skill') {
+      if (p.id !== 'kdocs-skill' || registry.has(p.id) || p.root?.kind !== 'directory' || p.list?.operation !== 'list' || p.details?.operation !== 'details' || p.documentLink?.operation !== 'open' || !p.documentHosts?.length) throw fail('PLUGIN_MANIFEST');
+      registry.set(p.id,p); continue;
+    }
     const url = new URL(p.apiOrigin);
     if (!id(p.id) || registry.has(p.id) || url.protocol !== 'https:' || url.origin !== p.apiOrigin
       || url.username || !Array.isArray(p.documentHosts) || !p.documentHosts.length || !p.success || !p.success.field || !p.root || p.root.kind !== 'directory') throw fail('PLUGIN_MANIFEST');
@@ -73,8 +77,9 @@ function rootConfig(provider, raw) {
   return { rootId, rootType };
 }
 
-function createDirectoryPlugins({ store, fetch: fetcher = globalThis.fetch, manifest = catalog, authNow }) {
+function createDirectoryPlugins({ store, fetch: fetcher = globalThis.fetch, manifest = catalog, authNow, kdocsCredentials, kdocs: injectedPlugin }) {
   const registry = providers(manifest);
+  const kdocs = injectedPlugin || require('./kdocs-plugin').createKdocsPlugin({ credentials: kdocsCredentials, fetch: fetcher, now: authNow });
   const auth = require('./feishu-auth').createFeishuAuth({ fetch: fetcher, now: authNow });
   let project = '';
   let generation = 0;
@@ -83,7 +88,7 @@ function createDirectoryPlugins({ store, fetch: fetcher = globalThis.fetch, mani
   const connecting = new Set();
   let mutations = Promise.resolve();
   const key = (p) => process.platform === 'win32' ? p.toLowerCase() : p;
-  function disconnectAll() { auth.clear(); for (const s of [...sessions.values(), ...connecting]) s.abort.abort(); sessions.clear(); connecting.clear(); }
+  function disconnectAll() { auth.clear(); kdocs.clear(); for (const s of [...sessions.values(), ...connecting]) s.abort.abort(); sessions.clear(); connecting.clear(); }
   function activate(root) { disconnectAll(); project = root; generation++; saved = []; }
   async function mounts() {
     const root = project, seq = generation;
@@ -114,6 +119,14 @@ function createDirectoryPlugins({ store, fetch: fetcher = globalThis.fetch, mani
   async function request(s, op, node, cursor = '') {
     if (s.abort.signal.aborted) throw fail('SUPERSEDED');
     if (s.pending >= 4) throw fail('BUSY');
+    if (s.provider.transport === 'kdocs-skill') {
+      s.pending++;
+      try { return await kdocs.invoke(op.operation, node, cursor, s.abort.signal, s.kdocsIdentity); }
+      catch (err) {
+        if (err.code === 'AUTH_REQUIRED') { s.abort.abort(); for (const [key, value] of sessions) if (value === s) sessions.delete(key); }
+        throw err;
+      } finally { s.pending--; }
+    }
     const pagination = s.provider.list.pagination && cursor ? JSON.parse(cursor) : {};
     const vars = { parentId: s.provider.root.omitDefaultId && node.id === s.provider.root.defaultId ? '' : node.id, offset: pagination.offset ?? '', filter: pagination.filter || '', nodeId: node.id, nodeType: node.type, cursor, scopeId: node.scopeId || s.scopeId || '', documentId: node.documentId || node.id, documentType: node.documentType || node.type };
     const requestPath = op.path.replace(/\$(nodeId|nodeType|scopeId|documentId|documentType)\b/g, (_m, key) => { if (!remoteID(vars[key])) throw fail('BAD_RESPONSE'); return encodeURIComponent(vars[key]); });
@@ -201,10 +214,12 @@ function createDirectoryPlugins({ store, fetch: fetcher = globalThis.fetch, mani
     if (expectedGeneration !== seq) throw fail('SUPERSEDED');
     if (!project) throw fail('NO_WORKSPACE');
     await mounts();
+    if (seq !== generation) throw fail('SUPERSEDED');
     const previous = input.id && saved.find((m) => m.id === input.id);
     if (input.id && !previous) throw fail('NOT_FOUND');
     const provider = registry.get(previous ? previous.providerId : input.providerId);
-    if (!provider || (!input.authId && !credentialOverride && (!text(input.token, 4096) || /\s/.test(input.token))) || (input.authId && (provider.apiOrigin !== 'https://open.feishu.cn' || !provider.id.startsWith('feishu-')))) throw fail('BAD_REQUEST');
+    if (!provider || (provider.transport !== 'kdocs-skill' && !input.authId && !credentialOverride && (!text(input.token, 4096) || /\s/.test(input.token))) || (input.authId && (provider.apiOrigin !== 'https://open.feishu.cn' || !provider.id.startsWith('feishu-')))) throw fail('BAD_REQUEST');
+    if (provider.transport === 'kdocs-skill' && (input.token || input.authId)) throw fail('BAD_REQUEST');
     const config = previous || { id: randomUUID(), providerId: input.providerId,
       ...rootConfig(provider, input.rootId), name: text(input.name) || provider.name };
     if (!previous && saved.length >= 32) throw fail('LIMIT');
@@ -214,6 +229,16 @@ function createDirectoryPlugins({ store, fetch: fetcher = globalThis.fetch, mani
     // 先验证凭据和根目录，成功才保存挂载；失败不覆盖已有连接。
     connecting.add(s);
     try {
+      if (provider.transport === 'kdocs-skill') {
+        await kdocs.ensure(s.abort.signal);
+        s.kdocsIdentity = await kdocs.identity(s.abort.signal);
+        if (root.id !== provider.root.defaultId) {
+          const body = await request(s, provider.details, root);
+          const resolved = normalize(get(body, provider.details.entries)?.[0], provider, provider.details.fields);
+          if (resolved.id !== root.id || resolved.kind !== 'directory') throw fail('BAD_REQUEST');
+          root = { ...resolved, name: config.name }; s.nodes.set(root.id, root);
+        }
+      }
       if (provider.initialize) {
         const body = await request(s, provider.initialize, root);
         const resolved = normalize(get(body, provider.initialize.node), provider, provider.initialize.fields);
@@ -248,6 +273,12 @@ function createDirectoryPlugins({ store, fetch: fetcher = globalThis.fetch, mani
   }
   async function details(mountId, nodeId) {
     const s = session(mountId), node = nodeFor(s, nodeId);
+    if (s.provider.transport === 'kdocs-skill' && node.id !== s.provider.root.defaultId) {
+      const body = await request(s, s.provider.details, node);
+      const detail = normalize(get(body, s.provider.details.entries)?.[0], s.provider, s.provider.details.fields);
+      if (detail.id !== node.id || detail.kind !== node.kind) throw fail('BAD_RESPONSE');
+      return detail;
+    }
     if (node.kind !== 'directory') return s.provider.details ? documentDetails(s, node) : { ...node };
     if (!s.provider.initialize) return { ...node };
     const body = await request(s, s.provider.initialize, node);
@@ -267,6 +298,17 @@ function createDirectoryPlugins({ store, fetch: fetcher = globalThis.fetch, mani
   }
   return {
     activate, mounts, connect, details, remove,
+    kdocsAuthStart: (input) => {
+      if (!project) throw fail('NO_WORKSPACE');
+      if (input.forceLogin) for (const [key,s] of sessions) if (s.provider.transport === 'kdocs-skill') { s.abort.abort(); sessions.delete(key); }
+      return kdocs.start(input);
+    },
+    kdocsAuthPoll: (input) => kdocs.poll(input.authId),
+    kdocsLogout: async () => {
+      for (const [key,s] of sessions) if (s.provider.transport === 'kdocs-skill') { s.abort.abort(); sessions.delete(key); }
+      for (const s of connecting) if (s.provider.transport === 'kdocs-skill') s.abort.abort();
+      return kdocs.logout();
+    },
     pin: async (mountId, nodeId) => {
       const s = session(mountId), node = nodeFor(s, nodeId);
       if (node.kind !== 'directory') throw fail('BAD_REQUEST');
@@ -278,8 +320,8 @@ function createDirectoryPlugins({ store, fetch: fetcher = globalThis.fetch, mani
     },
     authStart: (input) => { if (!project) throw fail('NO_WORKSPACE'); return auth.start(input); },
     authPoll: (input) => auth.poll(input.authId),
-    cancel: (attemptId) => { auth.cancel(attemptId); for (const s of connecting) if (s.attemptId === attemptId) s.abort.abort(); return true; },
-    providers: () => [...registry.values()].map(({ id, name, version, root, inputHint }) => ({ id, name, version, rootKind: root.kind, defaultRootId: root.defaultId || '', browserAuth: id.startsWith('feishu-'), inputHint, apiVersion: 1 })),
+    cancel: (attemptId) => { auth.cancel(attemptId); kdocs.cancel(attemptId); for (const s of connecting) if (s.attemptId === attemptId) s.abort.abort(); return true; },
+    providers: () => [...registry.values()].map(({ id, name, version, root, inputHint, transport }) => ({ id, name, version, rootKind: root.kind, defaultRootId: root.defaultId || '', browserAuth: id.startsWith('feishu-'), kdocsAuth: transport === 'kdocs-skill', inputHint, apiVersion: 1 })),
     list: (mountId, nodeId, cursor, refresh) => page(session(mountId), nodeId, cursor, refresh),
     open: async (mountId, nodeId) => {
       const s = session(mountId), node = nodeFor(s, nodeId);
@@ -301,6 +343,9 @@ async function invokeDirectoryPlugin(service, method, args = {}) {
     let value;
     if (method === 'providers') value = service.providers();
     else if (method === 'mounts') value = await service.mounts();
+    else if (method === 'kdocsAuthStart') value = await service.kdocsAuthStart(args);
+    else if (method === 'kdocsAuthPoll') value = await service.kdocsAuthPoll(args);
+    else if (method === 'kdocsLogout') value = await service.kdocsLogout();
     else if (method === 'authStart') value = await service.authStart(args);
     else if (method === 'authPoll') value = await service.authPoll(args);
     else if (method === 'connect') value = await service.connect(args);

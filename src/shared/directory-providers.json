@@ -160,69 +160,53 @@
       "inputHint": "粘贴具体 Wiki 节点链接，以该节点为目录入口"
     },
     {
-      "id": "kdocs-personal",
+      "id": "kdocs-skill",
       "name": "金山云文档文件夹",
-      "version": "1.0.0",
-      "apiOrigin": "https://developer.kdocs.cn",
+      "version": "2.7.1",
+      "transport": "kdocs-skill",
       "documentHosts": [
         "kdocs.cn"
       ],
       "directoryType": "folder",
-      "authentication": {
-        "type": "query",
-        "parameter": "access_token"
-      },
-      "authCodes": [
-        20007,
-        20008
-      ],
-      "errorCodes": {
-        "10003": "FORBIDDEN",
-        "20009": "FORBIDDEN",
-        "30002": "RATE_LIMITED",
-        "30007": "FORBIDDEN",
-        "30012": "NOT_FOUND",
-        "30014": "LINK_UNAVAILABLE"
-      },
       "root": {
         "kind": "directory",
         "defaultType": "folder",
         "defaultId": "@my-documents",
-        "omitDefaultId": true,
         "urlTypes": {}
       },
-      "inputHint": "留空先浏览“我的文档”，进入目标文件夹后可将其加入快捷访问；也可填写本应用的文件夹 open_id / union_id。普通网页文件夹链接不可直接替代此 ID。",
-      "list": {
-        "method": "GET",
-        "path": "/api/v1/openapi/personal/files",
-        "query": {
-          "parent_id": "$parentId",
-          "count": "100",
-          "offset": "$offset",
-          "filter": "$filter"
-        },
-        "entries": "data.files",
-        "pagination": {
-          "type": "offset-filter",
-          "offset": "data.next_offset",
-          "filter": "data.next_filter"
-        },
-        "fields": {
-          "id": "id.open_id",
-          "name": "fname",
-          "type": "ftype",
-          "modifiedAt": "mtime"
-        }
-      },
-      "documentLink": {
-        "method": "GET",
-        "path": "/api/v1/openapi/personal/files/$nodeId/links",
-        "url": "data.link_url",
-        "name": "data.filename"
-      },
+      "inputHint": "留空浏览“我的文档”，进入目标文件夹后可加入快捷访问；也可填写文件夹 ID。使用 WPS 个人账号在浏览器确认登录。",
       "success": {
         "field": "code",
         "value": 0
+      },
+      "list": {
+        "entries": "data.items",
+        "cursor": "data.next_page_token",
+        "hasMore": "data.has_more",
+        "fields": {
+          "id": "id",
+          "name": "name",
+          "type": "type",
+          "scopeId": "drive_id",
+          "modifiedAt": "mtime"
+        },
+        "operation": "list"
+      },
+      "details": {
+        "entries": "data.items",
+        "fields": {
+          "id": "id",
+          "name": "name",
+          "type": "type",
+          "scopeId": "drive_id",
+          "modifiedAt": "mtime"
+        },
+        "operation": "details"
+      },
+      "documentLink": {
+        "url": "data.link_url",
+        "name": "data.name",
+        "operation": "open"
       }
     }
   ]
