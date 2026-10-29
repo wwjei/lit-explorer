@@ -120,6 +120,7 @@ function loadMainModule() {
     require: (n) => (n === 'electron' ? Object.assign({}, electron, { app: fakeApp, ipcMain: recorder })
       : n === './fs-api' ? fsApi
         : n === './state-sanitize' ? require(path.join(ROOT, 'src/main/state-sanitize.js'))
+          : n === './reference-dirs' ? require(path.join(ROOT, 'src/main/reference-dirs.js'))
           : n === './web-url' ? require(path.join(ROOT, 'src/main/web-url.js'))
             : n === '../shared/contracts' ? require(path.join(ROOT, 'src/shared/contracts.js'))
               : n === './web-views' ? {
@@ -174,6 +175,7 @@ function renderer() {
       ipcMain.handle('app:get-state', () => ({}));
       ipcMain.handle('app:set-state', () => ({}));
       // 预览变更监测每 5 s 会 stat 一次当前预览；测试里没有真实文件，固定返回同一版本
+      ipcMain.handle('references:list', () => []);
       ipcMain.handle('fs:stat', () => ({ size: 0, mtime: 0 }));
       ipcMain.handle('window:is-maximized', () => false);
       // SVG 编辑保存默认返回成功；E1 会换成能记录内容的桩
@@ -482,6 +484,64 @@ async function main() {
     ok('YAML 元数据完整展示', result.metadata.includes('name: sample') && result.metadata.includes('version: 2.7.5'), result);
     ok('列头保持单行高度，来源列表可见', result.height <= 50 && result.visible, result);
     ok('本地相对链接在应用中打开目标预览', true);
+  });
+
+  await run('R2', '外部参考目录快捷访问、预览与移除', async () => {
+    const f = await prepare();
+    const runPage = await renderer();
+    const external = freshDir('external-reference');
+    fs.mkdirSync(path.join(external, 'docs'));
+    fs.writeFileSync(path.join(external, 'docs', 'ref.md'), '# EXTERNAL_REFERENCE\n[Sibling](../target.md)');
+    fs.writeFileSync(path.join(external, 'target.md'), '# SIBLING_REFERENCE');
+    let saved = {};
+    const service = require('../src/main/reference-dirs').createReferenceDirs({ fsApi,
+      store: { load: async () => saved, patch: async (p) => { saved = { ...saved, ...p }; } },
+      pick: async () => external
+    });
+    fsApi.resetAllowedRoots();
+    await fsApi.allowRoot(f.ws);
+    service.activate(f.ws, []);
+    for (const [channel, handler] of Object.entries({
+      'references:list': () => service.list(),
+      'references:add': () => service.add(),
+      'references:remove': (_e, p) => service.remove(p),
+      'fs:list': (_e, p) => fsApi.listDir(p),
+      'fs:read': (_e, p) => fsApi.readFileForPreview(p)
+    })) { ipcMain.removeHandler(channel); ipcMain.handle(channel, handler); }
+    createdWin.webContents.send('workspace:opened', f.ws);
+    const result = await runPage(`(async()=>{
+      const row=(name)=>[...document.querySelectorAll('.row:not(.fav-row)')].find(e=>e.textContent.includes(name));
+      await waitFor(()=>row('inside.txt'));
+      document.querySelector('[data-reference-add]').click();
+      await waitFor(()=>[...document.querySelectorAll('.fav-row')].some(e=>e.dataset.favKey===${JSON.stringify(external)}));
+      [...document.querySelectorAll('.fav-row')].find(e=>e.dataset.favKey===${JSON.stringify(external)}).click();
+      await waitFor(()=>row('docs'));
+      row('docs').click();
+      await waitFor(()=>row('ref.md'));
+      row('ref.md').click();
+      await waitFor(()=>document.querySelector('.prose')?.textContent.includes('EXTERNAL_REFERENCE'));
+      const project=document.querySelector('#root-name').textContent;
+      document.querySelector('.prose a').click();
+      await waitFor(()=>document.querySelector('.prose')?.textContent.includes('SIBLING_REFERENCE'));
+      document.querySelector('[data-project-root]').click();
+      await waitFor(()=>row('inside.txt'));
+      return {project, returned:!!row('inside.txt')};
+    })()`);
+    eq('浏览参考目录时保留项目身份', result.project, path.basename(f.ws));
+    ok('可返回项目目录继续浏览', result.returned);
+    await runPage(`(async()=>{
+      [...document.querySelectorAll('.fav-row')].find(e=>e.dataset.favKey===${JSON.stringify(external)}).click();
+      await waitFor(()=>[...document.querySelectorAll('.row:not(.fav-row)')].some(e=>e.textContent.includes('target.md')));
+      [...document.querySelectorAll('.row:not(.fav-row)')].find(e=>e.textContent.includes('target.md')).click();
+      await waitFor(()=>document.querySelector('.prose')?.textContent.includes('SIBLING_REFERENCE'));
+    })()`);
+    createdWin.webContents.send('workspace:opened', f.ws);
+    await runPage(`waitFor(()=>document.querySelector('.prose')?.textContent.includes('SIBLING_REFERENCE') && document.querySelector('[data-project-root]'))`);
+    ok('重新打开项目恢复外部目录及选中文件', true);
+    createdWin.webContents.send('app:toggle-favorite', {path: external, isDir: true});
+    await runPage(`waitFor(()=>![...document.querySelectorAll('.fav-row')].some(e=>e.dataset.favKey===${JSON.stringify(external)}))`);
+    eq('移除外部目录后撤销授权', service.list().length, 0);
+    ipcMain.removeHandler('references:list'); ipcMain.handle('references:list', () => []);
   });
 
   await run('R1', '全局刷新只重读变化的预览', async () => {

@@ -36,6 +36,7 @@
   const mdToHtml = PV.markdown.toHtml;
 
   const hooks = {
+    canWrite: function () { return true; },
     root: function () { return ''; },
     previewPrefs: function () { return { docx: true, pptx: true }; },
     itemsInDir: function () { return null; },
@@ -62,7 +63,7 @@
     return {
       image: isImageNode(node),
       continuous: preview && isImageNode(node),
-      svgEdit: preview && kind === 'svg',
+      svgEdit: preview && kind === 'svg' && hooks.canWrite(node),
       source: kind === 'html' || kind === 'md' || kind === 'svg'
     };
   }
