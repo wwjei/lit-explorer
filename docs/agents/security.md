@@ -132,3 +132,5 @@ MyGo 版（`mygo/`）与 Electron 版共用渲染层，但系统边界要各自�
 请求不得跟随重定向；响应体有上限。文档 URL 只允许 HTTPS 和插件文档域名，参数错误与 HTTP 错误返回稳定错误码，不回显认证信息。云预览带 `cloudMountId`，`savedPaneData()` 和项目导航不保存解析出的临时 URL。新增插件同时维护 Node / Go 的契约夹具；JSON 清单能力不足时扩展宿主契约，不在渲染层执行任意请求或脚本。
 
 飞书设备授权由 `feishu-auth.js` / `feishu_auth.go` 实现，状态经 `authStart/authPoll` 返回，原始令牌与应用密钥不返回页面、不持久化。只允许固定认证域名和官方中国区确认页，连接时一次性消费 authId，且仅可交给飞书 API origin 的内置来源。关闭表单 / 切项目必须取消授权请求；并发刷新合并。平台资格尚待实测，详见 [授权设计](../design/feishu-client-authorization.md)。
+
+金山个人目录按官方要求把 access_token 注入固定 API 查询串，不能把构造后的请求 URL 回传或记录；只调用 GET 列表 / 已有分享，不创建分享。复合分页 cursor 必须由该目录签发；`pin` 仅从已发现目录创建独立挂载，继续验证列表与项目序号。具体边界见 [金山插件](../design/kdocs-directory-plugin.md)。

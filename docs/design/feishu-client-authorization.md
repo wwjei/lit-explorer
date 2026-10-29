@@ -29,7 +29,7 @@ Lit 可以实现“不部署 Lit 授权服务，凭据留在用户客户端”�
 
 ### 浏览器创建个人应用（实验）
 
-1. 在快捷访问添加飞书来源，填写具体文档、文件夹或 Wiki 节点链接。
+1. 在快捷访问添加飞书来源，填写文件夹或 Wiki 节点链接。
 2. 选择“浏览器创建个人应用并授权”。宿主向 `/oauth/v1/app/registration` 发起 `action=begin`，声明 `archetype=PersonalAgent`、`auth_method=client_secret`。
 3. 系统浏览器打开 `https://open.feishu.cn/page/cli?user_code=...`。界面同时显示确认码，用户核对并确认创建应用。
 4. 宿主按 interval 轮询 `action=poll`，取得本机应用凭据，不返回渲染进程。
@@ -69,7 +69,7 @@ Lit 可以实现“不部署 Lit 授权服务，凭据留在用户客户端”�
 自动测试使用 `test/fixtures/feishu-auth.json`，没有调用真实注册接口或创建远程应用。
 
 - S11：注册 → 设备授权、轮询节流 / slow_down、拒绝 / 过期、取消、单次消费、刷新合并、URL 域名和 DPoP 拒绝。
-- D2：真实界面经过两次浏览器跳转桩，授权后连接具体文档、秘密不入界面 / 设置、关闭表单取消。
+- D2：真实界面经过两次浏览器跳转桩，授权后连接文件夹并打开其中的文档、秘密不入界面 / 设置、关闭表单取消。
 - MyGo：`TestFeishuDeviceRegistrationAndRefresh` / `TestFeishuDeviceDenialExpiryAndCancel`；对应 JSON 夹具和并发刷新。
 
 后续实测准备：
