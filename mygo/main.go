@@ -58,12 +58,14 @@ var (
 )
 
 type App struct {
-	referenceRoot string
-	references    []string
-	win           *mygo.Window
-	seq           int
-	seqMu         sync.Mutex
-	saveTim       *time.Timer
+	directoryMu      sync.Mutex
+	directoryPlugins *directoryPluginService
+	referenceRoot    string
+	references       []string
+	win              *mygo.Window
+	seq              int
+	seqMu            sync.Mutex
+	saveTim          *time.Timer
 
 	// 网页窗格：按地址保活一个子 webview（对应 Electron 的 web-views.js）
 	webMu    sync.Mutex
@@ -370,6 +372,7 @@ func (a *App) openWorkspaceWith(dir string, resolve func(string) (string, error)
 		// 检查、授权、持久化和事件是一次提交；被取代的请求不能留下副作用。
 		resetAllowedRoots()
 		allowResolvedRoot(real)
+		a.directoryService().activate(real)
 		a.referenceRoot = real
 		a.references = references
 		for _, p := range references {

@@ -1,0 +1,327 @@
+{
+  "apiVersion": 1,
+  "providers": [
+    {
+      "id": "feishu-drive",
+      "name": "飞书文件夹",
+      "version": "1.0.0",
+      "apiOrigin": "https://open.feishu.cn",
+      "documentHosts": [
+        "feishu.cn"
+      ],
+      "directoryType": "folder",
+      "authCodes": [
+        99991661,
+        99991663,
+        99991664,
+        99991668
+      ],
+      "list": {
+        "method": "GET",
+        "path": "/open-apis/drive/v1/files",
+        "query": {
+          "folder_token": "$nodeId",
+          "page_token": "$cursor",
+          "page_size": "100"
+        },
+        "entries": "data.files",
+        "cursor": "data.next_page_token",
+        "hasMore": "data.has_more",
+        "fields": {
+          "id": "token",
+          "name": "name",
+          "type": "type",
+          "url": "url",
+          "modifiedAt": "modified_time"
+        }
+      },
+      "details": {
+        "method": "POST",
+        "path": "/open-apis/drive/v1/metas/batch_query",
+        "body": {
+          "request_docs": [
+            {
+              "doc_token": "$nodeId",
+              "doc_type": "$nodeType"
+            }
+          ],
+          "with_url": true
+        },
+        "entries": "data.metas",
+        "fields": {
+          "id": "doc_token",
+          "name": "title",
+          "type": "doc_type",
+          "url": "url",
+          "modifiedAt": "latest_modify_time"
+        }
+      },
+      "success": {
+        "field": "code",
+        "value": 0
+      },
+      "root": {
+        "kind": "directory",
+        "defaultType": "folder",
+        "urlTypes": {
+          "drive/folder": "folder"
+        }
+      },
+      "inputHint": "粘贴飞书文件夹链接，或填写 folder token"
+    },
+    {
+      "id": "feishu-document",
+      "name": "飞书具体文档",
+      "version": "1.0.0",
+      "apiOrigin": "https://open.feishu.cn",
+      "documentHosts": [
+        "feishu.cn"
+      ],
+      "directoryType": "folder",
+      "authCodes": [
+        99991661,
+        99991663,
+        99991664,
+        99991668
+      ],
+      "list": {
+        "method": "GET",
+        "path": "/open-apis/drive/v1/files",
+        "query": {
+          "folder_token": "$nodeId",
+          "page_token": "$cursor",
+          "page_size": "100"
+        },
+        "entries": "data.files",
+        "cursor": "data.next_page_token",
+        "hasMore": "data.has_more",
+        "fields": {
+          "id": "token",
+          "name": "name",
+          "type": "type",
+          "url": "url",
+          "modifiedAt": "modified_time"
+        }
+      },
+      "details": {
+        "method": "POST",
+        "path": "/open-apis/drive/v1/metas/batch_query",
+        "body": {
+          "request_docs": [
+            {
+              "doc_token": "$nodeId",
+              "doc_type": "$nodeType"
+            }
+          ],
+          "with_url": true
+        },
+        "entries": "data.metas",
+        "fields": {
+          "id": "doc_token",
+          "name": "title",
+          "type": "doc_type",
+          "url": "url",
+          "modifiedAt": "latest_modify_time"
+        }
+      },
+      "success": {
+        "field": "code",
+        "value": 0
+      },
+      "root": {
+        "kind": "document",
+        "defaultType": "docx",
+        "urlTypes": {
+          "docx": "docx",
+          "docs": "doc",
+          "sheets": "sheet",
+          "base": "bitable",
+          "mindnotes": "mindnote",
+          "slides": "slides",
+          "file": "file"
+        }
+      },
+      "inputHint": "粘贴具体飞书文档链接（文档、表格、多维表格等）"
+    },
+    {
+      "id": "feishu-wiki",
+      "name": "飞书 Wiki 目录",
+      "version": "1.0.0",
+      "apiOrigin": "https://open.feishu.cn",
+      "documentHosts": [
+        "feishu.cn"
+      ],
+      "directoryType": "wiki",
+      "authCodes": [
+        99991661,
+        99991663,
+        99991664,
+        99991668
+      ],
+      "list": {
+        "method": "GET",
+        "path": "/open-apis/wiki/v2/spaces/$scopeId/nodes",
+        "query": {
+          "parent_node_token": "$nodeId",
+          "page_token": "$cursor",
+          "page_size": "50"
+        },
+        "entries": "data.items",
+        "cursor": "data.page_token",
+        "hasMore": "data.has_more",
+        "fields": {
+          "id": "node_token",
+          "name": "title",
+          "type": "=wiki",
+          "scopeId": "space_id",
+          "documentId": "obj_token",
+          "documentType": "obj_type",
+          "modifiedAt": "obj_edit_time",
+          "hasChildren": "has_child"
+        }
+      },
+      "details": {
+        "method": "POST",
+        "path": "/open-apis/drive/v1/metas/batch_query",
+        "body": {
+          "request_docs": [
+            {
+              "doc_token": "$documentId",
+              "doc_type": "$documentType"
+            }
+          ],
+          "with_url": true
+        },
+        "entries": "data.metas",
+        "fields": {
+          "id": "doc_token",
+          "name": "title",
+          "type": "doc_type",
+          "url": "url",
+          "modifiedAt": "latest_modify_time"
+        }
+      },
+      "success": {
+        "field": "code",
+        "value": 0
+      },
+      "root": {
+        "kind": "directory",
+        "defaultType": "wiki",
+        "urlTypes": {
+          "wiki": "wiki"
+        }
+      },
+      "initialize": {
+        "method": "GET",
+        "path": "/open-apis/wiki/v2/spaces/get_node",
+        "query": {
+          "token": "$nodeId"
+        },
+        "node": "data.node",
+        "entries": "data.node",
+        "fields": {
+          "id": "node_token",
+          "name": "title",
+          "type": "=wiki",
+          "scopeId": "space_id",
+          "documentId": "obj_token",
+          "documentType": "obj_type",
+          "modifiedAt": "obj_edit_time",
+          "hasChildren": "has_child"
+        }
+      },
+      "inputHint": "粘贴具体 Wiki 节点链接，以该节点为目录入口"
+    },
+    {
+      "id": "feishu-wiki-document",
+      "name": "飞书 Wiki 具体文档",
+      "version": "1.0.0",
+      "apiOrigin": "https://open.feishu.cn",
+      "documentHosts": [
+        "feishu.cn"
+      ],
+      "directoryType": "wiki",
+      "authCodes": [
+        99991661,
+        99991663,
+        99991664,
+        99991668
+      ],
+      "list": {
+        "method": "GET",
+        "path": "/open-apis/wiki/v2/spaces/$scopeId/nodes",
+        "query": {
+          "parent_node_token": "$nodeId",
+          "page_token": "$cursor",
+          "page_size": "50"
+        },
+        "entries": "data.items",
+        "cursor": "data.page_token",
+        "hasMore": "data.has_more",
+        "fields": {
+          "id": "node_token",
+          "name": "title",
+          "type": "=wiki",
+          "scopeId": "space_id",
+          "documentId": "obj_token",
+          "documentType": "obj_type",
+          "modifiedAt": "obj_edit_time",
+          "hasChildren": "has_child"
+        }
+      },
+      "details": {
+        "method": "POST",
+        "path": "/open-apis/drive/v1/metas/batch_query",
+        "body": {
+          "request_docs": [
+            {
+              "doc_token": "$documentId",
+              "doc_type": "$documentType"
+            }
+          ],
+          "with_url": true
+        },
+        "entries": "data.metas",
+        "fields": {
+          "id": "doc_token",
+          "name": "title",
+          "type": "doc_type",
+          "url": "url",
+          "modifiedAt": "latest_modify_time"
+        }
+      },
+      "success": {
+        "field": "code",
+        "value": 0
+      },
+      "root": {
+        "kind": "document",
+        "defaultType": "wiki",
+        "urlTypes": {
+          "wiki": "wiki"
+        }
+      },
+      "initialize": {
+        "method": "GET",
+        "path": "/open-apis/wiki/v2/spaces/get_node",
+        "query": {
+          "token": "$nodeId"
+        },
+        "node": "data.node",
+        "entries": "data.node",
+        "fields": {
+          "id": "node_token",
+          "name": "title",
+          "type": "=wiki",
+          "scopeId": "space_id",
+          "documentId": "obj_token",
+          "documentType": "obj_type",
+          "modifiedAt": "obj_edit_time",
+          "hasChildren": "has_child"
+        }
+      },
+      "inputHint": "粘贴具体 Wiki 文档链接，作为单文档快捷项打开"
+    }
+  ]
+}

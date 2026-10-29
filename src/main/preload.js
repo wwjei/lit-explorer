@@ -14,6 +14,7 @@ contextBridge.exposeInMainWorld('pv', {
   openRoot: (dir) => ipcRenderer.invoke('workspace:open', dir),
   getSampleRoot: () => ipcRenderer.invoke('workspace:sample'),
 
+  directoryCall: (method, args = {}) => ipcRenderer.invoke('directories:call', method, args),
   referenceDirs: () => ipcRenderer.invoke('references:list'),
   addReferenceDir: () => ipcRenderer.invoke('references:add'),
   removeReferenceDir: (dir) => ipcRenderer.invoke('references:remove', dir),

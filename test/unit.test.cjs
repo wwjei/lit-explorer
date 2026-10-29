@@ -395,6 +395,130 @@ function loadRenderer() {
     fsApi.resetAllowedRoots();
   });
 
+  await run('S9', '目录插件契约、飞书接口、权限及凭据隔离', async () => {
+    const {createDirectoryPlugins, safeDocumentUrl, providers} = require('../src/main/directory-plugins');
+    const manifest = require('../src/shared/directory-providers.json');
+    const fixture = require('./fixtures/feishu-directory.json');
+    let state = {}, requests = [], mode = 'normal';
+    const store = {load: async()=>state, patch: async(p)=>{state={...state,...p};}};
+    const fetch = async(raw, options)=>{
+      const url=new URL(raw); requests.push({url,options});
+      if (mode==='auth') return new Response('{}',{status:401});
+      if (mode==='huge') return new Response('x'.repeat(2*1024*1024+1));
+      let data;
+      if (url.pathname.endsWith('batch_query')) data=JSON.parse(JSON.stringify(fixture.details));
+      else if (url.searchParams.get('folder_token')==='folderA') data=fixture.nestedPage;
+      else data=url.searchParams.get('page_token') ? fixture.lastPage : fixture.firstPage;
+      if (mode==='unsafe') data.data.metas[0].url='https://feishu.cn.evil.example/docx/docA';
+      return new Response(JSON.stringify(data));
+    };
+    const api=createDirectoryPlugins({store,fetch});
+    api.activate('/project-a');
+    const mount=await api.connect({providerId:'feishu-drive',rootId:'root',name:'资料库',token:'fixture-secret'});
+    eq('内置飞书插件可发现',api.providers()[0].id,'feishu-drive');
+    ok('设置中不包含访问令牌',!JSON.stringify(state).includes('fixture-secret'),state);
+    const first=await api.list(mount.id,'root','');
+    eq('列表标准化目录节点',first.entries[0].kind,'directory');
+    eq('连接首屏命中缓存，不重复请求',requests.length,1);
+    eq('分页标记来自官方响应字段',first.nextCursor,'next-page');
+    const second=await api.list(mount.id,'root',first.nextCursor);
+    eq('第二页正确归一化',second.entries[0].type,'sheet');
+    const nested=await api.list(mount.id,'folderA','');
+    eq('已发现的子目录可以浏览',nested.entries[0].id,'docB');
+    const opened=await api.open(mount.id,'docA');
+    eq('打开文档重新获取实际在线链接',opened.url,'https://tenant.feishu.cn/docx/docA');
+    eq('打开使用最新标题',opened.name,'设计说明（最新）');
+    const request=requests[requests.length-1];
+    eq('元数据接口是 POST',request.options.method,'POST');
+    eqJson('飞书请求开启 with_url',JSON.parse(request.options.body),{request_docs:[{doc_token:'docA',doc_type:'docx'}],with_url:true});
+    ok('认证仅发给固定 API 域名且不跟随重定向',requests.every(r=>r.url.origin==='https://open.feishu.cn'&&r.options.headers.Authorization==='Bearer fixture-secret'&&r.options.redirect==='error'));
+    async function rejected(title,fn,expected) { let code;try {await fn();}catch(err){code=err.code;}eq(title,code,expected); }
+    await rejected('不能查询未发现节点',()=>api.list(mount.id,'outside',''),'OUTSIDE_MOUNT');
+    await rejected('不能伪造其他目录的分页标记',()=>api.list(mount.id,'root','forged'),'OUTSIDE_MOUNT');
+    mode='unsafe';await rejected('不能打开伪装的文档域名',()=>api.open(mount.id,'docA'),'UNSAFE_URL');
+    mode='huge';await rejected('API 响应体有上限',()=>api.list(mount.id,'root','',true),'RESPONSE_TOO_LARGE');
+    mode='auth';await rejected('令牌过期使用稳定错误码',()=>api.list(mount.id,'root','',true),'AUTH_REQUIRED');
+    eq('令牌过期后清除连接',(await api.mounts())[0].connected,false);
+    mode='normal';await api.connect({id:mount.id,token:'fixture-secret'});
+    api.activate('/project-b');
+    await rejected('切项目后旧连接不能读取',()=>api.list(mount.id,'root',''),'AUTH_REQUIRED');
+    eq('其他项目不显示旧挂载',(await api.mounts()).length,0);
+    api.activate('/project-a');
+    eq('重开仅恢复配置，不恢复凭据',(await api.mounts())[0].connected,false);
+    await api.connect({id:mount.id,token:'fixture-secret'});
+    await api.remove(mount.id);
+    eq('移除后持久化记录清空',(await api.mounts()).length,0);
+    await rejected('移除后不再读取',()=>api.list(mount.id,'root',''),'AUTH_REQUIRED');
+    let invalid;try {safeDocumentUrl('file:///etc/passwd',manifest.providers[0]);}catch(err){invalid=err.code;}
+    eq('文档打开禁止本机文件协议',invalid,'UNSAFE_URL');
+    let bad;try{providers({...manifest,apiVersion:99});}catch(err){bad=err.code;}
+    eq('未知插件契约版本拒绝加载',bad,'PLUGIN_VERSION');
+    let release;
+    const pending=createDirectoryPlugins({store,fetch:(_u,options)=>new Promise((resolve,reject)=>{
+      release=()=>resolve(new Response(JSON.stringify(fixture.firstPage)));
+      options.signal.addEventListener('abort',()=>reject(new Error('aborted')));
+    })});
+    pending.activate('/project-a');
+    const connect=pending.connect({providerId:'feishu-drive',rootId:'root',name:'等待',token:'fixture-secret'});
+    while(!release) await new Promise(resolve=>setImmediate(resolve));
+    pending.activate('/project-b');
+    await rejected('切换项目会取消连接中的请求',()=>connect,'SUPERSEDED');
+    release=null; pending.activate('/project-a');
+    const cancelConnect=pending.connect({providerId:'feishu-drive',rootId:'root',name:'取消',token:'fixture-secret',attemptId:'attempt-a'});
+    while(!release) await new Promise(resolve=>setImmediate(resolve));
+    pending.cancel('attempt-a');
+    await rejected('关闭表单会取消验证中的连接',()=>cancelConnect,'SUPERSEDED');
+
+    // 用不同的 origin、路径和 JSON 字段验证宿主没有写死飞书协议。
+    const custom=JSON.parse(JSON.stringify(manifest)); const p=custom.providers[0];
+    p.id='fixture-provider';p.name='示例插件';p.apiOrigin='https://api.example.com';p.documentHosts=['docs.example.com'];p.success={field:'status',value:'ok'};
+    p.list.path='/v1/folders/$nodeId/items';p.list.query={cursor:'$cursor'};p.list.entries='payload.nodes';p.list.cursor='payload.cursor';p.list.hasMore='payload.more';p.list.fields={id:'id',name:'label',type:'kind',url:'link'};
+    p.details.path='/v1/metadata';p.details.entries='payload.nodes';p.details.fields=p.list.fields;
+    const generic=createDirectoryPlugins({store,manifest:custom,fetch:async(url)=>{
+      ok('其他插件可使用自己的 API 路径',url.startsWith('https://api.example.com/v1/folders/root/items'),url);
+      return new Response(JSON.stringify({status:'ok',payload:{nodes:[{id:'example',label:'通用节点',kind:'folder'}],more:false}}));
+    }});
+    generic.activate('/generic');
+    const example=await generic.connect({providerId:'fixture-provider',rootId:'root',name:'通用来源',token:'fixture-secret'});
+    eq('同一插件宿主可加载不同服务的字段映射',(await generic.list(example.id,'root','')).entries[0].name,'通用节点');
+  });
+
+  await run('S10', '具体文档与 Wiki 目录挂载语义', async () => {
+    const {createDirectoryPlugins}=require('../src/main/directory-plugins');
+    const fixture=require('./fixtures/feishu-directory.json');
+    let state={},calls=[];
+    const api=createDirectoryPlugins({store:{load:async()=>state,patch:async(p)=>{state={...state,...p};}},fetch:async(raw,options)=>{
+      const url=new URL(raw);calls.push({url,options});let data;
+      if(url.pathname.endsWith('get_node')) data=fixture.wikiRoot;
+      else if(url.pathname.includes('/wiki/')) data=fixture.wikiPage;
+      else {
+        const doc=JSON.parse(options.body).request_docs[0];
+        data={code:0,data:{metas:[{doc_token:doc.doc_token,doc_type:doc.doc_type,title:'在线文档 '+doc.doc_token,url:'https://tenant.feishu.cn/docx/'+doc.doc_token}]}};
+      }
+      return new Response(JSON.stringify(data));
+    }});
+    api.activate('/specific');
+    const document=await api.connect({providerId:'feishu-document',rootId:'https://tenant.feishu.cn/docx/docA?from=share',name:'具体设计文档',token:'fixture-secret'});
+    eq('具体文档链接提取正确的文档标识',document.rootId,'docA');
+    eq('文档作为单项挂载',document.rootKind,'document');
+    ok('单文档连接不调用文件夹列表',calls.every(c=>c.url.pathname.endsWith('batch_query')));
+    eq('具体文档可以直接解析并打开',(await api.open(document.id,document.rootId)).url,'https://tenant.feishu.cn/docx/docA');
+    const wiki=await api.connect({providerId:'feishu-wiki',rootId:'https://tenant.feishu.cn/wiki/wikiRoot',name:'我的 Wiki 目录',token:'fixture-secret'});
+    eq('Wiki 节点作为目录入口',wiki.rootKind,'directory');
+    const page=await api.list(wiki.id,'wikiRoot','');
+    eq('Wiki 目录返回子节点',page.entries[0].id,'wikiChild');
+    eq('Wiki 叶子文档可直接点击打开',page.entries[0].kind,'document');
+    eq('Wiki 子节点保留实际文档标识',page.entries[0].documentId,'wikiDocChild');
+    ok('Wiki 查询绑定解析得到的知识空间',calls.some(c=>c.url.pathname==='/open-apis/wiki/v2/spaces/space123/nodes'&&c.url.searchParams.get('parent_node_token')==='wikiRoot'));
+    eq('Wiki 节点自身也能打开文档',(await api.open(wiki.id,'wikiRoot')).url,'https://tenant.feishu.cn/docx/wikiDocRoot');
+    eq('Wiki 子项打开实体文档链接',(await api.open(wiki.id,'wikiChild')).url,'https://tenant.feishu.cn/docx/wikiDocChild');
+    eq('Wiki 目录详情来自节点接口',(await api.details(wiki.id,'wikiRoot')).name,'知识库入口');
+    const wikiDoc=await api.connect({providerId:'feishu-wiki-document',rootId:'https://tenant.feishu.cn/wiki/wikiRoot',name:'具体 Wiki 文档',token:'fixture-secret'});
+    eq('同一 Wiki 节点也可作为单文档快捷项',wikiDoc.rootKind,'document');
+    eq('Wiki 单文档直接打开实体链接',(await api.open(wikiDoc.id,'wikiRoot')).url,'https://tenant.feishu.cn/docx/wikiDocRoot');
+    ok('文档与目录配置均不包含令牌',!JSON.stringify(state).includes('fixture-secret'));
+  });
+
   done();
 })().catch((err) => {
   console.error(err);
