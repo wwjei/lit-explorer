@@ -151,3 +151,7 @@
 - `src/renderer/cloud-directories.js`：`PV.cloud` 管理来源配置表单、目录列表、详情、分页和在线文档打开；`app.js` 注入预览与快捷访问回调。
 - `pane.js` 的 `savedPaneData` 排除云来源预览，避免解析出的临时 URL 持久化；项目导航的云文档选中态同样不写入磁盘。
 - 接口推演、其他服务接入步骤与限制见 [目录插件体系](docs/design/external-directory-plugins.md)。
+
+## 飞书客户端设备授权
+
+`src/main/feishu-auth.js` / `mygo/feishu_auth.go`：`start/poll/take/token/cancel/clear`；共享配置 `src/shared/feishu-auth.json`。目录桥接新增 `authStart` / `authPoll`，`connect` 可消费一次性 `authId`，原始凭据不返回界面。方案、资格边界和真实测试资源见 [客户端授权设计](docs/design/feishu-client-authorization.md)。

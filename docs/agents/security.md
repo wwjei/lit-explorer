@@ -130,3 +130,5 @@ MyGo 版（`mygo/`）与 Electron 版共用渲染层，但系统边界要各自�
 插件只能从随应用构建的 `src/shared/directory-providers.json` 注册，页面不能写目录插件清单、API 地址或 `directoryMounts`。`directories:call` / `App.DirectoryCall` 仅分派固定业务方法，不提供通用 HTTP。令牌只存在宿主会话内存中，未知目录节点与分页标记被拒，切项目 / 移除 / 关闭连接表单会取消相关请求。
 
 请求不得跟随重定向；响应体有上限。文档 URL 只允许 HTTPS 和插件文档域名，参数错误与 HTTP 错误返回稳定错误码，不回显认证信息。云预览带 `cloudMountId`，`savedPaneData()` 和项目导航不保存解析出的临时 URL。新增插件同时维护 Node / Go 的契约夹具；JSON 清单能力不足时扩展宿主契约，不在渲染层执行任意请求或脚本。
+
+飞书设备授权由 `feishu-auth.js` / `feishu_auth.go` 实现，状态经 `authStart/authPoll` 返回，原始令牌与应用密钥不返回页面、不持久化。只允许固定认证域名和官方中国区确认页，连接时一次性消费 authId，且仅可交给飞书 API origin 的内置来源。关闭表单 / 切项目必须取消授权请求；并发刷新合并。平台资格尚待实测，详见 [授权设计](../design/feishu-client-authorization.md)。
