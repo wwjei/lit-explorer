@@ -921,3 +921,6 @@ body.has-web #toast.on{transform:translateY(0)}
 .cloud-entry-open span{overflow-wrap:anywhere}
 .cloud-details{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--panel-2);padding:12px;border-radius:8px}
 .cloud-fav .iconbtn{margin-left:auto;width:24px;height:24px}
+
+.cloud-connect .cloud-reauth{display:flex;align-items:center;gap:8px}
+.cloud-connect input[type=checkbox]{width:auto}

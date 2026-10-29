@@ -120,6 +120,7 @@ function loadMainModule() {
     require: (n) => (n === 'electron' ? Object.assign({}, electron, { app: fakeApp, ipcMain: recorder })
       : n === './fs-api' ? fsApi
         : n === './state-sanitize' ? require(path.join(ROOT, 'src/main/state-sanitize.js'))
+          : n === './protected-credentials' ? require(path.join(ROOT, 'src/main/protected-credentials.js'))
           : n === './directory-plugins' ? require(path.join(ROOT, 'src/main/directory-plugins.js'))
           : n === './reference-dirs' ? require(path.join(ROOT, 'src/main/reference-dirs.js'))
           : n === './web-url' ? require(path.join(ROOT, 'src/main/web-url.js'))
@@ -681,26 +682,27 @@ async function main() {
     await runPage('PV.cloud.setProject('+JSON.stringify(f.ws)+')');await clearPinnedColumns(runPage);
   });
 
-  await run('D3', '金山云目录界面、子目录快捷项与网页预览', async () => {
+  await run('D3', '金山内置授权、目录快捷项与网页预览', async () => {
     const f=await prepare(),runPage=await renderer();
     const {createDirectoryPlugins,invokeDirectoryPlugin}=require('../src/main/directory-plugins');
-    const fixture=require('./fixtures/kdocs-directory.json');let saved={};
-    const service=createDirectoryPlugins({store:{load:async()=>saved,patch:async(p)=>{saved={...saved,...p};}},fetch:async(raw)=>{
-      const url=new URL(raw);
-      const data=url.pathname.endsWith('/links')?fixture.link:url.searchParams.get('parent_id')?fixture.nestedPage:url.searchParams.has('offset')?fixture.lastPage:fixture.firstPage;
+    const fixture=require('./fixtures/kdocs-skill.json');let saved={},secure=null,clock=100000,opened=[];
+    const service=createDirectoryPlugins({authNow:()=>clock,kdocsCredentials:{load:async()=>secure,save:async(v)=>{secure=v;return true;},remove:async()=>{secure=null;}},store:{load:async()=>saved,patch:async(p)=>{saved={...saved,...p};}},fetch:async(raw,options)=>{
+      const url=new URL(raw),body=JSON.parse(options.body);
+      const data=url.hostname==='api.wps.cn'?fixture.authorized:body.tool==='get_file_link'?fixture.link:body.tool==='get_file_info'?(body.args.file_id==='folder_A'?fixture.folderDetails:fixture.fileDetails):body.tool==='list_files'?fixture.nestedPage:body.args.page_token?fixture.lastPage:fixture.firstPage;
       return new Response(JSON.stringify(data));
     }});
     service.activate(f.ws);ipcMain.removeHandler('directories:call');
-    ipcMain.handle('directories:call',(_e,method,args)=>invokeDirectoryPlugin(service,method,args));
+    ipcMain.handle('directories:call',async(_e,method,args)=>{if(method==='kdocsAuthPoll')clock+=1000;const result=await invokeDirectoryPlugin(service,method,args);if(result.value?.interval)result.value.interval=0.001;return result;});
+    ipcMain.removeHandler('web:open-external');ipcMain.handle('web:open-external',(_e,url)=>{opened.push(url);return {ok:true};});
     stubList(f.ws,['kdocs-placeholder.md']);stubRead(()=>({text:'# Kdocs',size:7}));
     createdWin.webContents.send('workspace:opened',f.ws);
     const result=await runPage(`(async()=>{
       await waitFor(()=>document.querySelector('.row:not(.fav-row)')?.textContent.includes('kdocs-placeholder.md'));
       document.querySelector('[data-cloud-add]').click();const form=document.querySelector('.cloud-connect');
       const options=[...form.elements.providerId.options].map(o=>o.value);
-      form.elements.providerId.value='kdocs-personal';form.elements.providerId.dispatchEvent(new Event('change'));
-      const authIsToken=form.elements.authMode.value==='token'&&[...form.elements.authMode.options].filter(o=>o.value!=='token').every(o=>o.disabled);
-      form.elements.rootId.value='';form.elements.name.value='我的金山文档';form.elements.token.value='fixture-secret';form.requestSubmit();
+      form.elements.providerId.value='kdocs-skill';form.elements.providerId.dispatchEvent(new Event('change'));
+      const browserLogin=form.elements.authMode.value==='kdocs'&&!form.elements.token.required&&document.querySelector('[data-auth-token]').hidden;
+      form.elements.rootId.value='';form.elements.name.value='我的金山文档';form.requestSubmit();
       await waitFor(()=>document.querySelector('.cloud-entry')?.textContent.includes('参考资料'));
       document.querySelector('[data-cloud-next]').click();await waitFor(()=>document.querySelectorAll('.cloud-entry').length===2);
       document.querySelector('[data-cloud-entry="0"]').click();await waitFor(()=>document.querySelector('.cloud-entry')?.textContent.includes('接口说明'));
@@ -711,14 +713,21 @@ async function main() {
       await waitFor(()=>document.querySelectorAll('.cloud-fav').length===1);
       document.querySelector('.cloud-fav').click();await waitFor(()=>document.querySelector('.cloud-entry')?.textContent.includes('接口说明'));
       document.querySelector('[data-cloud-entry="0"]').click();await waitFor(()=>!document.querySelector('dialog.cloud-dialog').open);
-      return {authIsToken,onlyFolders:!options.includes('feishu-document')&&!options.includes('feishu-wiki-document'),preview:PV.pane.allPanes().some(p=>p.node?.url==='https://www.kdocs.cn/l/fixtureDoc'),noSignedUrls:!JSON.stringify(PV.pane.layoutSnapshot()).includes('kdocs.cn')};
+      return {browserLogin,onlyFolders:!options.includes('feishu-document')&&!options.includes('feishu-wiki-document'),preview:PV.pane.allPanes().some(p=>p.node?.url==='https://www.kdocs.cn/l/fixtureDoc'),noSignedUrls:!JSON.stringify(PV.pane.layoutSnapshot()).includes('kdocs.cn'),noToken:!document.body.textContent.includes('skill-fixture-secret')};
     })()`);
-    ok('金山只展示适用的访问令牌鉴权',result.authIsToken,result);
+    ok('金山无需手动 token，使用浏览器登录',result.browserLogin,result);
+    ok('浏览器只打开官方授权引导页',opened.length===1&&opened[0].startsWith('https://mcp-center.wps.cn/kdocs-auth/auth-guide?auth_code='),opened);
     ok('来源选择不含单文档插件',result.onlyFolders,result);
     ok('子目录快捷项可独立浏览并打开文档',result.preview,result);
     ok('金山在线链接不进入持久化布局',result.noSignedUrls,result);
-    ok('金山令牌不保存到设置',!JSON.stringify(saved).includes('fixture-secret'));
+    ok('界面和普通设置均不含凭据',result.noToken&&!JSON.stringify(saved).includes('skill-fixture-secret'));
+    service.activate(f.ws);await runPage('PV.cloud.setProject('+JSON.stringify(f.ws)+')');
+    await runPage(`(async()=>{document.querySelector('.cloud-fav').click();await waitFor(()=>document.querySelector('.cloud-connect'));document.querySelector('.cloud-connect').requestSubmit();await waitFor(()=>document.querySelector('.cloud-entry'));document.querySelector('[data-cloud-close]').click();})()`);
+    eq('切项目后复用本机授权，不重复打开浏览器',opened.length,1);
+    await runPage(`(async()=>{document.querySelector('[data-cloud-add]').click();const form=document.querySelector('.cloud-connect');form.elements.providerId.value='kdocs-skill';form.elements.providerId.dispatchEvent(new Event('change'));document.querySelector('[data-cloud-logout]').click();await waitFor(()=>document.querySelector('.cloud-message')?.textContent.includes('已退出'));document.querySelector('[data-cloud-close]').click();})()`);
+    eq('界面退出清除 Lit 安全存储',secure,null);
     for(const mount of await service.mounts()) await service.remove(mount.id);
+    ipcMain.removeHandler('web:open-external');ipcMain.handle('web:open-external',()=>({ok:true}));
     ipcMain.removeHandler('directories:call');ipcMain.handle('directories:call',(_e,method)=>({value:method==='mounts'||method==='providers'?[]:true}));
     await runPage('PV.cloud.setProject('+JSON.stringify(f.ws)+')');await clearPinnedColumns(runPage);
   });

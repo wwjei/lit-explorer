@@ -3,7 +3,9 @@
   'use strict';
   const esc = PV.highlight.escapeAttr;
   const errors = {
-    AUTH_REQUIRED: '连接已过期，请重新授权',
+    AUTH_REQUIRED: '需要登录，请重新连接并在浏览器确认',
+    CREDENTIAL_STORAGE: '无法更新本机安全凭据，请检查应用数据目录权限后重试',
+    KDOCS_PERSONAL_ONLY: '金山连接仅支持 WPS 个人账号，请在浏览器切换账号',
     AUTH_DENIED: '你已拒绝授权，可重新连接', AUTH_EXPIRED: '授权已过期，请重新开始',
     AUTH_FAILED: '飞书拒绝授权，请检查应用能力、权限和发布状态',
     AUTH_UNSUPPORTED: '当前账户地区或令牌类型暂不支持此实验授权方式', FORBIDDEN: '没有权限，请检查应用权限和文档共享范围',
@@ -11,7 +13,7 @@
     NETWORK: '无法连接服务，请检查网络后重试', TIMEOUT: '请求超时，请重试',
     OUTSIDE_MOUNT: '该对象不属于当前挂载的已发现目录', UNSAFE_URL: '服务返回了不允许打开的链接',
     BAD_RESPONSE: '服务返回的数据不符合插件约定', PROVIDER_ERROR: '云服务拒绝了请求，请核对权限和根目录标识',
-    LINK_UNAVAILABLE: '此文档没有可用的分享链接，请先在金山文档中确认分享设置；Lit 不会自动创建或修改分享',
+    LINK_UNAVAILABLE: '无法获取此文档的在线访问链接，请检查文档权限',
     LIMIT: '目录数据或挂载数量超过上限', BUSY: '请求处理中，请稍后重试'
   };
   let project = '', epoch = 0, requestId = 0;
@@ -83,11 +85,12 @@
       + '<label>名称<input name="name" maxlength="120" required value="' + esc(mount ? mount.name : '云文档') + '"' + (mount ? ' readonly' : '') + '></label>'
       + '<label>目录链接 / 标识<input name="rootId" maxlength="4096" required value="' + esc(mount ? mount.rootId : '') + '"' + (mount ? ' readonly' : '') + '></label>'
       + '<p class="cloud-input-hint"></p><p>令牌需具备对应的云文档 / 知识库读取权限，并能访问选择的文档或目录。单个文档请通过网页链接添加到快捷访问。Wiki 目录也能打开节点自身的文档。</p>'
-      + '<label>授权方式<select name=authMode><option value=personal>浏览器创建个人应用并授权（实验）</option><option value=application>使用自己的飞书应用（实验）</option><option value=token>手动输入访问令牌</option></select></label>'
+      + '<label>授权方式<select name=authMode><option value=kdocs hidden>金山官方浏览器登录</option><option value=personal>浏览器创建个人应用并授权（实验）</option><option value=application>使用自己的飞书应用（实验）</option><option value=token>手动输入访问令牌</option></select></label>'
       + '<p data-auth-personal>将跳转飞书官方页面创建个人应用，再确认只读云文档权限。此流程仍需真实租户验证；组织可能限制创建应用。</p>'
       + '<div data-auth-application hidden><label>App ID<input name=appId maxlength=256 autocomplete=off></label><label>App Secret<input name=appSecret type=password maxlength=4096 autocomplete=off></label></div>'
       + '<label data-auth-token hidden>访问令牌<input name="token" type="password" maxlength="4096" autocomplete="off" spellcheck="false"></label>'
-      + '<p>凭据只在本机宿主内存中保留；浏览器授权可在会话内自动续期，切换项目或重启后需重新授权。API 身份与文档网页登录分别管理。</p>'
+      + '<p data-auth-session>飞书凭据只保留在本次连接会话；API 身份与网页预览登录分别管理。</p>'
+      + '<div data-auth-kdocs hidden><p>在浏览器中使用 WPS 个人账号确认授权。凭据保存在本机；系统安全存储可用时可保持登录，无需额外安装工具或复制令牌。</p><label class=cloud-reauth><input type=checkbox name=forceLogin>重新登录 / 切换金山账号</label><button type=button class=btn-quiet data-cloud-logout>退出金山登录</button><p>退出会清除 Lit 保存的金山授权，不影响浏览器或其他应用的登录。</p></div>'
       + '<div class="cloud-message" aria-live="polite"></div><button class="btn-primary" type="submit">连接目录</button></form>');
     dialog.querySelector('form').addEventListener('submit', async (event) => {
       event.preventDefault();
@@ -106,25 +109,26 @@
         if (mode !== 'token') {
           input.token = '';
           let status;
-          try { status = await call('authStart', credentials); } finally { credentials.appSecret = ''; }
+          message(mode === 'kdocs' ? '正在检查金山登录状态…' : '正在准备授权…');
+          try { status = await call(mode === 'kdocs' ? 'kdocsAuthStart' : 'authStart', { ...credentials, forceLogin: form.elements.forceLogin.checked }); } finally { credentials.appSecret = ''; }
           if (seq !== epoch || req !== requestId) return;
           let opened = '';
           while (seq === epoch && req === requestId) {
-            if (status.phase === 'ready') { input.authId = status.authId; break; }
-            if (status.url !== opened) {
+            if (status.phase === 'ready') { if (mode !== 'kdocs') input.authId = status.authId; else if (!status.persistent) hooks.toast('当前系统无法安全保存授权，金山登录仅本次运行有效'); break; }
+            if (status.url && status.url !== opened) {
               opened = status.url;
               await pv.openExternalUrl(status.url);
             }
             if (seq !== epoch || req !== requestId) return;
-            message((status.phase === 'registration' ? '请在浏览器确认创建个人应用。' : '请在浏览器确认云文档读取授权。') + (status.userCode ? ' 确认码：' + status.userCode : ''));
+            message(mode === 'kdocs' ? (status.phase === 'preparing' ? '正在准备金山授权，请稍候…' : '请在浏览器中确认金山登录，完成后将自动连接目录。') : (status.phase === 'registration' ? '请在浏览器确认创建个人应用。' : '请在浏览器确认云文档读取授权。') + (status.userCode ? ' 确认码：' + status.userCode : ''));
             const box = dialog.querySelector('.cloud-message');
             const link = document.createElement('button'); link.type = 'button'; link.className = 'btn-quiet'; link.textContent = '重新打开授权页';
             link.addEventListener('click', () => pv.openExternalUrl(status.url).catch((err) => message(err.message)));
-            box.appendChild(link);
+            if (status.url) box.appendChild(link);
             await new Promise((resolve) => { authWake = resolve; authTimer = setTimeout(resolve, status.interval * 1000); });
             authWake = null;
             if (seq !== epoch || req !== requestId) return;
-            status = await call('authPoll', { authId: status.authId });
+            status = await call(mode === 'kdocs' ? 'kdocsAuthPoll' : 'authPoll', { authId: status.authId });
           }
           if (seq !== epoch || req !== requestId) return;
           message('授权成功，正在验证目录…');
@@ -140,6 +144,8 @@
     });
     const updateAuth = () => {
       const form = dialog.querySelector('form'), mode = form.elements.authMode.value;
+      dialog.querySelector('[data-auth-kdocs]').hidden = mode !== 'kdocs';
+      dialog.querySelector('[data-auth-session]').hidden = mode === 'kdocs';
       dialog.querySelector('[data-auth-personal]').hidden = mode !== 'personal';
       dialog.querySelector('[data-auth-application]').hidden = mode !== 'application';
       dialog.querySelector('[data-auth-token]').hidden = mode !== 'token';
@@ -151,10 +157,21 @@
       dialog.querySelector('.cloud-input-hint').textContent = provider?.inputHint || '填写目录链接或标识';
       form.elements.rootId.required = !provider?.defaultRootId;
       form.elements.rootId.placeholder = provider?.defaultRootId ? '留空浏览我的文档' : '';
-      for (const option of form.elements.authMode.options) if (option.value !== 'token') { option.hidden = option.disabled = !provider?.browserAuth; }
-      if (!provider?.browserAuth) form.elements.authMode.value = 'token';
+      for (const option of form.elements.authMode.options) {
+        const allowed = provider?.kdocsAuth ? option.value === 'kdocs' : option.value === 'token' || (provider?.browserAuth && ['personal','application'].includes(option.value));
+        option.hidden = option.disabled = !allowed;
+      }
+      if (provider?.kdocsAuth) form.elements.authMode.value = 'kdocs';
+      else if (form.elements.authMode.value === 'kdocs') form.elements.authMode.value = provider?.browserAuth ? 'personal' : 'token';
+      else if (!provider?.browserAuth) form.elements.authMode.value = 'token';
       updateAuth();
     };
+    dialog.querySelector('[data-cloud-logout]').addEventListener('click', async (event) => {
+      const seq = epoch, req = requestId; event.target.disabled = true;
+      try { await call('kdocsLogout'); if (seq === epoch && req === requestId) { await reloadMounts(); message('已退出金山登录，下次连接将重新打开授权页'); } }
+      catch (err) { if (seq === epoch && req === requestId) message(err.message); }
+      finally { event.target.disabled = false; }
+    });
     dialog.querySelector('[name=providerId]').addEventListener('change', updateProvider);
     dialog.querySelector('[name=authMode]').addEventListener('change', updateAuth); updateProvider();
     dialog.querySelector('[name=name]').focus();
