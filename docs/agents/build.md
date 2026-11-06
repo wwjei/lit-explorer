@@ -26,7 +26,7 @@ README 与界面直接使用它。`scripts/build-icons.mjs` 自带 PNG 解码、
 ```
 src/shared/contracts.js（主进程 require，渲染进程先加载）
 paths.js → icons.js → highlight.js → markdown.js
-         → pane.js → preview-body.js → webview.js → svgedit.js → find.js → projects.js → changes.js → cloud-directories.js → app.js
+         → pane.js → preview-body.js → webview.js → save-queue.js → svgedit.js → find.js → projects.js → changes.js → cloud-directories.js → app.js
 ```
 
 `vendor/docpreview.js` 不在这条链上：它是按需加载的产物，第一次打开 docx / pptx 才注入。
@@ -40,7 +40,8 @@ paths.js → icons.js → highlight.js → markdown.js
 | `paths.js`（`PV.paths`） | 界面层的路径比较与展示：Windows 大小写不敏感、`\` 与 `/` 等价、相对工作区根的各段与副标题。主进程 `fs-api.js` 的真实路径校验是另一件事，不要合并 |
 | `pane.js`（`PV.pane`） | 预览窗格作为一个单元的全部事情：内容身份 `bodyKey`、渲染任务身份 `reqId` / `pending`、创建与销毁、固定 / 分屏时的正文迁移、列模型（一列 1–2 个窗格，列宽与上下比例）、抓手换位 / 下 1/3 分屏 / 临时列右拖自动固定 |
 | `preview-body.js`（`PV.body`） | 正文与头部**画成什么样**：一张有序 `RENDERERS` 表按 `match` 分派（Markdown / 代码视图 / 图片与连续预览 / HTML 迷你浏览器 / PDF / docx / pptx / 网页 / SVG 编辑），`bodyKeyFor()` 用同一张表算内容身份；`capabilities()` 告诉窗格与头部按钮「这个节点能做什么」，类型知识不再漏回 `pane.js`；渲染器抛错只坏当前窗格。docx / pptx 的 1.4 MB 解析器在第一次打开文档时按需加载 |
-| `webview.js`（`PV.web`） | 内嵌网页的几何同步：把每个网页预览列当前该占的矩形声明给主进程（`web:sync`），用 rAF 合并拖动与缩放；弹层打开时先 `setOccluded(true)`、拖动列 / 分隔条 / 窗格时先 `setDragHidden(true)` 把原生视图藏起来（松手后按新矩形回来） |
+| `webview.js`（`PV.web`） | 内嵌网页的几何同步：把每个网页预览列当前该占的矩形声明给主进程（`web:sync`），用 rAF 合并拖动与缩放；弹层打开时持有 `acquireOcclusion()` 租约、拖动列 / 分隔条 / 窗格时持有 `acquireDragHide()` 租约 把原生视图藏起来（结束时释放自己的租约，所有遮挡解除后按新矩形回来） |
+| `save-queue.js`（`PV.saveQueue`） | 最新期望内容的串行保存、版本基线、冲突/失败/销毁状态；[状态与资源归属](../design/renderer-lifecycles.md) |
 | `svgedit.js`（`PV.svgedit`） | SVG 编辑模式的正文：解析与安全清洗、选择、拖动（矩形带框内文字）、矩形八向缩放、文字单行编辑、删除、撤销重做、自动保存；它自己管 `pane.view.destroy` 清理监听与 ResizeObserver |
 | `find.js`（`PV.find`） | 预览内查找：查找条、命中标记、在命中之间跳转 |
 | `projects.js`（`PV.projects`） | 项目切换条：最多 5 个项目、图标目录与图标选择、每项目浏览位置与固定列布局的持久化；打开 / 切换由 `app.js` 通过 `PV.projects.init()` 注入 |

@@ -96,7 +96,7 @@ SMIL、事件属性、`javascript:` / 危险 `data:` 链接、`file:` / 相对�
 - 页面内部导航允许 `http(s)`，其他协议由 `will-navigate` / `will-redirect` 拦下；
 - 不要给主窗口打开 `webviewTag`，不要在网页视图里挂 preload，也不要把它改成
   带 `allow-same-origin` 的 iframe；
-- 原生视图会盖住 HTML：弹层打开时 `PV.web.setOccluded(true)` 先藏起来，关掉再恢复；
+- 原生视图会盖住 HTML：每个弹层打开时持有 `PV.web.acquireOcclusion()` 返回的租约，关闭时仅释放自己的租约，所有 owner 都释放后再恢复；
   隐藏视图时主进程会把焦点还给宿主，否则表单收不到键盘。
 
 网页内容能联网、能写自己的 cookie、能被站点跟踪，这是浏览器的正常行为，不算越界；

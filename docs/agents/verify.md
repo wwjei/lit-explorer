@@ -185,3 +185,12 @@ MyGo 版装到 `%LOCALAPPDATA%\Programs\Lit Explorer MyGo`，产物是单个 exe
 飞书设备授权回归为 S11 / D2，Go 为 `TestFeishuDevice*`。使用共享 `test/fixtures/feishu-auth.json` 模拟注册、授权、拒绝、过期和刷新，不创建真实应用；真实资源及验证步骤见 [授权设计](../design/feishu-client-authorization.md)。
 
 金山原生插件回归为 S12/S13、D3 和 Go `TestKdocsNative*`，共用 `test/fixtures/kdocs-skill.json`，覆盖授权、节流 / 取消 / 到期、系统保护与不降级明文、账号绑定、目录 / 详情 / 在线链接、子目录快捷项、退出和失效凭据移除。不使用真实凭据；真实资源与 Windows 安全存储验收见 [金山设计](../design/kdocs-directory-plugin.md)。
+
+## 界面状态转换回归
+
+单元 `S14` 覆盖 SVG 保存的撤销竞态、最新版本合并、冲突停写、失败重试与销毁；
+单元 `S15` 覆盖旧工作区与旧保存基线的 stat 隔离；
+集成 `L1–L4` 分别覆盖窗格销毁后的晚到结果、SVG 保存中撤销及手势取消、
+A→B→A 列表/元信息与导航恢复隔离、遮挡所有权与异步图标选择。
+用可控 IPC 返回和条件等待验证交错，完整规则见
+[界面生命周期设计](../design/renderer-lifecycles.md)。
