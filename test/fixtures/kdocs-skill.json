@@ -1,0 +1,16 @@
+{
+  "pending": {"code":202},
+  "authorized": {"code":200,"token":"skill-fixture-secret","expires_in":7200},
+  "authorizedOther": {"code":200,"token":"skill-other-account","expires_in":7200},
+  "cancelled": {"code":409,"msg":"must not return skill-fixture-secret"},
+  "enterprise": {"code":403001},
+  "firstPage": {"code":0,"data":{"drive_id":"drive_A","parent_id":"0","items":[{"id":"folder_A","name":"参考资料","type":"folder","drive_id":"drive_A","parent_id":"0","mtime":1700000010}],"next_page_token":"next-page"}},
+  "lastPage": {"code":0,"data":{"items":[{"id":"file_B","name":"项目计划","type":"file","drive_id":"drive_A","mtime":1700000020}],"next_page_token":""}},
+  "nestedPage": {"code":0,"data":{"items":[{"id":"file_A","name":"接口说明","type":"file","drive_id":"drive_A","parent_id":"folder_A","mtime":1700000030}],"next_page_token":""}},
+  "folderDetails": {"code":0,"data":{"id":"folder_A","name":"参考资料","type":"folder","drive_id":"drive_A","mtime":1700000010}},
+  "fileDetails": {"code":0,"data":{"id":"file_A","name":"接口说明","type":"file","drive_id":"drive_A","parent_id":"folder_A","mtime":1700000030}},
+  "link": {"code":0,"data":{"file_id":"file_A","name":"接口说明（最新）","link_url":"https://www.kdocs.cn/l/fixtureDoc"}},
+  "expired": {"code":400006,"msg":"skill-fixture-secret must not escape"},
+  "forbidden": {"code":403},
+  "limited": {"code":429}
+}

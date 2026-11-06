@@ -1,0 +1,10 @@
+{
+  "registration": {"device_code":"register-device", "user_code":"TEST-1234", "expire_in":600,"interval":1},
+  "registered": {"client_id":"cli_fixture", "client_secret":"local-app-secret", "user_info":{"tenant_brand":"feishu"}},
+  "device": {"device_code":"login-device", "user_code":"LOGIN-1234", "verification_uri_complete":"https://accounts.feishu.cn/oauth/authorize?user_code=LOGIN-1234", "expires_in":240,"interval":1},
+  "pending": {"error":"authorization_pending"},
+  "slow": {"error":"slow_down"},
+  "denied": {"error":"access_denied","error_description":"must not return local-app-secret"},
+  "token": {"access_token":"access-fixture", "refresh_token":"refresh-fixture", "token_type":"Bearer", "expires_in":120},
+  "refreshed": {"access_token":"access-refreshed", "refresh_token":"refresh-rotated", "token_type":"Bearer", "expires_in":7200}
+}

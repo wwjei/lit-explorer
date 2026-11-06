@@ -27,6 +27,7 @@
  *   E4     真实鼠标双击文字能打开输入框（指针捕获不能吞掉 dblclick）
  *   W2     网页读剪贴板按站点询问一次，允许后本次运行不再问
  *   W1     网页视图只接受 http(s)，移出同步列表即销毁
+ *   L1–L4 窗格终态、SVG 保存与取消、导航代次、遮挡及图标选择归属
  *   S6     并发切换工作区只留一个授权根
  *
  * 跑法：npm run test:integration                        全跑
@@ -120,6 +121,9 @@ function loadMainModule() {
     require: (n) => (n === 'electron' ? Object.assign({}, electron, { app: fakeApp, ipcMain: recorder })
       : n === './fs-api' ? fsApi
         : n === './state-sanitize' ? require(path.join(ROOT, 'src/main/state-sanitize.js'))
+          : n === './protected-credentials' ? require(path.join(ROOT, 'src/main/protected-credentials.js'))
+          : n === './directory-plugins' ? require(path.join(ROOT, 'src/main/directory-plugins.js'))
+          : n === './reference-dirs' ? require(path.join(ROOT, 'src/main/reference-dirs.js'))
           : n === './web-url' ? require(path.join(ROOT, 'src/main/web-url.js'))
             : n === '../shared/contracts' ? require(path.join(ROOT, 'src/shared/contracts.js'))
               : n === './web-views' ? {
@@ -174,6 +178,8 @@ function renderer() {
       ipcMain.handle('app:get-state', () => ({}));
       ipcMain.handle('app:set-state', () => ({}));
       // 预览变更监测每 5 s 会 stat 一次当前预览；测试里没有真实文件，固定返回同一版本
+      ipcMain.handle('directories:call', (_e, method) => ({value: method === 'mounts' || method === 'providers' ? [] : true}));
+      ipcMain.handle('references:list', () => []);
       ipcMain.handle('fs:stat', () => ({ size: 0, mtime: 0 }));
       ipcMain.handle('window:is-maximized', () => false);
       // SVG 编辑保存默认返回成功；E1 会换成能记录内容的桩
@@ -482,6 +488,249 @@ async function main() {
     ok('YAML 元数据完整展示', result.metadata.includes('name: sample') && result.metadata.includes('version: 2.7.5'), result);
     ok('列头保持单行高度，来源列表可见', result.height <= 50 && result.visible, result);
     ok('本地相对链接在应用中打开目标预览', true);
+  });
+
+  await run('R2', '外部参考目录快捷访问、预览与移除', async () => {
+    const f = await prepare();
+    const runPage = await renderer();
+    const external = freshDir('external-reference');
+    fs.mkdirSync(path.join(external, 'docs'));
+    fs.writeFileSync(path.join(external, 'docs', 'ref.md'), '# EXTERNAL_REFERENCE\n[Sibling](../target.md)');
+    fs.writeFileSync(path.join(external, 'target.md'), '# SIBLING_REFERENCE');
+    let saved = {};
+    const service = require('../src/main/reference-dirs').createReferenceDirs({ fsApi,
+      store: { load: async () => saved, patch: async (p) => { saved = { ...saved, ...p }; } },
+      pick: async () => external
+    });
+    fsApi.resetAllowedRoots();
+    await fsApi.allowRoot(f.ws);
+    service.activate(f.ws, []);
+    for (const [channel, handler] of Object.entries({
+      'references:list': () => service.list(),
+      'references:add': () => service.add(),
+      'references:remove': (_e, p) => service.remove(p),
+      'fs:list': (_e, p) => fsApi.listDir(p),
+      'fs:read': (_e, p) => fsApi.readFileForPreview(p)
+    })) { ipcMain.removeHandler(channel); ipcMain.handle(channel, handler); }
+    createdWin.webContents.send('workspace:opened', f.ws);
+    const result = await runPage(`(async()=>{
+      const row=(name)=>[...document.querySelectorAll('.row:not(.fav-row)')].find(e=>e.textContent.includes(name));
+      await waitFor(()=>row('inside.txt'));
+      document.querySelector('[data-reference-add]').click();
+      await waitFor(()=>[...document.querySelectorAll('.fav-row')].some(e=>e.dataset.favKey===${JSON.stringify(external)}));
+      [...document.querySelectorAll('.fav-row')].find(e=>e.dataset.favKey===${JSON.stringify(external)}).click();
+      await waitFor(()=>row('docs'));
+      row('docs').click();
+      await waitFor(()=>row('ref.md'));
+      row('ref.md').click();
+      await waitFor(()=>document.querySelector('.prose')?.textContent.includes('EXTERNAL_REFERENCE'));
+      const project=document.querySelector('#root-name').textContent;
+      document.querySelector('.prose a').click();
+      await waitFor(()=>document.querySelector('.prose')?.textContent.includes('SIBLING_REFERENCE'));
+      document.querySelector('[data-project-root]').click();
+      await waitFor(()=>row('inside.txt'));
+      return {project, returned:!!row('inside.txt')};
+    })()`);
+    eq('浏览参考目录时保留项目身份', result.project, path.basename(f.ws));
+    ok('可返回项目目录继续浏览', result.returned);
+    await runPage(`(async()=>{
+      [...document.querySelectorAll('.fav-row')].find(e=>e.dataset.favKey===${JSON.stringify(external)}).click();
+      await waitFor(()=>[...document.querySelectorAll('.row:not(.fav-row)')].some(e=>e.textContent.includes('target.md')));
+      [...document.querySelectorAll('.row:not(.fav-row)')].find(e=>e.textContent.includes('target.md')).click();
+      await waitFor(()=>document.querySelector('.prose')?.textContent.includes('SIBLING_REFERENCE'));
+    })()`);
+    createdWin.webContents.send('workspace:opened', f.ws);
+    await runPage(`waitFor(()=>document.querySelector('.prose')?.textContent.includes('SIBLING_REFERENCE') && document.querySelector('[data-project-root]'))`);
+    ok('重新打开项目恢复外部目录及选中文件', true);
+    createdWin.webContents.send('app:toggle-favorite', {path: external, isDir: true});
+    await runPage(`waitFor(()=>![...document.querySelectorAll('.fav-row')].some(e=>e.dataset.favKey===${JSON.stringify(external)}))`);
+    eq('移除外部目录后撤销授权', service.list().length, 0);
+    ipcMain.removeHandler('references:list'); ipcMain.handle('references:list', () => []);
+  });
+
+  await run('D1', '云目录插件：文件夹与 Wiki 快捷项', async () => {
+    const f=await prepare(); const runPage=await renderer();
+    const {createDirectoryPlugins,invokeDirectoryPlugin}=require('../src/main/directory-plugins');
+    const fixture=require('./fixtures/feishu-directory.json');
+    let saved={};
+    const service=createDirectoryPlugins({store:{load:async()=>saved,patch:async(p)=>{saved={...saved,...p};}},fetch:async(raw,options)=>{
+      const url=new URL(raw);let data;
+      if(url.pathname.endsWith('get_node')) data=fixture.wikiRoot;
+      else if(url.pathname.includes('/wiki/')) data=fixture.wikiPage;
+      else if(url.pathname.endsWith('batch_query')) {
+        const doc=JSON.parse(options.body).request_docs[0];
+        data=doc.doc_token==='docA'?fixture.details:{code:0,data:{metas:[{doc_token:doc.doc_token,doc_type:doc.doc_type,title:'Wiki 实体 '+doc.doc_token,url:'https://tenant.feishu.cn/docx/'+doc.doc_token}]}};
+      } else if(url.searchParams.get('folder_token')==='folderA') data=fixture.nestedPage;
+      else data=url.searchParams.get('page_token')?fixture.lastPage:fixture.firstPage;
+      return new Response(JSON.stringify(data));
+    }});
+    service.activate(f.ws);
+    ipcMain.removeHandler('directories:call');
+    ipcMain.handle('directories:call',(_e,method,args)=>invokeDirectoryPlugin(service,method,args));
+    stubList(f.ws,['cloud-placeholder.md']);stubRead(()=>({text:'# LOCAL',size:7}));
+    createdWin.webContents.send('workspace:opened',f.ws);
+    const result=await runPage(`(async()=>{
+      const type=(name,value)=>{document.querySelector('.cloud-connect [name="'+name+'"]').value=value;};
+      const connect=async(provider,root,name)=>{
+        document.querySelector('[data-cloud-add]').click();
+        await waitFor(()=>document.querySelector('.cloud-connect'));
+        type('providerId',provider);type('rootId',root);type('name',name);type('authMode','token'); document.querySelector('[name=authMode]').dispatchEvent(new Event('change')); type('token','fixture-secret');
+        document.querySelector('.cloud-connect').requestSubmit();
+        return document.querySelector('.cloud-connect [name=token]')?.value==='';
+      };
+      await waitFor(()=>document.querySelector('.row:not(.fav-row)')?.textContent.includes('cloud-placeholder.md'));
+      [...document.querySelectorAll('.row:not(.fav-row)')].find(e=>e.textContent.includes('cloud-placeholder.md')).click();
+      await waitFor(()=>document.querySelector('.prose')?.textContent.includes('LOCAL'));
+      PV.pane.pinCurrent();
+      const cleared=await connect('feishu-drive','https://tenant.feishu.cn/drive/folder/root','云目录');
+      await waitFor(()=>document.querySelectorAll('.cloud-entry').length===2);
+      document.querySelector('[data-cloud-entry="0"]').click();
+      await waitFor(()=>document.querySelector('.cloud-entries')?.textContent.includes('接口'));
+      const nested=true;
+      document.querySelector('[data-cloud-up]').click();
+      await waitFor(()=>document.querySelectorAll('.cloud-entry').length===2);
+      document.querySelector('[data-cloud-next]').click();
+      await waitFor(()=>document.querySelectorAll('.cloud-entry').length===3);
+      document.querySelector('[data-cloud-detail="1"]').click();
+      await waitFor(()=>document.querySelector('.cloud-details')?.textContent.includes('最新'));
+      const details=true;
+      document.querySelector('[data-cloud-entry="1"]').click();
+      await waitFor(()=>!document.querySelector('.cloud-dialog[open]') && document.querySelector('.pv-nm')?.textContent.includes('最新'));
+      const preview=true;
+      PV.pane.pinCurrent();
+      const noSignedUrls=!JSON.stringify(PV.pane.layoutSnapshot()).includes('feishu.cn');
+      await connect('feishu-wiki','https://tenant.feishu.cn/wiki/wikiRoot','Wiki目录');
+      await waitFor(()=>document.querySelector('.cloud-entry')?.textContent.includes('子文档'));
+      const wiki=true;
+      const rootOpens=!document.querySelector('[data-cloud-current-document]').hidden;
+      document.querySelector('[data-cloud-current-document]').click();
+      await waitFor(()=>!document.querySelector('.cloud-dialog[open]') && document.querySelector('.pv-nm')?.textContent.includes('wikiDocRoot'));
+      [...document.querySelectorAll('.cloud-fav')].find(e=>e.textContent.includes('Wiki目录')).click();
+      await waitFor(()=>document.querySelector('[data-cloud-entry="0"]'));
+      document.querySelector('[data-cloud-entry="0"]').click();
+      await waitFor(()=>!document.querySelector('.cloud-dialog[open]') && document.querySelector('.pv-nm')?.textContent.includes('wikiDocChild'));
+      [...document.querySelectorAll('.cloud-fav')].find(e=>e.textContent.includes('云目录')).querySelector('[data-cloud-remove]').click();
+      await waitFor(()=>document.querySelectorAll('.cloud-fav').length===1);
+      return {cleared,nested,details,preview,wiki,rootOpens,noSignedUrls,localPinPreserved:PV.pane.allPanes().some(p=>p.pinned&&p.node?.name==='cloud-placeholder.md')};
+    })()`);
+    ok('提交连接后立即清空页面令牌',result.cleared,result);
+    ok('文件夹分页、详情和在线预览可用',result.nested&&result.details&&result.preview,result);
+    ok('Wiki 目录可浏览，并可打开节点自身与子文档',result.wiki&&result.rootOpens,result);
+    ok('解析出的文档链接不写入布局',result.noSignedUrls,result);
+    ok('移除云来源保留其他本地固定预览',result.localPinPreserved,result);
+    ok('挂载配置不保存令牌',!JSON.stringify(saved).includes('fixture-secret'));
+    eq('移除一个来源保留其他来源',(await service.mounts()).length,1);
+    for(const mount of await service.mounts()) await service.remove(mount.id);
+    ipcMain.removeHandler('directories:call');ipcMain.handle('directories:call',(_e,method)=>({value:method==='mounts'||method==='providers'?[]:true}));
+    await runPage('PV.cloud.setProject('+JSON.stringify(f.ws)+')');
+    await clearPinnedColumns(runPage);
+  });
+
+  await run('D2', '飞书浏览器授权连接文件夹与关闭取消', async () => {
+    const f=await prepare(), runPage=await renderer();
+    const {createDirectoryPlugins,invokeDirectoryPlugin}=require('../src/main/directory-plugins');
+    const fixture=require('./fixtures/feishu-auth.json'), directory=require('./fixtures/feishu-directory.json');
+    let saved={}, clock=100000, opened=[], replies=[], cancelled=false, fast=true;
+    const service=createDirectoryPlugins({authNow:()=>clock,store:{load:async()=>saved,patch:async(p)=>{saved={...saved,...p};}},fetch:async(raw,options)=>{
+      const url=new URL(raw);
+      if(url.host==='accounts.feishu.cn') return new Response(JSON.stringify(replies.shift()));
+      eq('目录请求由宿主填入授权令牌',options.headers.Authorization,'Bearer access-fixture');
+      return new Response(JSON.stringify(url.pathname.endsWith('batch_query') ? directory.details : directory.firstPage));
+    }});
+    service.activate(f.ws);
+    ipcMain.removeHandler('directories:call');
+    ipcMain.handle('directories:call',async(_e,method,args)=>{
+      if(method==='authPoll') clock+=1000;
+      if(method==='cancel') cancelled=true;
+      const result=await invokeDirectoryPlugin(service,method,args);
+      if(fast && result.value?.interval) result.value.interval=0.001;
+      return result;
+    });
+    ipcMain.removeHandler('web:open-external');
+    ipcMain.handle('web:open-external',(_e,url)=>{opened.push(url);return true;});
+    stubList(f.ws,['auth-placeholder.md']);stubRead(()=>({text:'# AUTH',size:6}));
+    createdWin.webContents.send('workspace:opened',f.ws);
+    replies=[fixture.registration,fixture.registered,fixture.device,fixture.token];
+    const result=await runPage(`(async()=>{
+      await waitFor(()=>document.querySelector('.row:not(.fav-row)')?.textContent.includes('auth-placeholder.md'));
+      document.querySelector('[data-cloud-add]').click();
+      const form=document.querySelector('.cloud-connect');
+      form.elements.providerId.value='feishu-drive'; form.elements.rootId.value='https://tenant.feishu.cn/drive/folder/root';
+      form.elements.name.value='浏览器授权目录'; form.requestSubmit();
+      await waitFor(()=>document.querySelectorAll('.cloud-entry').length===2);
+      document.querySelector('[data-cloud-entry="1"]').click();
+      await waitFor(()=>!document.querySelector('dialog.cloud-dialog').open);
+      return {noSecret:!document.body.textContent.includes('access-fixture'), preview:PV.pane.allPanes().some(p=>p.node?.url?.includes('/docx/docA'))};
+    })()`);
+    eq('注册与授权分别打开官方浏览器页面',opened.length,2);
+    ok('两次确认后打开具体文档',result.preview,result);
+    ok('访问令牌未进入界面',result.noSecret,result);
+    ok('授权凭据不写入设置',!/access-fixture|refresh-fixture|local-app-secret/.test(JSON.stringify(saved)));
+    fast=false; replies=[fixture.device];
+    await runPage(`(async()=>{
+      document.querySelector('[data-cloud-add]').click();const form=document.querySelector('.cloud-connect');
+      form.elements.rootId.value='root';form.elements.authMode.value='application';form.elements.authMode.dispatchEvent(new Event('change'));
+      form.elements.appId.value='cli_fixture';form.elements.appSecret.value='own-secret';form.requestSubmit();
+      await waitFor(()=>document.querySelector('.cloud-message')?.textContent.includes('确认云文档'));
+      if(form.elements.appSecret.value!=='') throw Error('secret not cleared');
+      document.querySelector('[data-cloud-close]').click();
+    })()`);
+    await waitPage(runPage,`!document.querySelector('dialog.cloud-dialog').open`);
+    await runPage("pv.directoryCall('providers')");
+    ok('关闭表单取消待授权流程',cancelled);
+    ipcMain.removeHandler('web:open-external');ipcMain.handle('web:open-external',()=>({ok:true}));
+    ipcMain.removeHandler('directories:call');ipcMain.handle('directories:call',(_e,method)=>({value:method==='mounts'||method==='providers'?[]:true}));
+    await runPage('PV.cloud.setProject('+JSON.stringify(f.ws)+')');await clearPinnedColumns(runPage);
+  });
+
+  await run('D3', '金山内置授权、目录快捷项与网页预览', async () => {
+    const f=await prepare(),runPage=await renderer();
+    const {createDirectoryPlugins,invokeDirectoryPlugin}=require('../src/main/directory-plugins');
+    const fixture=require('./fixtures/kdocs-skill.json');let saved={},secure=null,clock=100000,opened=[];
+    const service=createDirectoryPlugins({authNow:()=>clock,kdocsCredentials:{load:async()=>secure,save:async(v)=>{secure=v;return true;},remove:async()=>{secure=null;}},store:{load:async()=>saved,patch:async(p)=>{saved={...saved,...p};}},fetch:async(raw,options)=>{
+      const url=new URL(raw),body=JSON.parse(options.body);
+      const data=url.hostname==='api.wps.cn'?fixture.authorized:body.tool==='get_file_link'?fixture.link:body.tool==='get_file_info'?(body.args.file_id==='folder_A'?fixture.folderDetails:fixture.fileDetails):body.tool==='list_files'?fixture.nestedPage:body.args.page_token?fixture.lastPage:fixture.firstPage;
+      return new Response(JSON.stringify(data));
+    }});
+    service.activate(f.ws);ipcMain.removeHandler('directories:call');
+    ipcMain.handle('directories:call',async(_e,method,args)=>{if(method==='kdocsAuthPoll')clock+=1000;const result=await invokeDirectoryPlugin(service,method,args);if(result.value?.interval)result.value.interval=0.001;return result;});
+    ipcMain.removeHandler('web:open-external');ipcMain.handle('web:open-external',(_e,url)=>{opened.push(url);return {ok:true};});
+    stubList(f.ws,['kdocs-placeholder.md']);stubRead(()=>({text:'# Kdocs',size:7}));
+    createdWin.webContents.send('workspace:opened',f.ws);
+    const result=await runPage(`(async()=>{
+      await waitFor(()=>document.querySelector('.row:not(.fav-row)')?.textContent.includes('kdocs-placeholder.md'));
+      document.querySelector('[data-cloud-add]').click();const form=document.querySelector('.cloud-connect');
+      const options=[...form.elements.providerId.options].map(o=>o.value);
+      form.elements.providerId.value='kdocs-skill';form.elements.providerId.dispatchEvent(new Event('change'));
+      const browserLogin=form.elements.authMode.value==='kdocs'&&!form.elements.token.required&&document.querySelector('[data-auth-token]').hidden;
+      form.elements.rootId.value='';form.elements.name.value='我的金山文档';form.requestSubmit();
+      await waitFor(()=>document.querySelector('.cloud-entry')?.textContent.includes('参考资料'));
+      document.querySelector('[data-cloud-next]').click();await waitFor(()=>document.querySelectorAll('.cloud-entry').length===2);
+      document.querySelector('[data-cloud-entry="0"]').click();await waitFor(()=>document.querySelector('.cloud-entry')?.textContent.includes('接口说明'));
+      document.querySelector('[data-cloud-detail="0"]').click();await waitFor(()=>document.querySelector('.cloud-details')?.textContent.includes('1700000030'));
+      document.querySelector('[data-cloud-pin]').click();await waitFor(()=>document.querySelectorAll('.cloud-fav').length===2);
+      document.querySelector('[data-cloud-close]').click();
+      [...document.querySelectorAll('.cloud-fav')].find(e=>e.textContent.includes('我的金山文档')).querySelector('[data-cloud-remove]').click();
+      await waitFor(()=>document.querySelectorAll('.cloud-fav').length===1);
+      document.querySelector('.cloud-fav').click();await waitFor(()=>document.querySelector('.cloud-entry')?.textContent.includes('接口说明'));
+      document.querySelector('[data-cloud-entry="0"]').click();await waitFor(()=>!document.querySelector('dialog.cloud-dialog').open);
+      return {browserLogin,onlyFolders:!options.includes('feishu-document')&&!options.includes('feishu-wiki-document'),preview:PV.pane.allPanes().some(p=>p.node?.url==='https://www.kdocs.cn/l/fixtureDoc'),noSignedUrls:!JSON.stringify(PV.pane.layoutSnapshot()).includes('kdocs.cn'),noToken:!document.body.textContent.includes('skill-fixture-secret')};
+    })()`);
+    ok('金山无需手动 token，使用浏览器登录',result.browserLogin,result);
+    ok('浏览器只打开官方授权引导页',opened.length===1&&opened[0].startsWith('https://mcp-center.wps.cn/kdocs-auth/auth-guide?auth_code='),opened);
+    ok('来源选择不含单文档插件',result.onlyFolders,result);
+    ok('子目录快捷项可独立浏览并打开文档',result.preview,result);
+    ok('金山在线链接不进入持久化布局',result.noSignedUrls,result);
+    ok('界面和普通设置均不含凭据',result.noToken&&!JSON.stringify(saved).includes('skill-fixture-secret'));
+    service.activate(f.ws);await runPage('PV.cloud.setProject('+JSON.stringify(f.ws)+')');
+    await runPage(`(async()=>{document.querySelector('.cloud-fav').click();await waitFor(()=>document.querySelector('.cloud-connect'));document.querySelector('.cloud-connect').requestSubmit();await waitFor(()=>document.querySelector('.cloud-entry'));document.querySelector('[data-cloud-close]').click();})()`);
+    eq('切项目后复用本机授权，不重复打开浏览器',opened.length,1);
+    await runPage(`(async()=>{document.querySelector('[data-cloud-add]').click();const form=document.querySelector('.cloud-connect');form.elements.providerId.value='kdocs-skill';form.elements.providerId.dispatchEvent(new Event('change'));document.querySelector('[data-cloud-logout]').click();await waitFor(()=>document.querySelector('.cloud-message')?.textContent.includes('已退出'));document.querySelector('[data-cloud-close]').click();})()`);
+    eq('界面退出清除 Lit 安全存储',secure,null);
+    for(const mount of await service.mounts()) await service.remove(mount.id);
+    ipcMain.removeHandler('web:open-external');ipcMain.handle('web:open-external',()=>({ok:true}));
+    ipcMain.removeHandler('directories:call');ipcMain.handle('directories:call',(_e,method)=>({value:method==='mounts'||method==='providers'?[]:true}));
+    await runPage('PV.cloud.setProject('+JSON.stringify(f.ws)+')');await clearPinnedColumns(runPage);
   });
 
   await run('R1', '全局刷新只重读变化的预览', async () => {
@@ -1515,6 +1764,187 @@ async function main() {
     ok('留下的是后发起的目录',
       roots.length === 1 && roots[0].toLowerCase() === path.resolve(b).toLowerCase(),
       { roots: roots, rb: rb });
+  });
+
+  await run('L1', '销毁窗格终止异步渲染资源创建', async () => {
+    const f = await prepare(), runPage = await renderer();
+    stubList(f.ws, ['lifecycle.svg']);
+    const source = '<svg xmlns="http://www.w3.org/2000/svg"><text>Alive</text></svg>';
+    let release, started = false;
+    stubRead(() => { started = true; return new Promise((resolve) => { release = () => resolve({ text:source,size:source.length,mtime:1 }); }); });
+    ipcMain.removeHandler('fs:preview-url');
+    ipcMain.handle('fs:preview-url', () => ({url:'data:image/svg+xml,%3Csvg/%3E'}));
+    createdWin.webContents.send('workspace:opened', f.ws);
+    await waitStubbedRows(runPage);
+    await runPage(`(async()=>{
+      PV.pane.setPreviewOpen(true);
+      document.querySelector('.col .row').click();
+      PV.pane.pinCurrent();
+      window.__removedPane = PV.pane.allPanes().find(p=>p.pinned);
+      const pane=window.__removedPane;
+      pane.svgEdit=true; pane.svgEditPath=pane.node.path;
+      PV.pane.renderPane(pane,true);
+      return true;
+    })()`);
+    await waitPage(async () => started, 'true');
+    await runPage('PV.pane.unpinPane(window.__removedPane); true');
+    release();
+    await waitPage(runPage, 'window.__removedPane.pending === 0');
+    const result = await runPage('({phase:__removedPane.lifecycle,view:!!__removedPane.view,editor:!!__removedPane.body.querySelector(".svg-edit")})');
+    eq('窗格进入 destroyed 终态', result.phase, 'destroyed');
+    ok('晚到 SVG 不挂载编辑器或监听资源', !result.view && !result.editor, result);
+    stubRead(() => ({text:'safe',size:4,mtime:1}));
+  });
+
+  await run('L2', 'SVG 写入中撤销，以及取消手势回滚', async () => {
+    const f = await prepare(), runPage = await renderer();
+    const source = '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="200" viewBox="0 0 400 200"><rect id="box" x="30" y="30" width="100" height="60" fill="red"/><text x="50" y="50">Original</text></svg>';
+    stubList(f.ws, ['save-race.svg']); stubRead(() => ({text:source,size:source.length,mtime:1}));
+    const writes = []; let release;
+    ipcMain.removeHandler('fs:write-svg');
+    ipcMain.handle('fs:write-svg', (_e, p, content, expected) => {
+      writes.push({content,expected});
+      if (writes.length === 1) return new Promise((resolve) => { release = () => resolve({ok:true,size:content.length,mtime:2}); });
+      return {ok:true,size:content.length,mtime:3};
+    });
+    createdWin.webContents.send('workspace:opened', f.ws); await waitStubbedRows(runPage);
+    await runPage(`(async()=>{
+      document.querySelector('.col .row').click();
+      await waitFor(()=>document.querySelector('[data-act="svg-edit"]'));
+      document.querySelector('[data-act="svg-edit"]').click();
+      await waitFor(()=>document.querySelector('.svg-stage svg'));
+      const text=document.querySelector('.svg-stage text');
+      text.dispatchEvent(new MouseEvent('dblclick',{bubbles:true}));
+      const input=document.querySelector('.svg-textinput'); input.value='Changed';
+      input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));
+      return true;
+    })()`);
+    await waitPage(async () => !!release, 'true');
+    await runPage(`document.querySelector('[data-svg="undo"]').click(); true`);
+    eq('撤销后旧写入仍在途，不显示已保存', await runPage('document.querySelector(".svg-status").textContent'), '保存中…');
+    release();
+    await waitPage(runPage, 'document.querySelector(".svg-status").textContent === "已保存"');
+    eq('撤销后的版本仍通过写入通道', writes.length, 2);
+    ok('最终磁盘内容回到 Original', writes[1].content.includes('Original') && !writes[1].content.includes('Changed'), writes[1]);
+    eq('第二次写入使用第一次提交的新基线', writes[1].expected.mtime, 2);
+    const cancel = await runPage(`(()=>{
+      const results=[];
+      const pe=(type,el,x,y,id=92)=>el.dispatchEvent(new PointerEvent(type,{bubbles:true,cancelable:true,pointerId:id,buttons:1,clientX:x,clientY:y}));
+      const root=()=>document.querySelector('.svg-stage svg');
+      const wrap=document.querySelector('.svg-edit');
+      const before=root().outerHTML;
+      for(const ending of ['pointercancel','blur','lostpointercapture']) {
+        const box=root().querySelector('#box'),r=box.getBoundingClientRect();
+        pe('pointerdown',box,r.x+5,r.y+5); pe('pointermove',window,r.x+35,r.y+25);
+        const moved=root().outerHTML!==before;
+        if(ending==='blur') window.dispatchEvent(new Event('blur'));
+        else pe(ending,ending==='pointercancel'?window:wrap,r.x+35,r.y+25);
+        results.push({ending,moved,restored:root().outerHTML===before,redo:!document.querySelector('[data-svg="redo"]').disabled});
+      }
+      // 矩形 resize 也必须恢复，且不新增保存。
+      const box=root().querySelector('#box'),r=box.getBoundingClientRect();
+      pe('pointerdown',box,r.x+5,r.y+5); pe('pointerup',window,r.x+5,r.y+5);
+      const grip=document.querySelector('.svg-grip[data-h="se"]'),g=grip.getBoundingClientRect();
+      pe('pointerdown',grip,g.x,g.y); pe('pointermove',window,g.x+30,g.y+20);
+      const resized=Number(root().querySelector('#box').getAttribute('width'))>100;
+      pe('pointercancel',window,g.x+30,g.y+20);
+      return {results,resized,resizeRestored:root().outerHTML===before};
+    })()`);
+    ok('每类取消先实际移动，再恢复 DOM 和 redo 历史', cancel.results.every((r)=>r.moved && r.restored && r.redo), cancel);
+    ok('缩放取消恢复原始尺寸', cancel.resized && cancel.resizeRestored, cancel);
+    eq('被取消的手势不发起保存', writes.length, 2);
+    await clearPinnedColumns(runPage);
+  });
+
+  await run('L3', 'A→B→A 旧列表、元信息与导航恢复隔离', async () => {
+    const a = freshDir('epoch-a'), b = freshDir('epoch-b'), runPage = await renderer();
+    const entry=(dir,name,isDir=false)=>({path:path.join(dir,name),name,isDir,kind:isDir?'folder':'md'});
+    let release, firstId, secondId, aCalls = 0;
+    ipcMain.removeHandler('fs:list');
+    ipcMain.handle('fs:list',(_e,dir,requestId)=>{
+      if(dir===a && ++aCalls===1) { firstId=requestId; return new Promise(resolve=>{release=()=>resolve({entries:[entry(a,'OLD.md')]});}); }
+      if(dir===a) {secondId=requestId;return {entries:[entry(a,'NEW.md')]};}
+      return {entries:[entry(b,'B.md')]};
+    });
+    stubRead(()=>({text:'# New document',size:14,mtime:1}));
+    await runPage('PV.projects.load([]); true');
+    createdWin.webContents.send('workspace:opened',a);
+    await waitPage(async()=>!!release,'true');
+    createdWin.webContents.send('workspace:opened',b);
+    await waitPage(runPage,'[...document.querySelectorAll(".col .row .nm")].some(e=>e.textContent==="B.md")');
+    createdWin.webContents.send('workspace:opened',a);
+    await waitPage(runPage,'[...document.querySelectorAll(".col .row .nm")].some(e=>e.textContent==="NEW.md")');
+    release();
+    await runPage('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))');
+    eq('旧 A 的响应不覆盖新 A 列表',await runPage('[...document.querySelectorAll(".col:first-child .col-list .nm")].map(e=>e.textContent).join(",")'),'NEW.md');
+    ok('重建同路径后请求编号仍递增', secondId>firstId,{firstId,secondId});
+    await runPage('window.__metas=[]; window.__setMeta=PV.body.setMeta; PV.body.setMeta=(m)=>{__metas.push(m);__setMeta(m);}; true');
+    createdWin.webContents.send('fs:meta',{dir:a,requestId:firstId,metas:{old:true}});
+    createdWin.webContents.send('fs:meta',{dir:a,requestId:secondId,metas:{fresh:true}});
+    await waitPage(runPage,'__metas.length>0');
+    eq('仅接受当前列表所属的元信息',await runPage('JSON.stringify(__metas)'),'[{"fresh":true}]');
+    await runPage('PV.body.setMeta=__setMeta; true');
+
+    // 恢复子目录过程中用户点了根目录文件，旧恢复不能再选回保存的文件/布局。
+    createdWin.webContents.send('workspace:opened',b);
+    await waitPage(runPage,'[...document.querySelectorAll(".col .row .nm")].some(e=>e.textContent==="B.md")');
+    const sub=path.join(a,'sub'); let releaseSub;
+    await runPage(`PV.projects.load([{path:${JSON.stringify(a)},name:'A',nav:{path:[${JSON.stringify(a)},${JSON.stringify(sub)}],sel:${JSON.stringify(path.join(sub,'saved.md'))},mode:'source',layout:{pins:[{w:350,panes:[{path:${JSON.stringify(path.join(a,'pinned.md'))},kind:'md'}]}]}}}]); true`);
+    ipcMain.removeHandler('fs:list');
+    ipcMain.handle('fs:list',(_e,dir)=>dir===sub?new Promise(resolve=>{releaseSub=()=>resolve({entries:[entry(sub,'saved.md')]});}):{entries:[entry(a,'sub',true),entry(a,'manual.md')]});
+    createdWin.webContents.send('workspace:opened',a);
+    await waitPage(async()=>!!releaseSub,'true');
+    await runPage('[...document.querySelectorAll(".col:first-child .row")].find(e=>e.querySelector(".nm")?.textContent==="manual.md").click(); true');
+    releaseSub();
+    await runPage('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))');
+    eq('用户的新选择优先于旧导航恢复',await runPage('PV.pane.allPanes()[0].node.name'),'manual.md');
+    eq('旧布局不会在新选择后恢复',await runPage('PV.pane.allPanes().filter(p=>p.pinned).length'),0);
+    eq('旧 source 模式不会覆盖新预览',await runPage('PV.pane.modeOf(PV.pane.allPanes()[0])'),'preview');
+  });
+
+  await run('L4', '遮挡所有权、图片选择归属与布局取消', async () => {
+    const runPage = await renderer(), f=await prepare();
+    stubList(f.ws,['overlay.md']); stubRead(()=>({text:'overlay',size:7,mtime:1}));
+    createdWin.webContents.send('workspace:opened',f.ws);await waitStubbedRows(runPage);
+    const visibility=await runPage(`(()=>{
+      const temp=PV.pane.allPanes()[0];
+      temp.node={kind:'web',url:'https://example.test/',path:'https://example.test/',name:'web'};
+      temp.el.hidden=false;document.querySelector('#preview').hidden=false; document.querySelector('#welcome').hidden=true;
+      const releases=[PV.web.acquireOcclusion(),PV.web.acquireOcclusion(),PV.web.acquireDragHide()];
+      PV.web.sync();const both=document.body.classList.contains('has-web');
+      releases[0]();releases[0]();PV.web.sync();const one=document.body.classList.contains('has-web');
+      releases[1]();PV.web.sync();const drag=document.body.classList.contains('has-web');
+      releases[2]();PV.web.sync();const free=document.body.classList.contains('has-web');
+      PV.pane.resetTemp();PV.pane.renderPreview();return {both,one,drag,free};
+    })()`);
+    ok('独立租约及幂等释放保持其他遮挡',!visibility.both&&!visibility.one&&!visibility.drag,visibility);
+    ok('最后一个 owner 释放后恢复网页',visibility.free,visibility);
+    const cancel=await runPage(`(()=>{
+      const grip=document.querySelector('.panel-resize'),r=grip.getBoundingClientRect();
+      const pe=(type,id,y)=>grip.dispatchEvent(new PointerEvent(type,{bubbles:true,pointerId:id,button:0,clientY:y}));
+      pe('pointerdown',44,r.y); pe('pointermove',45,r.y+50);
+      const ignored=grip.getBoundingClientRect().y===r.y;
+      pe('pointermove',44,r.y+25);pe('pointercancel',44,r.y+25);
+      const cleaned=!document.body.classList.contains('resizing-v')&&!grip.classList.contains('is-drag');
+      const y=grip.getBoundingClientRect().y;pe('pointermove',44,r.y+90);
+      return {ignored,cleaned,stopped:grip.getBoundingClientRect().y===y};
+    })()`);
+    ok('左栏拒绝其他指针，并在取消后释放拖动状态',cancel.ignored&&cancel.cleaned&&cancel.stopped,cancel);
+
+    let releaseIcon;
+    ipcMain.removeHandler('projects:pick-icon');
+    ipcMain.handle('projects:pick-icon',()=>new Promise(resolve=>{releaseIcon=()=>resolve({dataUrl:'data:image/png;base64,AA=='});}));
+    await runPage(`PV.projects.load([{path:${JSON.stringify(f.ws)},name:'A'},{path:${JSON.stringify(path.join(f.ws,'other'))},name:'B'}]);
+      document.querySelector('.proj-tile').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true}));
+      document.querySelector('.pj-more').click();
+      document.querySelector('[data-act="image"]').click(); true`);
+    await waitPage(async()=>!!releaseIcon,'true');
+    await runPage(`document.querySelectorAll('.proj-tile')[1].dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true})); true`);
+    releaseIcon();
+    await runPage('new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve(true))))');
+    ok('旧图片选择结果不能写入新项目',await runPage('PV.projects.list().every(p=>!p.icon)'));
+    ok('旧结果不关闭新的 picker',await runPage('!!document.querySelector(".pj-pop")'));
+    await runPage('document.dispatchEvent(new KeyboardEvent("keydown",{key:"Escape",bubbles:true})); true');
   });
 
   if (createdWin) createdWin.destroy();

@@ -14,6 +14,7 @@ const path = require('node:path');
 
 /** 允许访问的根目录集合（由主进程在打开工作区时登记） */
 const allowedRoots = new Set();
+const writableRoots = new Set();
 
 /**
  * 主进程「给过」渲染进程的候选目录（示例项目、最近打开、上次的工作区、已打开过的）。
@@ -175,6 +176,7 @@ async function allowRoot(dir) {
   if (!dir) return null;
   const real = await realPath(dir);
   allowedRoots.add(real);
+  writableRoots.add(real);
   return real;
 }
 
@@ -183,7 +185,10 @@ async function allowRoot(dir) {
  * 给「先异步解析、再原子地清空 + 登记」的调用方用，避免两次切换交错时各自留下一个根。
  */
 function allowResolvedRoot(real) {
-  if (real) allowedRoots.add(real);
+  if (real) {
+    allowedRoots.add(real);
+    writableRoots.add(real);
+  }
   return real;
 }
 
@@ -199,6 +204,7 @@ function allowedRootList() {
  */
 function resetAllowedRoots() {
   allowedRoots.clear();
+  writableRoots.clear();
 }
 
 /** 把某个目录提供给渲染进程时登记一下；返回原值，方便链式使用 */
@@ -388,6 +394,11 @@ async function statPath(target) {
  */
 async function writeSvgFile(filePath, content, expected) {
   const abs = await assertAllowed(filePath);
+  if (![...writableRoots].some((root) => within(root, abs))) {
+    const err = new Error('参考目录只读');
+    err.code = 'EREAD_ONLY';
+    throw err;
+  }
   if (path.extname(abs).toLowerCase() !== '.svg') {
     const err = new Error('只允许保存 SVG：' + abs);
     err.code = 'ENOT_SVG';
@@ -432,6 +443,7 @@ async function writeSvgFile(filePath, content, expected) {
 }
 
 module.exports = {
+  allowReferenceRoot: (real) => { if (real) allowedRoots.add(real); },
   allowRoot,
   allowResolvedRoot,
   resolveReal: realPath,

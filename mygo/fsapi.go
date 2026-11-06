@@ -88,11 +88,12 @@ var mimeByExt = map[string]string{
 type rootsMu struct {
 	sync.RWMutex
 	// 键是小写真实路径，值保留原始大小写，用于 resolveImages 拼工作区相对地址
-	allowed map[string]string
-	offered map[string]bool
+	allowed  map[string]string
+	writable map[string]string
+	offered  map[string]bool
 }
 
-var roots = rootsMu{allowed: map[string]string{}, offered: map[string]bool{}}
+var roots = rootsMu{writable: map[string]string{}, allowed: map[string]string{}, offered: map[string]bool{}}
 
 func extOf(name string) string {
 	return strings.ToLower(strings.TrimPrefix(filepath.Ext(name), "."))
@@ -170,12 +171,20 @@ func resetAllowedRoots() {
 	roots.Lock()
 	defer roots.Unlock()
 	roots.allowed = map[string]string{}
+	roots.writable = map[string]string{}
 }
 
 func allowResolvedRoot(real string) {
 	if real == "" {
 		return
 	}
+	roots.Lock()
+	defer roots.Unlock()
+	roots.allowed[strings.ToLower(real)] = real
+	roots.writable[strings.ToLower(real)] = real
+}
+
+func allowReferenceRoot(real string) {
 	roots.Lock()
 	defer roots.Unlock()
 	roots.allowed[strings.ToLower(real)] = real
@@ -476,6 +485,18 @@ func writeSvgFile(path, content string, expectedSize int64, expectedMtime float6
 	abs, err := assertAllowed(path)
 	if err != nil {
 		return map[string]any{"error": codeOf(err), "message": err.Error()}
+	}
+	roots.RLock()
+	writable := false
+	for _, root := range roots.writable {
+		if within(root, abs) {
+			writable = true
+			break
+		}
+	}
+	roots.RUnlock()
+	if !writable {
+		return map[string]any{"error": "EREAD_ONLY", "message": "参考目录只读"}
 	}
 	if strings.ToLower(filepath.Ext(abs)) != ".svg" {
 		return map[string]any{"error": "ENOT_SVG", "message": "只允许保存 SVG：" + abs}
