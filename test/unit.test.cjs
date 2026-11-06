@@ -9,6 +9,8 @@
  *   S5  切换工作区后旧工作区不再可读：resetAllowedRoots
  *   S6  渲染进程提交的设置：字段白名单、窗口几何、项目路径校验
  *   S7  界面层路径比较：分隔符等价、大小写、相对根各段与排序
+ *   S14 SVG 最新版本串行保存状态与竞态
+ *   S15 晚到 stat 的工作区、销毁与保存基线隔离
  *
  * 跑法：npm run test:unit                     全跑
  *       npm run test:unit -- --only=S2        只跑一段
@@ -671,6 +673,69 @@ function loadRenderer() {
     blocked.cancel('blocked');
     await rejected('关闭表单中止 begin 请求', () => job, 'SUPERSEDED');
     ok('底层请求被取消', inFlight.aborted);
+  });
+
+  await run('S14', '保存状态机：撤销、合并、冲突、重试和销毁', async () => {
+    const sandbox = { window: { PV: {} } };
+    sandbox.PV = sandbox.window.PV;
+    vm.runInNewContext(fs.readFileSync(path.join(ROOT, 'src/renderer/save-queue.js'), 'utf8'), sandbox);
+    const create = sandbox.PV.saveQueue.create;
+    const deferred = () => { let resolve; const promise = new Promise((r) => { resolve = r; }); return { promise, resolve }; };
+    let gate = deferred(), disk = 'A';
+    const writes = [], phases = [], errors = [];
+    let baseline = 1;
+    const queue = create({ initial: 'A',
+      write: async (xml) => { writes.push({ xml, baseline }); await gate.promise; disk = xml; return { ok: true, mtime: baseline + 1 }; },
+      onState: (phase) => phases.push(phase), onSaved: (res) => { baseline = res.mtime; }, onError: (res) => errors.push(res) });
+    const job = queue.submit('B');
+    await Promise.resolve();
+    queue.submit('A'); // B 已发出，但撤销回来的 A 仍必须写回。
+    eq('写入途中保持 writing', queue.state().phase, 'writing');
+    eq('旧写入没有提前宣布新版本已保存', phases.includes('idle'), false);
+    gate.resolve(); await job;
+    eq('撤销后最终磁盘回到 A', disk, 'A');
+    eqJson('串行写入基线随成功结果更新', writes, [{xml:'B',baseline:1},{xml:'A',baseline:2}]);
+    eq('最后期望版本已落盘', queue.state().persistedRevision, queue.state().revision);
+    gate = deferred();
+    const next = queue.submit('C'); await Promise.resolve();
+    queue.submit('D'); queue.submit('E'); gate.resolve(); await next;
+    eq('合并中间版本，仅写最终 E', writes.slice(-2).map((w) => w.xml).join(','), 'C,E');
+    eq('最终回 idle', queue.state().phase, 'idle');
+
+    let calls = 0;
+    const conflict = create({ initial:'A', write:async()=>{calls++;return {error:'CONFLICT'};}, onState:()=>{},onSaved:()=>{},onError:()=>{} });
+    await conflict.submit('B'); await conflict.submit('C');
+    eq('冲突保持终止写入直到重载', conflict.state().phase, 'conflict'); eq('冲突后不继续尝试覆盖', calls, 1);
+    const retry = create({ initial:'A',write:async()=> ++calls === 2 ? {error:'EWRITE'} : {ok:true},onState:()=>{},onSaved:()=>{},onError:()=>{} });
+    await retry.submit('B'); eq('普通失败保留 error',retry.state().phase,'error');
+    await retry.submit('B'); eq('相同内容可在下一次提交重试',retry.state().phase,'idle');
+    gate = deferred(); let notified = 0;
+    const disposed = create({ initial:'A',write:()=>gate.promise,onState:()=>{},onSaved:()=>{notified++;},onError:()=>{notified++;} });
+    const pending = disposed.submit('B'); await Promise.resolve(); disposed.dispose(); gate.resolve({ok:true}); await pending;
+    eq('销毁后旧结果不产生回调', notified, 0); eq('销毁是终态',disposed.state().phase,'disposed');
+  });
+
+  await run('S15', '版本监测丢弃旧工作区及旧保存基线的 stat', async () => {
+    const sandbox = { PV: { pane: { renderPane() {} } } };
+    vm.runInNewContext(fs.readFileSync(path.join(ROOT, 'src/renderer/changes.js'), 'utf8'), sandbox);
+    let epoch=1, resolveStat;
+    const state={root:'/ws',path:[{path:'/ws'}]},dirKnown=new Map(),dirtyDirs=new Set();
+    const changes=sandbox.PV.changes.create({ pv:{stat:()=>new Promise(resolve=>{resolveStat=resolve;})},
+      state,dirKnown,dirtyDirs,WEB_KIND:'web',workspace:()=>epoch,paintRescan(){} });
+    const node={path:'/ws/a.md'},pane={node,lifecycle:'alive',reqId:1,known:{path:node.path,size:1,mtime:1},changed:false};
+    let job=changes.pollPane(pane);epoch++;resolveStat({size:2,mtime:2});await job;
+    eq('旧工作区 poll 不标记新工作区变化',pane.changed,false);
+    job=changes.pollPane(pane);pane.known={path:node.path,size:3,mtime:3};resolveStat({size:2,mtime:2});await job;
+    eq('在途 poll 不误报刚保存的新基线',pane.changed,false);
+    changes.noteLoaded(pane,node,{});
+    changes.noteLoaded(pane,node,{size:4,mtime:4});resolveStat({size:2,mtime:2});await Promise.resolve();
+    eq('晚到 baseline stat 不覆盖新保存基线',pane.known.mtime,4);
+    changes.noteDirLoaded('/ws');epoch++;resolveStat({mtime:1});await Promise.resolve();
+    eq('旧工作区目录基线不进入新工作区',dirKnown.has('/ws'),false);
+    job=changes.pollOpenDirs();epoch++;resolveStat({error:'ENOENT'});await job;
+    eq('旧工作区目录错误不污染 dirty 集合',dirtyDirs.size,0);
+    job=changes.pollPane(pane);pane.lifecycle='destroyed';resolveStat({error:'ENOENT'});await job;
+    eq('销毁窗格不再被 poll 更新',pane.changed,false);
   });
 
   done();
