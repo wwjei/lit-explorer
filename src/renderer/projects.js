@@ -12,7 +12,7 @@
  * 持久化直接走 pv.setState({ projects })，写入由主进程防抖。
  *
  * 加载顺序：shared/contracts.js → paths.js → icons.js → highlight.js → markdown.js →
- *           pane.js → preview-body.js → webview.js → svgedit.js →
+ *           pane.js → preview-body.js → webview.js → save-queue.js → svgedit.js →
  *           find.js → projects.js → app.js
  */
 (function () {
@@ -107,6 +107,7 @@
   let tipTimer = 0;
   let popEl = null;
   let popFor = null;
+  let pickerSession = null;
   let warnEl = null;
   let warnTimer = 0;
   /** 切换项目时旧下划线的屏幕中心：新列表画好后从这里滑到新项目 */
@@ -488,14 +489,13 @@
   }
 
   function closePicker() {
-    const had = !!popEl;
+    if (pickerSession && pickerSession.releaseWeb) pickerSession.releaseWeb();
+    pickerSession = null;
     if (popEl) { popEl.remove(); popEl = null; popFor = null; }
     document.removeEventListener('pointerdown', onDocPointer, true);
     document.removeEventListener('keydown', onDocKey, true);
     window.removeEventListener('resize', closePicker);
     window.removeEventListener('scroll', closePicker, true);
-    // 网页视图是原生子视图，会盖住这个浮层；关掉后让它们回来
-    if (had && window.PV && PV.web) PV.web.setOccluded(false);
   }
 
   function onDocPointer(e) {
@@ -528,7 +528,8 @@
     window.addEventListener('resize', closePicker);
     window.addEventListener('scroll', closePicker, true);
     // 网页视图会盖住这个浮层，先藏起来；关闭时恢复
-    if (window.PV && PV.web) PV.web.setOccluded(true);
+    pickerSession = { project: p, el: popEl, imagePending: false,
+      releaseWeb: PV.web ? PV.web.acquireOcclusion() : null };
   }
 
   function setIcon(p, icon) {
@@ -617,10 +618,19 @@
   }
 
   async function pickImage() {
-    const res = await pv.pickProjectIcon();
-    if (!res || res.canceled) return;
-    if (res.error) { hooks.toast('无法读取这张图片'); return; }
-    if (res.dataUrl) setIcon(popFor, { type: 'image', data: res.dataUrl });
+    const session = pickerSession;
+    if (!session || session.imagePending) return;
+    session.imagePending = true;
+    try {
+      const res = await pv.pickProjectIcon();
+      // 原生对话框返回时，必须仍属于原来的弹层和项目。
+      if (pickerSession !== session || !projects.includes(session.project)) return;
+      if (!res || res.canceled) return;
+      if (res.error) { hooks.toast('无法读取这张图片'); return; }
+      if (res.dataUrl) setIcon(session.project, { type: 'image', data: res.dataUrl });
+    } catch (err) {
+      if (pickerSession === session) hooks.toast('无法读取这张图片');
+    } finally { session.imagePending = false; }
   }
 
   /* ------------------------------------------------------------------ *

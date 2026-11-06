@@ -460,14 +460,14 @@ func extractEmbedded(prefix, dest string) error {
  * 文件系统
  * ------------------------------------------------------------------ */
 
-func (a *App) List(dir string) map[string]any {
+func (a *App) List(dir string, requestID int) map[string]any {
 	abs, entries, err := listDir(dir)
 	if err != nil {
 		return map[string]any{"error": codeOf(err), "message": err.Error()}
 	}
 	statEntries(abs, entries, func(dir string, metas map[string]any) {
 		if a.win != nil && !a.win.IsDestroyed() {
-			evMeta.Emit(a.win, map[string]any{"dir": dir, "metas": metas})
+			evMeta.Emit(a.win, map[string]any{"dir": dir, "metas": metas, "requestId": requestID})
 		}
 	})
 	return map[string]any{"dir": abs, "entries": entries}

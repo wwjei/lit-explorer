@@ -21,7 +21,7 @@
  * 引用，与加载顺序无关。
  *
  * 加载顺序：shared/contracts.js → paths.js → icons.js → highlight.js → markdown.js →
- *           pane.js → preview-body.js → webview.js → svgedit.js →
+ *           pane.js → preview-body.js → webview.js → save-queue.js → svgedit.js →
  *           find.js → projects.js → app.js。
  */
 (function () {
@@ -92,6 +92,7 @@
     el.appendChild(body);
     const pane = {
       id: ++paneSeq,
+      lifecycle: 'alive', // alive → destroyed，销毁是任务与资源的终态
       pinned: !!o.pinned,
       el: el,
       head: head,
@@ -237,6 +238,9 @@
   }
 
   function destroyPane(pane) {
+    if (pane.lifecycle === 'destroyed') return;
+    pane.lifecycle = 'destroyed';
+    pane.reqId++; // 先撤销写入资格，再卸载已有 view；晚到任务不能创建新资源。
     // 查找条长在这个窗格里，窗格没了查找状态也就没意义了
     PV.find.closeIfOn(pane);
     dropPaneView(pane);
@@ -261,6 +265,9 @@
 
   /** 换工作区：固定列装的是上一个工作区的文件，一律清掉 */
   function clearPins() {
+    endColDrag();
+    endSplitDrag();
+    endHeadDrag(false);
     for (const col of pins.slice()) destroyColumn(col);
     pins = [];
     mainFloor = 0;
@@ -509,7 +516,7 @@
       pane: pane,
       key: key,
       /** 已经被更新的一次渲染取代 */
-      get stale() { return pane.reqId !== req; },
+      get stale() { return pane.lifecycle === 'destroyed' || pane.reqId !== req; },
       /** 把正文换成一段 HTML；不是当前任务就什么都不做 */
       write: function (html) {
         if (task.stale) return false;
@@ -554,6 +561,7 @@
 
   /** 渲染一个窗格：头部每次重建（元信息会异步补发），正文按内容 key 增量渲染 */
   function renderPane(pane, force) {
+    if (pane.lifecycle === 'destroyed') return;
     const node = pane.node;
     // 换文件时旧文件的「有变化」不能带到新文件头上
     if (pane.known && (!node || pane.known.path !== node.path)) {
@@ -867,12 +875,6 @@
    * 事件会被它吃掉，拖动的 move / up 就断了，分屏落点也被它盖住。只藏不销毁，
    * 松手后 afterLayout 会把视图按新矩形放回来。
    */
-  function setWebDrag(on) {
-    if (PV.web && PV.web.setDragHidden) PV.web.setDragHidden(!!on);
-  }
-
-  /* ============================ 拖动改宽 ============================ */
-  /** 手动拖动列左侧边界：分界线跟着指针走，左邻那一列让出 / 收回同样的宽度 */
   let colDrag = null;
 
   function endColDrag() {
@@ -881,13 +883,14 @@
     colDrag = null;
     drag.col.grip.classList.remove('is-drag');
     document.body.classList.remove('resizing');
-    if (drag.webHidden) setWebDrag(false);
+    if (drag.releaseWeb) drag.releaseWeb();
+    if (drag.col === tempCol || tempCol.w !== drag.tempW) pv.setState({ previewWidth: tempCol.w });
     noteLayout();
   }
 
   panesEl.addEventListener('pointerdown', (e) => {
     const grip = e.target.closest ? e.target.closest('.pane-resize') : null;
-    if (!grip) return;
+    if (!grip || e.button !== 0 || colDrag || splitDrag || headDrag) return;
     const col = columnOfEl(grip);
     if (!col) return;
     e.preventDefault();
@@ -898,7 +901,7 @@
       w: effWidth(col),
       tempW: tempCol.w,
       frozen: false,
-      webHidden: false
+      releaseWeb: null
     };
     grip.classList.add('is-drag');
     // 合成事件没有真实指针，捕获失败不影响拖动
@@ -907,10 +910,7 @@
   });
   panesEl.addEventListener('pointermove', (e) => {
     if (!colDrag || e.pointerId !== colDrag.pointerId) return;
-    if (!colDrag.webHidden) {
-      colDrag.webHidden = true;
-      setWebDrag(true);
-    }
+    if (!colDrag.releaseWeb && PV.web) colDrag.releaseWeb = PV.web.acquireDragHide();
     const col = colDrag.col;
     if (!colDrag.frozen) {
       // 以「现在看到的宽度」作为各列的设定宽度再开始拖：这时它们加起来正好是当前总宽，
@@ -946,15 +946,11 @@
     hooks.afterLayout();
   });
   panesEl.addEventListener('pointerup', (e) => {
-    if (!colDrag || e.pointerId !== colDrag.pointerId) return;
-    const drag = colDrag;
-    const col = drag.col;
-    endColDrag();
-    // 临时预览列的宽度沿用原来的设置项，重启后恢复（它自己拖动、或被左邻让出宽度都算）
-    if (col === tempCol) pv.setState({ previewWidth: col.w });
-    else if (tempCol.w !== drag.tempW) pv.setState({ previewWidth: tempCol.w });
+    if (colDrag && e.pointerId === colDrag.pointerId) endColDrag();
   });
-  panesEl.addEventListener('pointercancel', () => endColDrag());
+  panesEl.addEventListener('pointercancel', (e) => {
+    if (colDrag && e.pointerId === colDrag.pointerId) endColDrag();
+  });
 
   /* ============================ 拖动分屏比 ============================ */
   let splitDrag = null;
@@ -964,13 +960,13 @@
     const drag = splitDrag;
     splitDrag = null;
     document.body.classList.remove('resizing-v');
-    if (drag.webHidden) setWebDrag(false);
+    if (drag.releaseWeb) drag.releaseWeb();
     noteLayout();
   }
 
   panesEl.addEventListener('pointerdown', (e) => {
     const el = e.target.closest ? e.target.closest('.pane-split') : null;
-    if (!el) return;
+    if (!el || e.button !== 0 || colDrag || splitDrag || headDrag) return;
     const col = columnOfEl(el);
     if (!col || col.panes.length < 2) return;
     e.preventDefault();
@@ -980,10 +976,9 @@
       split: col.split,
       h: col.stack.clientHeight || 1,
       pointerId: e.pointerId,
-      webHidden: true
+      releaseWeb: PV.web ? PV.web.acquireDragHide() : null
     };
     // 分隔条只有 6px 高，按下就先藏网页视图：指针第一次移动就可能落进原生视图
-    setWebDrag(true);
     try { el.setPointerCapture(e.pointerId); } catch { /* ignore */ }
     document.body.classList.add('resizing-v');
   });
@@ -999,7 +994,9 @@
     if (!splitDrag || e.pointerId !== splitDrag.pointerId) return;
     endSplitDrag();
   });
-  panesEl.addEventListener('pointercancel', () => endSplitDrag());
+  panesEl.addEventListener('pointercancel', (e) => {
+    if (splitDrag && e.pointerId === splitDrag.pointerId) endSplitDrag();
+  });
 
   /* ============================ 拖动换位置 / 分屏 ============================ */
   /**
@@ -1192,17 +1189,17 @@
     if (!d) return;
     clearHeadHints();
     const info = d.info;
-    const restoreWeb = d.webHidden;
+    const releaseWeb = d.releaseWeb;
     if (commit && d.active && info) {
       if (info.blocked) hooks.toast(info.blocked);
       else if (info.mode === 'split') applySplit(d, info);
       else if (info.mode === 'insert') applyInsert(d, info);
     }
-    if (restoreWeb) setWebDrag(false);
+    if (releaseWeb) releaseWeb();
   }
 
   panesEl.addEventListener('pointerdown', (e) => {
-    if (e.button !== 0 || headDrag) return;
+    if (e.button !== 0 || headDrag || colDrag || splitDrag) return;
     const grip = e.target.closest ? e.target.closest('.pv-grip') : null;
     if (!grip) return;
     const pane = paneOf(grip);
@@ -1215,7 +1212,7 @@
       pointerId: e.pointerId,
       active: false,
       info: null,
-      webHidden: false
+      releaseWeb: null
     };
     // 拖出窗格边界也要继续收到 move / up；合成事件没有真实指针，捕获失败不影响判定
     try { grip.setPointerCapture(e.pointerId); } catch { /* ignore */ }
@@ -1229,8 +1226,7 @@
       d.active = true;
       d.pane.el.classList.add('is-moving');
       document.body.classList.add('pane-moving');
-      d.webHidden = true;
-      setWebDrag(true);
+      d.releaseWeb = PV.web ? PV.web.acquireDragHide() : null;
     }
     const info = dropInfo(d, e.clientX, e.clientY);
     d.info = info;
@@ -1241,7 +1237,14 @@
     if (!headDrag || e.pointerId !== headDrag.pointerId) return;
     endHeadDrag(true);
   });
-  panesEl.addEventListener('pointercancel', () => endHeadDrag(false));
+  panesEl.addEventListener('pointercancel', (e) => {
+    if (headDrag && e.pointerId === headDrag.pointerId) endHeadDrag(false);
+  });
+  panesEl.addEventListener('lostpointercapture', (e) => {
+    if (colDrag && e.pointerId === colDrag.pointerId) endColDrag();
+    if (splitDrag && e.pointerId === splitDrag.pointerId) endSplitDrag();
+    if (headDrag && e.pointerId === headDrag.pointerId) endHeadDrag(false);
+  });
   // 拖到一半窗口失焦（Alt+Tab）：收掉拖动中的样式，免得光标和变淡的标题卡住
   window.addEventListener('blur', () => {
     endColDrag();

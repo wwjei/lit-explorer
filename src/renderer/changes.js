@@ -2,17 +2,18 @@
 (function () {
   'use strict';
   PV.changes = {
-    create({ pv, state, dirKnown, dirtyDirs, WEB_KIND, paintRescan }) {
+    create({ pv, state, dirKnown, dirtyDirs, WEB_KIND, paintRescan, workspace = () => state.root }) {
       const CHANGE_POLL_MS = 5000;
       /** 连续这么久没回到前台就暂停扫描：窗口在后台放着时没必要每 5 秒唤醒磁盘 */
       const FOREGROUND_IDLE_MS = 10 * 60 * 1000;
+      const directoryLoads = new Map();
       let changeTimer = 0;
       let changePolling = false;
       let lastForegroundAt = Date.now();
 
       /** 记下某个窗格「现在显示的是哪个版本」 */
       function noteLoaded(pane, node, info) {
-        if (!pane || !pane.node || !node || pane.node.path !== node.path) return;
+        if (!pane || pane.lifecycle === 'destroyed' || !pane.node || !node || pane.node.path !== node.path) return;
         if (node.kind === WEB_KIND) return;
         if (info && typeof info.size === 'number' && typeof info.mtime === 'number') {
           pane.known = { path: node.path, size: info.size, mtime: info.mtime };
@@ -20,9 +21,9 @@
           return;
         }
         // 图片 / HTML / PDF / 文档的读取接口不给 mtime，单独问一次
-        const path = node.path;
+        const path = node.path, epoch = workspace(), request = pane.reqId, baseline = pane.known;
         pv.stat(path).then((st) => {
-          if (!st || st.error || !pane.node || pane.node.path !== path) return;
+          if (!st || st.error || epoch !== workspace() || pane.lifecycle === 'destroyed' || pane.reqId !== request || pane.node !== node || pane.known !== baseline) return;
           pane.known = { path: path, size: st.size, mtime: st.mtime };
           pane.changed = false;
         }).catch(() => {});
@@ -37,7 +38,7 @@
       }
 
       async function pollPane(pane) {
-        const node = pane.node;
+        const node = pane.node, epoch = workspace(), request = pane.reqId, baseline = pane.known;
         if (!node || node.isDir || node.kind === WEB_KIND) return;
         let st;
         try {
@@ -46,7 +47,7 @@
           return;   // 读不到就下一轮再试，变更监测不打扰用户
         }
         // 等待期间窗格可能已经换了文件或被关掉
-        if (!pane.node || pane.node.path !== node.path) return;
+        if (epoch !== workspace() || pane.lifecycle === 'destroyed' || pane.reqId !== request || pane.node !== node || pane.known !== baseline) return;
         if (!st || st.error) { markChanged(pane); return; }
         if (!pane.known || pane.known.path !== node.path) {
           // 正文还没落地（或刚换文件），这一轮先建立基线
@@ -63,18 +64,22 @@
         dirtyDirs.delete(dir);
         dirKnown.delete(dir);
         if (!dir) return;
+        const epoch = workspace(), request = {};
+        directoryLoads.set(dir, request);
         pv.stat(dir).then((st) => {
-          if (!st || st.error) return;
+          if (!st || st.error || epoch !== workspace() || directoryLoads.get(dir) !== request) return;
           if (state.path.some((f) => f.path === dir)) dirKnown.set(dir, st.mtime);
         }).catch(() => {});
       }
 
       async function pollOpenDirs() {
         if (!state.path.length) return;
+        const epoch = workspace();
         const open = new Set(state.path.map((f) => f.path));
         // 已经不在栏里的目录不再占着基线
+        for (const key of directoryLoads.keys()) if (!open.has(key)) directoryLoads.delete(key);
         for (const key of Array.from(dirKnown.keys())) {
-          if (!open.has(key)) dirKnown.delete(key);
+          if (!open.has(key)) { dirKnown.delete(key); directoryLoads.delete(key); }
         }
         for (const key of Array.from(dirtyDirs)) {
           if (!open.has(key)) dirtyDirs.delete(key);
@@ -82,12 +87,15 @@
 
         for (const dir of open) {
           if (dirtyDirs.has(dir)) continue;
+          const request = directoryLoads.get(dir);
           let st;
           try {
             st = await pv.stat(dir);
           } catch {
             continue;
           }
+          if (epoch !== workspace()) return;
+          if (directoryLoads.get(dir) !== request || !state.path.some((node) => node.path === dir)) continue;
           // 目录被删掉或暂时读不到：列表肯定已经不对了
           if (!st || st.error) { dirtyDirs.add(dir); continue; }
           if (!dirKnown.has(dir)) { dirKnown.set(dir, st.mtime); continue; }

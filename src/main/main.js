@@ -384,13 +384,14 @@ function registerIpc() {
     }
   });
 
-  ipcMain.handle('fs:list', async (_e, dir) => {
+  ipcMain.handle('fs:list', async (_e, dir, requestId = 0) => {
+    requestId = Number.isSafeInteger(requestId) && requestId >= 0 ? requestId : 0;
     try {
       const { dir: abs, entries } = await fsApi.listDir(dir);
       // 元信息（大小/修改时间）异步补发，不阻塞首屏
       fsApi.statEntries(abs, entries)
         .then((metas) => {
-          if (win && !win.isDestroyed()) win.webContents.send('fs:meta', { dir: abs, metas });
+          if (win && !win.isDestroyed()) win.webContents.send('fs:meta', { dir: abs, metas, requestId });
         })
         .catch(() => {});
       return { dir: abs, entries };

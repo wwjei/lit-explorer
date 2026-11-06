@@ -23,7 +23,7 @@ contextBridge.exposeInMainWorld('pv', {
   pickProjectIcon: () => ipcRenderer.invoke('projects:pick-icon'),
 
   /* 文件系统（读，以及 SVG 编辑保存） */
-  list: (dir) => ipcRenderer.invoke('fs:list', dir),
+  list: (dir, requestId = 0) => ipcRenderer.invoke('fs:list', dir, requestId),
   read: (filePath) => ipcRenderer.invoke('fs:read', filePath),
   readBytes: (filePath) => ipcRenderer.invoke('fs:read-bytes', filePath),
   stat: (target) => ipcRenderer.invoke('fs:stat', target),

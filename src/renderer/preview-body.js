@@ -25,7 +25,7 @@
  * 主进程的 WebContentsView 覆盖在窗格正文上（见 webview.js 与 main/web-views.js）。
  *
  * 加载顺序：shared/contracts.js → paths.js → icons.js → highlight.js → markdown.js →
- *           pane.js → preview-body.js → webview.js → svgedit.js → find.js → projects.js → app.js。
+ *           pane.js → preview-body.js → webview.js → save-queue.js → svgedit.js → find.js → projects.js → app.js。
  *           vendor/docpreview.js 不在这里：第一次打开 docx / pptx 时由 loadDocPreview() 注入。
  */
 (function () {

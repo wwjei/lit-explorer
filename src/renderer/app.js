@@ -8,7 +8,7 @@
  *   - 键盘、指针、顶部按钮、主进程事件，以及把上面几个模块接起来
  *
  * 加载顺序：shared/contracts.js → paths.js → icons.js → highlight.js → markdown.js →
- *           pane.js → preview-body.js → webview.js → svgedit.js →
+ *           pane.js → preview-body.js → webview.js → save-queue.js → svgedit.js →
  *           find.js → projects.js → app.js。
  */
 (function () {
@@ -53,6 +53,17 @@
     favTop: false,           // 最左栏：快速访问面板是否在上（false = 项目根目录在上）
     splitRatio: 2 / 3        // 最左栏「上 : 下」的高度比例，跟着位置走，与哪个面板在上面无关
   };
+
+  // 工作区身份与导航意图分别递增，A→B→A 也不会重用旧请求身份。
+  let workspaceEpoch = 0, navigationEpoch = 0, columnRequest = 0;
+  let workspacePhase = 'idle';
+  let settingsLoaded;
+  const settingsReady = new Promise((resolve) => { settingsLoaded = resolve; });
+  const navigationTicket = () => ({ workspace: workspaceEpoch, navigation: navigationEpoch });
+  function beginNavigation() { navigationEpoch++; return navigationTicket(); }
+  function navigationCurrent(ticket) {
+    return ticket.workspace === workspaceEpoch && ticket.navigation === navigationEpoch;
+  }
 
   let renderedColKeys = [];
   let welcomeVisible = false;
@@ -122,14 +133,15 @@
     await browseRoot(state.root);
   }
 
-  async function browseRoot(root) {
+  async function browseRoot(root, transaction = beginNavigation()) {
+    if (!navigationCurrent(transaction)) return;
     state.path = [{ path: root, name: PV.paths.baseName(root), isDir: true, kind: 'folder' }];
     state.cols = [];
     state.sel = null;
     state.mode = 'preview';
     render();
     await loadColumn(0);
-    scheduleSaveNav();
+    if (navigationCurrent(transaction)) scheduleSaveNav();
   }
 
   function normalizeFavorites(list) {
@@ -198,9 +210,9 @@
   function toggleFavorite(target) {
     if (!target || !target.path) return;
     if (state.referenceDirs.some((p) => PV.paths.same(p, target.path))) {
-      const project = state.root;
+      const workspace = workspaceEpoch;
       pv.removeReferenceDir(target.path).then(async (result) => {
-        if (project !== state.root) return;
+        if (workspace !== workspaceEpoch) return;
         if (result.error) { toast('移除参考目录失败：' + result.error); return; }
         await updateReferences(result.dirs);
       }).catch((err) => toast(err.message));
@@ -227,10 +239,11 @@
   async function openFavorite(fav) {
     if (!state.root || !fav) return;
     if (isWebFav(fav)) { openWebFavorite(fav); return; }
+    const transaction = beginNavigation();
     const base = rootForPath(fav.path);
     const parts = base ? PV.paths.partsUnder(base, fav.path) : null;
     if (!parts) { toast('快速访问项不在当前工作区内'); return; }
-    if (!parts.length) { await browseRoot(base); return; }
+    if (!parts.length) { await browseRoot(base, transaction); return; }
 
     // 目标位于隐藏目录里时先恢复显示，否则导航后列中不会出现对应行
     if (state.hideDot && parts.some((p) => p.charAt(0) === '.')) {
@@ -248,6 +261,7 @@
     let targetCol = -1;
     for (let i = 0; i < parts.length; i++) {
       await loadColumn(i);
+      if (!navigationCurrent(transaction)) return;
       const col = state.cols[i];
       if (!col || col.state !== 'ready') { toast('无法打开快速访问项'); render(); return; }
       const entry = (col.entries || []).find((e) => e.name === parts[i]);
@@ -284,7 +298,8 @@
    * 列号取当前最后一栏，只为让 ↑↓ 还有「从哪一栏继续」可依。
    * reveal=false 用于切项目恢复：用户关掉的临时预览列不要被重新展开。
    */
-  function openWebFavorite(fav, reveal) {
+  function openWebFavorite(fav, reveal, transaction = beginNavigation()) {
+    if (!navigationCurrent(transaction)) return;
     // MyGo 版没有 WebContentsView，内嵌网页不可用：交给系统浏览器，不建网页窗格
     if (pv.capabilities && pv.capabilities.webPane === false) {
       pv.openExternalUrl(fav.url);
@@ -324,14 +339,14 @@
    */
   let webForm = null;
 
-  function closeWebForm(restore) {
+  function closeWebForm() {
     if (!webForm) return;
     const form = webForm;
     webForm = null;
     form.el.remove();
     document.removeEventListener('pointerdown', form.onDoc, true);
     document.removeEventListener('keydown', form.onKey, true);
-    if (restore !== false && PV.web) PV.web.setOccluded(false);
+    if (form.releaseWeb) form.releaseWeb();
   }
 
   function placeWebForm(el, anchor) {
@@ -350,7 +365,7 @@
   function openWebForm(editing, anchor) {
     if (!state.root) return;
     const isEdit = !!editing;
-    closeWebForm(false);
+    closeWebForm();
     const el = document.createElement('div');
     el.className = 'web-pop';
     el.innerHTML = '<div class="web-pop-h">' + icon('globe', '', 14)
@@ -374,7 +389,7 @@
     }
     placeWebForm(el, anchor);
 
-    if (PV.web) PV.web.setOccluded(true);
+    const releaseWeb = PV.web ? PV.web.acquireOcclusion() : null;
 
     const onDoc = (e) => {
       if (!el.contains(e.target)) closeWebForm();
@@ -441,7 +456,7 @@
       if (e.key === 'Enter' && e.target.tagName === 'INPUT') { e.preventDefault(); submit(); }
     });
 
-    const mine = { el: el, onDoc: onDoc, onKey: onKey };
+    const mine = { el: el, onDoc: onDoc, onKey: onKey, releaseWeb };
     webForm = mine;
     // 先把网页视图藏起来、宿主拿回焦点，再聚焦输入框
     requestAnimationFrame(() => requestAnimationFrame(() => {
@@ -620,13 +635,15 @@
     const current = state.cols[ci];
     if (current && current.dir === folder.path && current.entries && !current.stale) return;
 
-    const version = (current && current.version ? current.version : 0) + 1;
-    state.cols[ci] = { dir: folder.path, state: 'loading', version, entries: null, error: null };
+    const workspace = workspaceEpoch, version = ++columnRequest;
+    const request = { dir: folder.path, state: 'loading', version, entries: null, error: null };
+    state.cols[ci] = request;
     render();
 
-    const res = await pv.list(folder.path);
-    const slot = state.cols[ci];
-    if (!slot || slot.dir !== folder.path || slot.version !== version) return; // 已被更新的请求取代
+    let res;
+    try { res = await pv.list(folder.path, version); }
+    catch (err) { res = { error: 'ELIST', message: err.message }; }
+    if (workspace !== workspaceEpoch || state.cols[ci] !== request) return;
 
     if (res.error) {
       state.cols[ci] = { dir: folder.path, state: 'error', version, entries: null, error: res };
@@ -643,18 +660,19 @@
   async function rescan() {
     if (!state.root || refreshing) return;
     refreshing = true;
-    const root = state.root;
+    const transaction = navigationTicket();
     const btn = $('#btn-refresh');
     btn.disabled = true;
     try {
       await Promise.all([Promise.all(PV.pane.visiblePanes().map(pollPane)), pollOpenDirs(), PV.cloud.refresh()]);
-      if (root !== state.root) return;
+      if (!navigationCurrent(transaction)) return;
       const jobs = state.path.map((folder, i) => {
         if (!dirtyDirs.has(folder.path)) return Promise.resolve();
         if (state.cols[i]) state.cols[i].stale = true;
         return loadColumn(i);
       });
       for (const pane of PV.pane.visiblePanes()) {
+        if (!navigationCurrent(transaction)) return;
         if (pane.node && pane.node.kind === WEB_KIND) {
           await pv.webReload(pane.node.url);
           continue;
@@ -662,12 +680,16 @@
         if (!pane.changed) continue;
         const keep = PV.pane.captureView(pane);
         PV.pane.renderPane(pane, true);
-        jobs.push(Promise.resolve(pane.ready).then(() => PV.pane.restoreView(pane, keep)));
+        const request = pane.reqId;
+        jobs.push(Promise.resolve(pane.ready).then(() => {
+          if (navigationCurrent(transaction) && pane.lifecycle === 'alive' && pane.reqId === request) PV.pane.restoreView(pane, keep);
+        }));
       }
       await Promise.all(jobs);
+      if (!navigationCurrent(transaction)) return;
       paintRescan();
       toast(PV.pane.visiblePanes().some((p) => p.changed) ? '部分内容未能刷新，请查看预览中的错误提示' : '已刷新变化内容');
-    } catch (err) { toast('刷新失败：' + err.message); }
+    } catch (err) { if (navigationCurrent(transaction)) toast('刷新失败：' + err.message); }
     finally { refreshing = false; btn.disabled = false; }
   }
 
@@ -676,7 +698,10 @@
     // 先记下当前项目的浏览位置，再换工作区
     saveNavNow();
     closeWebForm();
-    navRestored = false;
+    workspaceEpoch++;
+    const transaction = beginNavigation();
+    workspacePhase = 'loading';
+    endPanelDrag();
     state.root = dir;
     state.rootName = PV.paths.baseName(dir) || dir;
     state.path = [{ name: state.rootName, path: dir, isDir: true, kind: 'folder' }];
@@ -695,24 +720,26 @@
     // 切换条：当前项立刻高亮；新项目有空位就加进去
     PV.projects.noteOpened(dir);
     render();
-    await PV.cloud.setProject(dir);
+    await Promise.all([PV.cloud.setProject(dir), settingsReady]);
+    if (transaction.workspace !== workspaceEpoch) return;
     const references = await pv.referenceDirs();
-    if (state.root !== dir) return;
+    if (transaction.workspace !== workspaceEpoch) return;
     state.referenceDirs = references;
     refreshFavorites();
     const nav = PV.projects.navOf(dir);
     setWelcome(false);
     render();
     await loadColumn(0);
-    if (nav) {
-      await applySavedNav(nav);
-      navRestored = true;
-    }
-    scheduleSaveNav();
+    if (nav && navigationCurrent(transaction)) await applySavedNav(nav, transaction);
+    if (transaction.workspace !== workspaceEpoch) return;
+    workspacePhase = 'ready';
+    scheduleSaveNav(); // 用户中断恢复时，保存其最新导航，而非旧事务快照。
   }
 
   async function selectNode(node, ci, options) {
     const opts = options || {};
+    const transaction = opts.transaction || beginNavigation();
+    if (!navigationCurrent(transaction)) return;
     state.sel = { col: ci, node };
     state.mode = 'preview';
     if (node.isDir) {
@@ -730,14 +757,16 @@
       }
       render();
       requestAnimationFrame(() => {
+        if (!navigationCurrent(transaction)) return;
         const col = colsEl.children[ci];
         if (col) col.scrollIntoView({ block: 'nearest', inline: 'end' });
       });
     }
-    scheduleSaveNav();
+    if (navigationCurrent(transaction)) scheduleSaveNav();
   }
 
   function goToPathIndex(i) {
+    beginNavigation();
     if (i < 0) {
       state.path = state.path.slice(0, 1);
       state.sel = null;
@@ -753,7 +782,6 @@
 
   /* ---- 每个项目记住的浏览位置：展开到哪一级、选中谁、预览还是源码 ---- */
   let navTimer = null;
-  let navRestored = false;
 
   function currentNav() {
     return {
@@ -766,31 +794,34 @@
   }
 
   function saveNavNow() {
-    if (!state.root) return;
+    if (!state.root || workspacePhase !== 'ready') return;
     clearTimeout(navTimer);
     navTimer = null;
     PV.projects.saveNav(state.root, currentNav());
   }
 
   function scheduleSaveNav() {
-    if (!state.root) return;
+    if (!state.root || workspacePhase !== 'ready') return;
     clearTimeout(navTimer);
     navTimer = setTimeout(saveNavNow, 350);
   }
 
   /** 逐级恢复：从根目录开始，按保存的路径一层层进去，再选中文件与模式 */
-  async function restoreNav(nav) {
+  async function restoreNav(nav, transaction) {
+    if (!navigationCurrent(transaction)) return;
     const levels = Array.isArray(nav && nav.path) ? nav.path : [];
     if (levels[0] && state.referenceDirs.some((p) => PV.paths.same(p, levels[0]))) {
-      await browseRoot(levels[0]);
+      await browseRoot(levels[0], transaction);
     }
     for (let i = 1; i < levels.length; i++) {
+      if (!navigationCurrent(transaction)) return;
       const col = state.cols[i - 1];
       if (!col || col.state !== 'ready' || !col.entries) break;
       const node = col.entries.find((e) => e.isDir && PV.projects.samePath(e.path, levels[i]));
       if (!node) break;
-      await selectNode(node, i - 1, { scroll: false });
+      await selectNode(node, i - 1, { scroll: false, transaction });
     }
+    if (!navigationCurrent(transaction)) return;
     if (nav && nav.sel) {
       const ci = state.path.length - 1;
       const col = state.cols[ci];
@@ -799,16 +830,18 @@
         const node = col.entries.find((e) => !e.isDir && PV.projects.samePath(e.path, nav.sel));
         if (node) {
           // 恢复选中不等于用户点了文件：临时预览列关着就别强行展开
-          await selectNode(node, ci, { scroll: false });
+          await selectNode(node, ci, { scroll: false, transaction });
           restored = true;
         }
       }
+      if (!navigationCurrent(transaction)) return;
       // 上次选中的是一条网页快捷方式：它不是目录里的条目，按地址找回收藏
       if (!restored) {
         const fav = state.favs.find((f) => isWebFav(f) && f.url === nav.sel);
-        if (fav) openWebFavorite(fav, false);
+        if (fav) openWebFavorite(fav, false, transaction);
       }
     }
+    if (!navigationCurrent(transaction)) return;
     if (nav && nav.mode === 'source' && !(state.sel && state.sel.node.kind === WEB_KIND)) {
       state.mode = 'source';
     }
@@ -816,9 +849,9 @@
   }
 
   /** 恢复某个项目保存的导航与固定列布局（首次启动、切换项目共用） */
-  async function applySavedNav(nav) {
-    await restoreNav(nav);
-    PV.pane.restoreLayout(nav.layout);
+  async function applySavedNav(nav, transaction) {
+    await restoreNav(nav, transaction);
+    if (navigationCurrent(transaction)) PV.pane.restoreLayout(nav.layout);
   }
 
   /* ---- 项目切换 / 新开项目 ---- */
@@ -1194,10 +1227,10 @@
     // 快速访问面板标题栏：添加网页链接
     if (e.target.closest('[data-project-root]')) { browseRoot(state.root); return; }
     if (e.target.closest('[data-reference-add]')) {
-      const project = state.root;
-      if (!project) { toast('请先打开项目'); return; }
+      const workspace = workspaceEpoch;
+      if (!state.root) { toast('请先打开项目'); return; }
       pv.addReferenceDir().then((result) => {
-        if (project !== state.root || result.canceled) return;
+        if (workspace !== workspaceEpoch || result.canceled) return;
         if (result.error) { toast('添加参考目录失败：' + (result.message || result.error)); return; }
         state.referenceDirs = result.dirs;
         refreshFavorites();
@@ -1311,7 +1344,7 @@
       if (!node) return;
       // 临时预览列沿用全局模式，固定住的窗格各记一份
       if (pane.pinned) pane.mode = btn.dataset.mode;
-      else { state.mode = btn.dataset.mode; scheduleSaveNav(); }
+      else { beginNavigation(); state.mode = btn.dataset.mode; scheduleSaveNav(); }
       PV.pane.renderPane(pane, true);
       return;
     }
@@ -1360,13 +1393,25 @@
 
   /* 拖动最左栏的分隔条：改变「上 : 下」的高度比例，与哪个面板在上面无关 */
   let panelDrag = null;
+  // 布局拖动取消时保留当前尺寸，与预览列宽/分屏拖动一致。
+  function endPanelDrag(event) {
+    if (!panelDrag || (event && event.pointerId !== undefined && event.pointerId !== panelDrag.pointerId)) return;
+    const drag = panelDrag;
+    panelDrag = null;
+    drag.grip.classList.remove('is-drag');
+    document.body.classList.remove('resizing-v');
+    if (drag.releaseWeb) drag.releaseWeb();
+    pv.setState({ leftSplitRatio: state.splitRatio });
+  }
   colsEl.addEventListener('pointerdown', (e) => {
     const grip = e.target.closest ? e.target.closest('.panel-resize') : null;
-    if (!grip) return;
+    if (!grip || e.button !== 0 || panelDrag) return;
     const colEl = grip.closest('.col');
     if (!colEl || !colEl.querySelector('.fav-panel')) return;
     e.preventDefault();
     panelDrag = {
+      grip, pointerId: e.pointerId,
+      releaseWeb: PV.web ? PV.web.acquireDragHide() : null,
       colEl: colEl,
       y: e.clientY,
       topH: Math.round(splitAvail(colEl) * state.splitRatio)
@@ -1376,18 +1421,14 @@
     document.body.classList.add('resizing-v');
   });
   colsEl.addEventListener('pointermove', (e) => {
-    if (!panelDrag) return;
+    if (!panelDrag || e.pointerId !== panelDrag.pointerId) return;
     // 分隔条跟着指针走：往下拖上面的面板变高，往上拖变矮
     setSplitByTopHeight(panelDrag.colEl, panelDrag.topH + (e.clientY - panelDrag.y));
   });
-  colsEl.addEventListener('pointerup', () => {
-    if (!panelDrag) return;
-    const grip = panelDrag.colEl.querySelector('.panel-resize');
-    if (grip) grip.classList.remove('is-drag');
-    panelDrag = null;
-    document.body.classList.remove('resizing-v');
-    pv.setState({ leftSplitRatio: state.splitRatio });
-  });
+  colsEl.addEventListener('pointerup', endPanelDrag);
+  colsEl.addEventListener('pointercancel', endPanelDrag);
+  colsEl.addEventListener('lostpointercapture', endPanelDrag);
+  window.addEventListener('blur', () => endPanelDrag());
 
   /* 顶部按钮 */
   $('#btn-refresh').addEventListener('click', () => rescan());
@@ -1508,6 +1549,7 @@
     if (e.key === 'ArrowLeft') {
       if (sel && ci > 0) {
         e.preventDefault();
+        beginNavigation();
         const parent = state.path[ci];
         state.sel = { col: ci - 1, node: parent };
         state.path = state.path.slice(0, ci + 1);
@@ -1526,6 +1568,7 @@
 
     if (e.key === 'Escape') {
       if (sel) {
+        beginNavigation();
         state.sel = null;
         state.path = state.path.slice(0, 1);
         state.cols.length = 1;
@@ -1569,7 +1612,7 @@
   }
 
   const { noteLoaded, noteDirLoaded, pollPane, pollOpenDirs, startChangeWatch } = PV.changes.create({
-    pv, state, dirKnown, dirtyDirs, WEB_KIND, paintRescan
+    pv, state, dirKnown, dirtyDirs, WEB_KIND, paintRescan, workspace: () => workspaceEpoch
   });
 
   /* ============================ 把模块接起来 ============================ */
@@ -1595,13 +1638,13 @@
     previewPrefs: function () { return { docx: state.previewDocx, pptx: state.previewPptx }; },
     itemsInDir: itemsInDir,
     openLocal: async function (mdPath, href) {
-      const root = state.root;
+      const transaction = beginNavigation();
       const target = PV.paths.resolveLink(mdPath, href);
       const base = target && rootForPath(target);
       if (!base) throw new Error('链接不在项目或参考目录内');
       const slash = target.lastIndexOf('/');
       const result = await pv.list(target.slice(0, slash));
-      if (root !== state.root) return;
+      if (!navigationCurrent(transaction)) return;
       const node = result && result.entries && result.entries.find((n) => PV.paths.same(n.path, target));
       if (!node || node.isDir) throw new Error('目标不是可预览的文件或已不存在');
       // 按目录链导航，保持目标文件与列表同时可见。
@@ -1611,11 +1654,15 @@
       state.cols = [];
       for (let i = 0; i < parts.length - 1; i++) {
         await loadColumn(i);
-        const dir = state.cols[i].entries.find((n) => n.isDir && n.name === parts[i]);
+        if (!navigationCurrent(transaction)) return;
+        const dir = (state.cols[i].entries || []).find((n) => n.isDir && n.name === parts[i]);
         if (!dir) throw new Error('目录不存在');
-        await selectNode(dir, i, { scroll: false });
+        await selectNode(dir, i, { scroll: false, transaction });
       }
-      await selectNode(node, parts.length - 1, { revealPreview: true });
+      if (!navigationCurrent(transaction)) return;
+      await loadColumn(parts.length - 1);
+      if (!navigationCurrent(transaction)) return;
+      await selectNode(node, parts.length - 1, { revealPreview: true, transaction });
     },
     canWrite: function (node) { return !!node && PV.paths.within(state.root, node.path); },
     loaded: noteLoaded
@@ -1656,8 +1703,8 @@
   });
 
   pv.onMeta((payload) => {
-    const { dir, metas } = payload || {};
-    if (!dir || !metas) return;
+    const { dir, metas, requestId } = payload || {};
+    if (!dir || !metas || !state.cols.some((col) => col && PV.paths.same(col.dir, dir) && col.version === requestId)) return;
     PV.body.setMeta(metas);
     // 元信息到齐后刷新预览头（大小 / 修改时间）
     PV.pane.renderPreview();
@@ -1709,9 +1756,7 @@
     if (state.root) {
       refreshFavorites();
       PV.projects.noteOpened(state.root);
-      const nav = navRestored ? null : PV.projects.navOf(state.root);
-      render();
-      if (nav) await applySavedNav(nav);
+      render(); // 工作区的单次恢复由 openRoot 在 settingsReady 后执行。
     }
     if (st.previewWidth > 0) PV.pane.setTempWidth(st.previewWidth);
     applyMaximized(await pv.isMaximized());
@@ -1720,6 +1765,7 @@
       setWelcome(true);
       render();
     }
+    settingsLoaded();
     startChangeWatch();
   })();
 })();

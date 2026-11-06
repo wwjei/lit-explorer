@@ -11,20 +11,20 @@
  * 用 requestAnimationFrame 合并，拖动分界线时不会每像素一次 IPC。
  *
  * 加载顺序：shared/contracts.js → paths.js → icons.js → highlight.js → markdown.js →
- *           pane.js → preview-body.js → webview.js → svgedit.js →
+ *           pane.js → preview-body.js → webview.js → save-queue.js → svgedit.js →
  *           find.js → projects.js → app.js。
  */
 (function () {
   'use strict';
 
   /** 有弹层（网页表单、项目图标选择器）压住预览区时，先把所有网页视图藏起来 */
-  let occluded = false;
+  const occlusions = new Set();
   /** 拖动列 / 分隔条 / 窗格时也先藏起来：原生视图会吃掉鼠标事件，拖动会断 */
-  let dragHidden = false;
+  const dragHides = new Set();
   let frame = 0;
 
   function visibleInPane(pane) {
-    if (occluded || dragHidden) return false;
+    if (occlusions.size || dragHides.size) return false;
     if (pane.el.hidden) return false;
     const preview = document.getElementById('preview');
     if (!preview || preview.hidden) return false;
@@ -48,7 +48,7 @@
     for (const pane of panes) {
       const node = pane.node;
       if (!node || node.kind !== 'web' || !node.url) continue;
-      const visible = !occluded && visibleInPane(pane);
+      const visible = visibleInPane(pane);
       const r = visible ? pane.body.getBoundingClientRect() : null;
       const item = {
         url: node.url,
@@ -78,22 +78,19 @@
     frame = requestAnimationFrame(sync);
   }
 
-  function setOccluded(on) {
-    occluded = !!on;
+  // 每个弹层/手势持有独立租约；释放幂等，不能解除其他 owner 的遮挡。
+  function acquire(owners) {
+    const owner = {};
+    owners.add(owner);
     schedule();
-  }
-
-  /** 拖动期间藏网页视图（只藏不销毁）；松手后 afterLayout 会按新矩形放回来 */
-  function setDragHidden(on) {
-    dragHidden = !!on;
-    schedule();
+    return () => { if (owners.delete(owner)) schedule(); };
   }
 
   window.PV = window.PV || {};
   PV.web = {
     sync: sync,
     schedule: schedule,
-    setOccluded: setOccluded,
-    setDragHidden: setDragHidden
+    acquireOcclusion: () => acquire(occlusions),
+    acquireDragHide: () => acquire(dragHides)
   };
 })();

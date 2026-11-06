@@ -21,6 +21,7 @@
   function stopAuthWait() { clearTimeout(authTimer); if (authWake) authWake(); authWake = null; }
   let mounts = [], providers = [], hooks = {}, current = null;
   const trails = new Map();
+  let releaseWeb = null;
   const dialog = document.createElement('dialog');
   dialog.className = 'cloud-dialog';
   document.body.appendChild(dialog);
@@ -36,12 +37,13 @@
     current = null;
     dialog.close();
     dialog.textContent = '';
-    if (PV.web) PV.web.setOccluded(false);
+    if (releaseWeb) releaseWeb();
+    releaseWeb = null;
   }
   function show(html) {
     dialog.innerHTML = '<div class="cloud-toolbar"><strong>参考来源</strong><button class="btn-quiet" data-cloud-close>关闭</button></div>' + html;
     if (!dialog.open) dialog.showModal();
-    if (PV.web) PV.web.setOccluded(true);
+    if (!releaseWeb && PV.web) releaseWeb = PV.web.acquireOcclusion();
   }
   function message(text) {
     const box = dialog.querySelector('.cloud-message');
