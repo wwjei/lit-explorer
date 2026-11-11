@@ -344,6 +344,7 @@
     const form = webForm;
     webForm = null;
     form.el.remove();
+    if (form.anchor) form.anchor.setAttribute('aria-expanded', 'false');
     document.removeEventListener('pointerdown', form.onDoc, true);
     document.removeEventListener('keydown', form.onKey, true);
     if (form.releaseWeb) form.releaseWeb();
@@ -360,6 +361,46 @@
     top = Math.max(8, Math.min(window.innerHeight - r.height - 8, top));
     el.style.left = Math.round(left) + 'px';
     el.style.top = Math.round(top) + 'px';
+  }
+
+  // 网络入口共用网页表单的浮层生命周期，切换项目时一起关闭。
+  function openNetworkMenu(anchor) {
+    if (webForm && webForm.anchor === anchor) { closeWebForm(); return; }
+    closeWebForm();
+    const el = document.createElement('div');
+    el.className = 'web-pop network-add-menu';
+    el.setAttribute('role', 'menu');
+    el.setAttribute('aria-label', '添加网络内容');
+    el.innerHTML = '<button type="button" role="menuitem" data-web-add>'
+      + icon('globe', '', 16) + '网页链接</button>'
+      + '<button type="button" role="menuitem" data-cloud-add>'
+      + icon('folder', '', 16) + '云文档</button>';
+    document.body.appendChild(el);
+    placeWebForm(el, anchor);
+    anchor.setAttribute('aria-expanded', 'true');
+    const onDoc = (event) => {
+      if (!el.contains(event.target) && !anchor.contains(event.target)) closeWebForm();
+    };
+    const onKey = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault(); event.stopPropagation(); closeWebForm(); anchor.focus();
+      } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+        event.preventDefault();
+        const buttons = [...el.querySelectorAll('button')];
+        const index = buttons.indexOf(document.activeElement);
+        buttons[(index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length].focus();
+      }
+    };
+    const mine = { el, anchor, onDoc, onKey, releaseWeb: PV.web ? PV.web.acquireOcclusion() : null };
+    webForm = mine;
+    document.addEventListener('pointerdown', onDoc, true);
+    document.addEventListener('keydown', onKey, true);
+    el.querySelector('[data-web-add]').addEventListener('click', () => openWebForm(null, anchor));
+    // 云目录模块在 document 上处理 data-cloud-add，先关闭选择菜单再打开授权表单。
+    el.querySelector('[data-cloud-add]').addEventListener('click', closeWebForm);
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (webForm === mine) el.querySelector('button').focus({ preventScroll: true });
+    }));
   }
 
   function openWebForm(editing, anchor) {
@@ -534,13 +575,12 @@
       : '';
     const rows = state.favs.length || PV.cloud.rows()
       ? state.favs.map((f) => favRowHtml(f, selKey)).join('') + PV.cloud.rows()
-      : '<div class="col-note">右键或行尾闪电图标加入快速访问；点标题栏的 + 添加网页链接</div>';
+      : '<div class="col-note">右键或行尾闪电图标加入快速访问；+ 添加外部目录，网络图标添加链接或云文档</div>';
     const add = (state.path[0] && !PV.paths.same(state.path[0].path, state.root)
       ? '<button class="col-toggle" data-project-root title="返回项目目录" aria-label="返回项目目录">' + icon('arrowLeft', '', 14) + '</button>' : '')
-      + '<button class="col-toggle fav-add" data-cloud-add title="添加云目录" aria-label="添加云目录">' + icon('globe', '', 14) + '</button>'
-      + '<button class="col-toggle fav-add" data-reference-add title="添加外部目录" aria-label="添加外部目录">' + icon('folder', '', 14) + icon('plus', '', 10) + '</button>'
-      + '<button class="col-toggle fav-add" data-web-add title="添加网页链接" aria-label="添加网页链接">'
-      + icon('globe', '', 12) + icon('plus', 'fav-plus', 10) + '</button>';
+      + '<span class="fav-add-actions"><button class="col-toggle" data-reference-add title="添加外部目录" aria-label="添加外部目录">' + icon('plus', '', 14) + '</button>'
+      + '<button class="col-toggle" data-network-add title="添加链接或云文档" aria-label="添加链接或云文档" aria-haspopup="menu" aria-expanded="false">'
+      + icon('globe', '', 14) + '</button></span>';
     const swap = state.favTop
       ? ''
       : '<button class="col-toggle" data-swap-panels title="与上方面板交换位置" aria-label="交换上下面板">'
@@ -1224,7 +1264,7 @@
       return;
     }
 
-    // 快速访问面板标题栏：添加网页链接
+    // 快速访问面板标题栏：外部目录与网络内容
     if (e.target.closest('[data-project-root]')) { browseRoot(state.root); return; }
     if (e.target.closest('[data-reference-add]')) {
       const workspace = workspaceEpoch;
@@ -1238,8 +1278,8 @@
       }).catch((err) => toast(err.message));
       return;
     }
-    if (e.target.closest('[data-web-add]')) {
-      openWebForm(null, e.target.closest('[data-web-add]'));
+    if (e.target.closest('[data-network-add]')) {
+      openNetworkMenu(e.target.closest('[data-network-add]'));
       return;
     }
 
@@ -1722,7 +1762,7 @@
   pv.onEditWeb((payload) => {
     if (!payload || !payload.url) return;
     const fav = state.favs.find((f) => isWebFav(f) && f.url === payload.url);
-    if (fav) openWebForm(fav, colsEl.querySelector('[data-web-add]'));
+    if (fav) openWebForm(fav, colsEl.querySelector('[data-network-add]'));
   });
   pv.onWebState(handleWebState);
   pv.onPreviewPrefs((prefs) => {

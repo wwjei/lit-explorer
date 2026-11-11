@@ -516,6 +516,10 @@ async function main() {
     const result = await runPage(`(async()=>{
       const row=(name)=>[...document.querySelectorAll('.row:not(.fav-row)')].find(e=>e.textContent.includes(name));
       await waitFor(()=>row('inside.txt'));
+      document.querySelector('[data-network-add]').click();
+      document.querySelector('.network-add-menu [data-web-add]').click();
+      const linkForm=!!document.querySelector('.web-url') && !document.querySelector('.network-add-menu');
+      document.querySelector('[data-web-cancel]').click();
       document.querySelector('[data-reference-add]').click();
       await waitFor(()=>[...document.querySelectorAll('.fav-row')].some(e=>e.dataset.favKey===${JSON.stringify(external)}));
       [...document.querySelectorAll('.fav-row')].find(e=>e.dataset.favKey===${JSON.stringify(external)}).click();
@@ -529,8 +533,9 @@ async function main() {
       await waitFor(()=>document.querySelector('.prose')?.textContent.includes('SIBLING_REFERENCE'));
       document.querySelector('[data-project-root]').click();
       await waitFor(()=>row('inside.txt'));
-      return {project, returned:!!row('inside.txt')};
+      return {project, returned:!!row('inside.txt'), linkForm};
     })()`);
+    ok('网络入口打开链接表单并关闭选择菜单', result.linkForm);
     eq('浏览参考目录时保留项目身份', result.project, path.basename(f.ws));
     ok('可返回项目目录继续浏览', result.returned);
     await runPage(`(async()=>{
@@ -572,7 +577,7 @@ async function main() {
     const result=await runPage(`(async()=>{
       const type=(name,value)=>{document.querySelector('.cloud-connect [name="'+name+'"]').value=value;};
       const connect=async(provider,root,name)=>{
-        document.querySelector('[data-cloud-add]').click();
+        document.querySelector('[data-network-add]').click();document.querySelector('[data-cloud-add]').click();
         await waitFor(()=>document.querySelector('.cloud-connect'));
         type('providerId',provider);type('rootId',root);type('name',name);type('authMode','token'); document.querySelector('[name=authMode]').dispatchEvent(new Event('change')); type('token','fixture-secret');
         document.querySelector('.cloud-connect').requestSubmit();
@@ -653,7 +658,7 @@ async function main() {
     replies=[fixture.registration,fixture.registered,fixture.device,fixture.token];
     const result=await runPage(`(async()=>{
       await waitFor(()=>document.querySelector('.row:not(.fav-row)')?.textContent.includes('auth-placeholder.md'));
-      document.querySelector('[data-cloud-add]').click();
+      document.querySelector('[data-network-add]').click();document.querySelector('[data-cloud-add]').click();
       const form=document.querySelector('.cloud-connect');
       form.elements.providerId.value='feishu-drive'; form.elements.rootId.value='https://tenant.feishu.cn/drive/folder/root';
       form.elements.name.value='浏览器授权目录'; form.requestSubmit();
@@ -668,7 +673,7 @@ async function main() {
     ok('授权凭据不写入设置',!/access-fixture|refresh-fixture|local-app-secret/.test(JSON.stringify(saved)));
     fast=false; replies=[fixture.device];
     await runPage(`(async()=>{
-      document.querySelector('[data-cloud-add]').click();const form=document.querySelector('.cloud-connect');
+      document.querySelector('[data-network-add]').click();document.querySelector('[data-cloud-add]').click();const form=document.querySelector('.cloud-connect');
       form.elements.rootId.value='root';form.elements.authMode.value='application';form.elements.authMode.dispatchEvent(new Event('change'));
       form.elements.appId.value='cli_fixture';form.elements.appSecret.value='own-secret';form.requestSubmit();
       await waitFor(()=>document.querySelector('.cloud-message')?.textContent.includes('确认云文档'));
@@ -699,7 +704,7 @@ async function main() {
     createdWin.webContents.send('workspace:opened',f.ws);
     const result=await runPage(`(async()=>{
       await waitFor(()=>document.querySelector('.row:not(.fav-row)')?.textContent.includes('kdocs-placeholder.md'));
-      document.querySelector('[data-cloud-add]').click();const form=document.querySelector('.cloud-connect');
+      document.querySelector('[data-network-add]').click();document.querySelector('[data-cloud-add]').click();const form=document.querySelector('.cloud-connect');
       const options=[...form.elements.providerId.options].map(o=>o.value);
       form.elements.providerId.value='kdocs-skill';form.elements.providerId.dispatchEvent(new Event('change'));
       const browserLogin=form.elements.authMode.value==='kdocs'&&!form.elements.token.required&&document.querySelector('[data-auth-token]').hidden;
@@ -725,7 +730,7 @@ async function main() {
     service.activate(f.ws);await runPage('PV.cloud.setProject('+JSON.stringify(f.ws)+')');
     await runPage(`(async()=>{document.querySelector('.cloud-fav').click();await waitFor(()=>document.querySelector('.cloud-connect'));document.querySelector('.cloud-connect').requestSubmit();await waitFor(()=>document.querySelector('.cloud-entry'));document.querySelector('[data-cloud-close]').click();})()`);
     eq('切项目后复用本机授权，不重复打开浏览器',opened.length,1);
-    await runPage(`(async()=>{document.querySelector('[data-cloud-add]').click();const form=document.querySelector('.cloud-connect');form.elements.providerId.value='kdocs-skill';form.elements.providerId.dispatchEvent(new Event('change'));document.querySelector('[data-cloud-logout]').click();await waitFor(()=>document.querySelector('.cloud-message')?.textContent.includes('已退出'));document.querySelector('[data-cloud-close]').click();})()`);
+    await runPage(`(async()=>{document.querySelector('[data-network-add]').click();document.querySelector('[data-cloud-add]').click();const form=document.querySelector('.cloud-connect');form.elements.providerId.value='kdocs-skill';form.elements.providerId.dispatchEvent(new Event('change'));document.querySelector('[data-cloud-logout]').click();await waitFor(()=>document.querySelector('.cloud-message')?.textContent.includes('已退出'));document.querySelector('[data-cloud-close]').click();})()`);
     eq('界面退出清除 Lit 安全存储',secure,null);
     for(const mount of await service.mounts()) await service.remove(mount.id);
     ipcMain.removeHandler('web:open-external');ipcMain.handle('web:open-external',()=>({ok:true}));
