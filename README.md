@@ -6,20 +6,21 @@
 
 只支持 **Windows**（x64），没有 macOS / Linux 的构建目标，也没有跨平台适配的计划。
 
-同一份界面有两个可发布版本：**Electron 版**（自带运行时，约 122 MB 安装包）与
-**MyGo 版**（Go + 系统 WebView2，约 5.5 MB 安装包）。两者功能一致、可并存，区别与
+**默认版本为 MyGo**（Go + 系统 WebView2）；**Electron 为备用版本**（自带 Chromium 运行时）。
+从 [Releases](https://github.com/wwjei/lit-explorer/releases) 下载 `Lit-Explorer-Setup-<version>.exe`
+或 `Lit-Explorer-<version>-portable.exe`；遇到 WebView2 兼容问题时可使用带 `Electron-Backup` 的备用包。两者共用界面、可并存，区别与
 取舍见 [发布](#发布) 与 [docs/design/mygo-port.md](docs/design/mygo-port.md)。
 
 图标以黑白灰层叠窗格表现多栏浏览与文件预览，使用透明背景的
 `assets/icon-source.png` 原图；`scripts/build-icons.mjs` 从它生成各尺寸 PNG 与 ICO。
 
-界面基线来自 `index.html`（早期设计原型），正式程序在 `src/`（Electron）。
+界面基线来自 `index.html`（早期设计原型），共享界面在 `src/renderer/`，默认宿主在 `mygo/`，备用宿主在 `src/main/`。
 
 ## 运行
 
 ```bash
 npm install      # 安装依赖（见下方镜像说明）
-npm start        # 启动程序
+npm start        # 启动 Electron 开发宿主（备用版）
 npm run dev      # 启动并打开开发者工具
 ```
 
@@ -325,12 +326,12 @@ npm run shot -- --open="./sample-project" --shot=".tmp/shot.png" --shot-js=".tmp
 
 推送 `v` 开头的 tag 会触发 [.github/workflows/release.yml](.github/workflows/release.yml)：
 先在 `windows-latest` 上跑一遍 [.github/workflows/ci.yml](.github/workflows/ci.yml) 的测试，
-过了才构建 **Electron 与 MyGo 两个版本**的安装包 / 免安装版，然后创建 Release 并上传产物。
+过了才构建 **MyGo 默认版与 Electron 备用版**的安装包 / 免安装版，然后创建 Release 并上传产物。
 tag 里带连字符（如 `v0.0.1-alpha`）会自动标记为预发布。
 
 ```bash
-git tag v0.0.5-alpha
-git push origin v0.0.5-alpha
+git tag v0.0.7-alpha
+git push origin v0.0.7-alpha
 ```
 
 日常提交不需要打 tag：推 `main` 只跑测试，不构建。
@@ -338,16 +339,17 @@ git push origin v0.0.5-alpha
 本地打包（产物在 `dist/`）：
 
 ```bash
-npm run dist       # Electron 版；predist 先生成 Worker、图标与许可声明，dist/ 先清空
-npm run dist:mygo  # MyGo 版；需要 Go 1.27+
-npm run dist:all   # 两个都出（MyGo 必须在 Electron 之后，否则会被清掉）
+npm run dist           # 默认 MyGo 版；需要 Go 1.27+，先清空 dist/
+npm run dist:mygo      # 单独构建 MyGo（不清空 dist/，便于合并产物）
+npm run dist:electron  # Electron 备用版，先清空 dist/
+npm run dist:all       # 两个都出（先 Electron，后 MyGo，避免清掉默认产物）
 node scripts/build-checksums.mjs   # 生成 SHA256SUMS.txt
 ```
 
-- `Lit-Explorer-Setup-<version>.exe` —— Electron NSIS 安装包，可选安装目录
-- `Lit-Explorer-<version>-portable.exe` —— Electron 免安装版
-- `Lit-Explorer-MyGo-Setup-<version>.exe` —— MyGo NSIS 安装包（约 5.5 MB）
-- `Lit-Explorer-MyGo-<version>-portable.exe` —— MyGo 免安装版（约 18 MB）
+- `Lit-Explorer-Setup-<version>.exe` —— **默认 MyGo 安装包**
+- `Lit-Explorer-<version>-portable.exe` —— **默认 MyGo 免安装版**
+- `Lit-Explorer-Electron-Backup-Setup-<version>.exe` —— Electron 备用安装包
+- `Lit-Explorer-Electron-Backup-<version>-portable.exe` —— Electron 备用免安装版
 - `SHA256SUMS.txt` —— 上面四个的校验和
 
 MyGo 版不打包 Chromium，使用系统 WebView2：Windows 11 自带，Windows 10 一般随 Edge
@@ -359,7 +361,7 @@ MyGo 版不打包 Chromium，使用系统 WebView2：Windows 11 自带，Windows
 sha256sum -c SHA256SUMS.txt
 ```
 
-安装目录的 `resources/` 下附带 `LICENSE`、`FEATURES.md`、`docs/` 与第三方许可声明
+默认 MyGo 版的许可与说明嵌入程序，可从应用菜单打开；Electron 备用版在安装目录的 `resources/` 下附带 `LICENSE`、`FEATURES.md`、`docs/` 与第三方许可声明
 `notices/THIRD-PARTY-NOTICES.md`。
 
 ## 已知限制

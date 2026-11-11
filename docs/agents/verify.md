@@ -172,7 +172,7 @@ taskkill //IM "Lit Explorer.exe" //F      # 先关掉正在运行的实例：安
 `grep -qa "<新符号>" "$LOCALAPPDATA/Programs/Lit Explorer/resources/app.asar"`。
 
 MyGo 版装到 `%LOCALAPPDATA%\Programs\Lit Explorer MyGo`，产物是单个 exe（前端资源编在
-里面，没有 `app.asar`）：直接运行 `dist/Lit-Explorer-MyGo-<版本>-portable.exe` 就能验证
+里面，没有 `app.asar`）：直接运行 `dist/Lit-Explorer-<版本>-portable.exe` 就能验证
 打包结果。它需要系统 WebView2 Runtime；缺的时候窗口起不来而不是弹提示。
 两个版本可以同时安装，但各自有单实例锁与独立的 `userData`。
 

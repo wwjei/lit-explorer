@@ -1,6 +1,6 @@
 # lit explorer
 
-<img src="assets/icon.svg" width="88" height="88" alt="lit explorer">
+<img src="assets/icon-source.png" width="88" height="88" alt="lit explorer">
 
 A local project file browser for developers: Miller-column directory navigation on the left,
 instant in-app preview on the right, double-click to open a file with the system default app.
@@ -14,10 +14,12 @@ instant in-app preview on the right, double-click to open a file with the system
 
 Download from [Releases](https://github.com/wwjei/lit-explorer/releases):
 
-- `Lit-Explorer-Setup-<version>.exe` — NSIS installer, install directory is selectable (~122 MB)
-- `Lit-Explorer-<version>-portable.exe` — no installation required (~111 MB)
-- `Lit-Explorer-MyGo-Setup-<version>.exe` — MyGo build, uses the system WebView2 (~5.5 MB)
-- `Lit-Explorer-MyGo-<version>-portable.exe` — MyGo portable build (~18 MB)
+**MyGo is the default build; Electron is the compatibility backup.**
+
+- `Lit-Explorer-Setup-<version>.exe` — default MyGo installer
+- `Lit-Explorer-<version>-portable.exe` — default MyGo portable build
+- `Lit-Explorer-Electron-Backup-Setup-<version>.exe` — Electron backup installer
+- `Lit-Explorer-Electron-Backup-<version>-portable.exe` — Electron backup portable build
 - `SHA256SUMS.txt` — checksums for the four above
 
 The two builds share the same UI and can coexist. The MyGo build needs the WebView2 Runtime

@@ -45,7 +45,7 @@ lit explorer：本地项目文件浏览器（多栏目录导航 + 内嵌预览�
    `mygo/go.sum`。否则 CI 的 `npm ci` / `go build` 会失败，而本地毫无异常。
 2. `src/renderer/vendor/`、`build/icons/`、`build/notices/`、`mygo/frontend/` 是生成物，
    不要手改、不要提交。
-3. `dist` 脚本里的 `--publish never` 不能去掉，发布统一交给 CI。
+3. `dist:electron` 脚本里的 `--publish never` 不能去掉，发布统一交给 CI。
 4. 没有明确要求时不要打 tag；**打 tag 前 [PENDING.md](PENDING.md) 必须是空的**。
 5. **新增一类信息（新文档、新测试、新待办池）要同步上面那张索引**——下一个会话是从
    这张表进门的，索引里没有的东西等于不存在。`docs/` 下的文档漏登记（或改名后留下

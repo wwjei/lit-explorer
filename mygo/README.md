@@ -1,13 +1,16 @@
 # lit explorer · MyGo 版
 
 用 [MyGo](https://github.com/egoist/mygo)（Go + 系统 WebView2）承载同一份
-`src/renderer` 界面，是随 Release 一起发布的第二个 Windows 版本。与 Electron 版功能
+`src/renderer` 界面，是默认发布和推荐下载的 Windows 版本；Electron 作为备用版。与 Electron 版功能
 一致、共用界面代码，但不打包 Chromium，安装包从约 122 MB 降到约 5.5 MB。
 
 实测数据（体积、启动、内存）与能力对照见
 [docs/design/mygo-port.md](../docs/design/mygo-port.md)。
 
 ## 产物
+
+默认安装包为 `Lit-Explorer-Setup-<version>.exe`，便携包为 `Lit-Explorer-<version>-portable.exe`。
+Electron 备用产物带 `Electron-Backup` 后缀。旧 MyGo 安装标识及数据目录保持兼容，可直接升级；两个宿主仍使用独立设置。
 
 | 指标 | Electron 版 | MyGo 版 |
 | --- | --- | --- |
@@ -25,7 +28,7 @@
 也不会把产物改名为发布用的名字）：
 
 ```bash
-npm run dist:mygo   # predist:mygo 先 build + notices，再 stage → 编译 → 安装包 → dist/
+npm run dist   # predist 先 build + notices，再 stage → 编译 → 安装包 → dist/
 npm run dist:all    # Electron + MyGo；顺序固定，Electron 的 clean-dist 会清空 dist/
 ```
 

@@ -109,7 +109,7 @@
 | 前端资源打包 | `mygo/stage-frontend.mjs` | 生成 `mygo/frontend/`（gitignore）供 `go:embed`；调用 CLI 前完成 | `stage-frontend` |
 | MyGo 第三方许可 | `scripts/build-mygo-notices.mjs` | 合并 npm、实际链接的 Go 模块及运行时许可 | `Module.Replace`、`THIRD-PARTY-NOTICES.md` |
 | MyGo 回归测试 | `mygo/fsapi_test.go`、`mygo/main_test.go` | 文件写入边界、项目恢复、并发授权、网页状态、窗口几何 | `go test ./...` |
-| 安装包与产物命名 | `scripts/build-mygo.mjs` | 配置生成、CLI 前 staging、`dist/` 改名 | `MYGO_CLI`、`Lit-Explorer-MyGo` |
+| 安装包与产物命名 | `scripts/build-mygo.mjs` | 配置生成、CLI 前 staging、`dist/` 改名 | `MYGO_CLI`、`Lit-Explorer`（默认）、`Lit-Explorer-Electron-Backup`（备用） |
 | 网页窗格（内嵌网页） | `mygo/main.go`、`mygo/bridge.js` | `WebSync()`、`syncWebViews()`、`WebReload()`、`emitWebState()`、`applyState()`、`syncVisibility()` | `ChildWebView`、`webViewRec`、加载成功才显示、`pv:web-state` |
 
 网页窗格用 fork 的 `Window.NewChildWebView()`（`go.mod` 的 `replace` 指向
