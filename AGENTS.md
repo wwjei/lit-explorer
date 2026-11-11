@@ -25,10 +25,14 @@ lit explorer：本地项目文件浏览器（多栏目录导航 + 内嵌预览�
 | 改版本号、打 tag、发 Release | [docs/agents/release.md](docs/agents/release.md) |
 | 跑测试（含 MyGo 文件 / 主进程回归）、写界面探针、装包验证改动 | [docs/agents/verify.md](docs/agents/verify.md) |
 | 改产品行为，写文档与注释 | [docs/agents/conventions.md](docs/agents/conventions.md) |
+| 飞书客户端授权（设备流程实验版） | `src/main/feishu-auth.js`、`mygo/feishu_auth.go`、`src/shared/feishu-auth.json`、[方案与实测准备](docs/design/feishu-client-authorization.md) |
+| 金山个人云文档目录插件 | `src/main/kdocs-plugin.js`、`src/main/protected-credentials.js`、`mygo/kdocs_plugin.go`、`mygo/kdocs_protection_windows.go`、`src/shared/kdocs-skill.json`、[原生协议与实测准备](docs/design/kdocs-directory-plugin.md) |
+| 外部参考目录与云目录插件 | `src/main/reference-dirs.js`、`src/main/directory-plugins.js`、`src/shared/directory-providers.json`、`mygo/references.go`、`mygo/directory_plugins.go`、[插件契约与接入方案](docs/design/external-directory-plugins.md) |
 | 想做的功能、要拍板的事 | [further_notes.md](further_notes.md) |
 | 顺手要清的小问题 | [PENDING.md](PENDING.md) |
 | 已知的依赖 / 安全债，以及什么时候要重新看 | [docs/security-debt.md](docs/security-debt.md) |
 | Windows 文件夹右键菜单 | `src/main/folder-menu.js`、`build/installer.nsh`、`mygo/main.go` |
+| 界面生命周期、保存队列、导航事务与拖动取消 | `src/renderer/save-queue.js`、[状态与资源归属](docs/design/renderer-lifecycles.md) |
 | 想弄清某个设计为什么是这样（如高亮的阈值） | [docs/highlighting.md](docs/highlighting.md) 这类设计文档 |
 | 看未实施功能的调研与方案 | [docs/design/](docs/design/) 下按主题分的文档 |
 | 看 MyGo 移植的实测数据与能力差异（体积、启动、内存、内嵌网页） | [docs/design/mygo-port.md](docs/design/mygo-port.md) |
@@ -41,7 +45,7 @@ lit explorer：本地项目文件浏览器（多栏目录导航 + 内嵌预览�
    `mygo/go.sum`。否则 CI 的 `npm ci` / `go build` 会失败，而本地毫无异常。
 2. `src/renderer/vendor/`、`build/icons/`、`build/notices/`、`mygo/frontend/` 是生成物，
    不要手改、不要提交。
-3. `dist` 脚本里的 `--publish never` 不能去掉，发布统一交给 CI。
+3. `dist:electron` 脚本里的 `--publish never` 不能去掉，发布统一交给 CI。
 4. 没有明确要求时不要打 tag；**打 tag 前 [PENDING.md](PENDING.md) 必须是空的**。
 5. **新增一类信息（新文档、新测试、新待办池）要同步上面那张索引**——下一个会话是从
    这张表进门的，索引里没有的东西等于不存在。`docs/` 下的文档漏登记（或改名后留下

@@ -16,7 +16,7 @@
   （`MAX_PINS`、`MAX_PROJECTS`、`MAX_FAV_ITEMS`、`MAX_URL_CHARS`、`PINNED_KINDS`…）。
 - `src/renderer/index.html` → `app.js`：界面编排。模块是 IIFE + `window.PV`，加载顺序是契约：
   `shared/contracts → paths → icons → highlight → markdown → pane → preview-body → webview →
-  svgedit → find → projects → app`。`vendor/docpreview` 不在这条链上，由 `PV.body.loadDocPreview()`
+  save-queue → svgedit → find → projects → app`。`vendor/docpreview` 不在这条链上，由 `PV.body.loadDocPreview()`
   在第一次打开 docx / pptx 时按需注入。
 - `src/renderer/vendor/`、`build/icons/`、`build/notices/` 是生成物，不手改。
 
@@ -36,7 +36,7 @@
 | Word / PPT 内嵌预览 | `src/renderer/docpreview.js`、`preview-body.js` | `renderDocx()`、`renderPptx()`、`renderDocPreview()`、`loadDocPreview()`、`sanitizeDocDom()` | `docx-preview`、`pptx-preview`、`altChunk`、`PV.docpreview`、按需加载 |
 | 图片 / HTML / PDF 的协议预览地址 | `src/main/main.js`、`preview-body.js` | `toPreviewUrl()`、`registerPreviewProtocol()`、`resolveImageTargets()`、`renderImageView()`、`renderImageSeq()` | `pv://local`、`fs:preview-url`、`fs:resolve-images`、`?v=<mtime>-<size>`、`cache-control: no-store` |
 | 图片缩放、连续预览 | `preview-body.js`、`pane.js` | `renderImageView()`、`renderImageSeq()`、`setZoom()`、`toggleSeq()`、`paneScrollKeep()` | `pane.zoom`、`pane.continuous`、`.imgseq`、`.img-wrap` |
-| 网页快速访问 / 内嵌网页 | `app.js`、`src/renderer/webview.js`、`src/main/web-views.js`、`src/main/web-url.js` | `openWebFavorite()`、`openWebForm()`、`handleWebState()`、`PV.web.sync()`、`webViews.sync()`、`normalizeWebUrl()`、`configureSession()`、`clipboardAllowed()`、`askClipboard()` | `web:sync`、`WebContentsView`、`favs`、`pane.webCurrentUrl`、`setOccluded`、`setDragHidden`、`clipboard-read`、`clipboard-sanitized-write`、`permissions.query` |
+| 网页快速访问 / 内嵌网页 | `app.js`、`src/renderer/webview.js`、`src/main/web-views.js`、`src/main/web-url.js` | `openWebFavorite()`、`openWebForm()`、`handleWebState()`、`PV.web.sync()`、`webViews.sync()`、`normalizeWebUrl()`、`configureSession()`、`clipboardAllowed()`、`askClipboard()` | `web:sync`、`WebContentsView`、`favs`、`pane.webCurrentUrl`、`acquireOcclusion`、`acquireDragHide`、`clipboard-read`、`clipboard-sanitized-write`、`permissions.query` |
 | 预览内查找 | `src/renderer/find.js` | `open()`、`refresh()`、`carryFrom()`、`afterRender()`、`markMatches()` | `PV.find`、`.find-bar`、`mark.find-hit`、`Ctrl+F` |
 | SVG 编辑与受限保存 | `src/renderer/svgedit.js`、`preview-body.js`、`src/main/fs-api.js` | `mount()`、`parseSvg()`、`sanitize()`、`createEditor()`、`writeSvgFile()`、`pv.writeSvg` | `fs:write-svg`、`pane.svgEdit`、`pane.view`、`CONFLICT`、`MAX_SVG_WRITE_BYTES` |
 | 项目切换条、项目图标、下划线动画 | `src/renderer/projects.js`、`styles.css` | `renderDock()`、`markActive()`、`rememberLine()`、`applyLineMove()`、`openPicker()`、`quickHtml()`、`setIcon()`、`applyTextIcon()`、`sanitizeIcon()`、`navOf()`、`saveNav()` | `PV.projects`、`nav`、`.proj-dock`、`.proj-tile`、`is-line-move`、`--proj-line-from`、`.pj-pop`、`.pj-text-in` |
@@ -50,7 +50,7 @@
 - **文件节点 `node`**：`{ path, name, isDir, kind, size, mtime }`；网页节点另有
   `{ kind:'web', url, webCurrentUrl, webError }`。`kind` 由 `fs-api.kindFor()` 与
   `app.js` 的网页条目共同决定。
-- **窗格 `pane`**：`bodyKey`（内容身份）、`reqId` / `pending`（异步任务身份）、`node`、
+- **窗格 `pane`**：`bodyKey`（内容身份）、`lifecycle`（alive / destroyed）、`reqId` / `pending`（异步任务身份）、`node`、
   `mode`、`view`、`svgEdit`、`zoom`、`continuous`、`changed`、`known`、`col`、`findEl`。
 - **列 `column`**：`{ el, stack, splitEl, panes:[pane…], w, split, temp }`。宽度和上下比例
   属于列，不属于单个窗格；一列最多 2 个窗格。
@@ -109,7 +109,7 @@
 | 前端资源打包 | `mygo/stage-frontend.mjs` | 生成 `mygo/frontend/`（gitignore）供 `go:embed`；调用 CLI 前完成 | `stage-frontend` |
 | MyGo 第三方许可 | `scripts/build-mygo-notices.mjs` | 合并 npm、实际链接的 Go 模块及运行时许可 | `Module.Replace`、`THIRD-PARTY-NOTICES.md` |
 | MyGo 回归测试 | `mygo/fsapi_test.go`、`mygo/main_test.go` | 文件写入边界、项目恢复、并发授权、网页状态、窗口几何 | `go test ./...` |
-| 安装包与产物命名 | `scripts/build-mygo.mjs` | 配置生成、CLI 前 staging、`dist/` 改名 | `MYGO_CLI`、`Lit-Explorer-MyGo` |
+| 安装包与产物命名 | `scripts/build-mygo.mjs` | 配置生成、CLI 前 staging、`dist/` 改名 | `MYGO_CLI`、`Lit-Explorer`（默认）、`Lit-Explorer-Electron-Backup`（备用） |
 | 网页窗格（内嵌网页） | `mygo/main.go`、`mygo/bridge.js` | `WebSync()`、`syncWebViews()`、`WebReload()`、`emitWebState()`、`applyState()`、`syncVisibility()` | `ChildWebView`、`webViewRec`、加载成功才显示、`pv:web-state` |
 
 网页窗格用 fork 的 `Window.NewChildWebView()`（`go.mod` 的 `replace` 指向
@@ -135,3 +135,37 @@
 - `src/renderer/changes.js`：`PV.changes.create()` 注入工作区状态与回调，负责目录及预览版本监测；刷新调度与按钮呈现在 `app.js`。
 - `src/main/folder-menu.js`：当前用户 Windows 文件夹菜单注册与取消；安装 / 卸载钩子在 `build/installer.nsh`。MyGo 对应逻辑在 `main.go`。
 - `PV.highlight.mount().find()`：在完整源码中查找，按命中行滚动虚拟视图并保留语法颜色；`find.js` 共用查询条与快捷键。
+
+## 外部参考目录
+
+- `src/main/reference-dirs.js`：`createReferenceDirs()` 管理原生选择框授权、每项目持久化、恢复与移除；`main.js` 在工作区提交前准备参考目录，并在序号检查后同步登记。
+- `mygo/references.go`：`ReferenceDirs / AddReferenceDir / RemoveReferenceDir` 为同形 bridge 能力，`seqMu` 保护活动项目与目录授权的提交。
+- `fs-api.js` / `mygo/fsapi.go` 区分可读根与可写根，参考目录不会进入 SVG 可写范围；`app.js` 的 `rootForPath / browseRoot / refreshFavorites` 区分项目身份与浏览来源。
+- 云目录插件的后续方案见 [设计文档](docs/design/external-directory-plugins.md)。
+
+## 目录插件、飞书与金山
+
+- `src/shared/directory-providers.json`：共享版本化插件清单，包含飞书文件夹 / Wiki 目录和金山个人文件夹映射；金山使用内置 Skill transport（原生 HTTP，不运行 CLI）；默认根、节点映射和分页在清单声明。
+- `src/main/directory-plugins.js`：`createDirectoryPlugins / invokeDirectoryPlugin` 管理挂载、会话令牌、节点与分页授权、请求、缓存、取消和标准化。
+- `mygo/directory_plugins.go`：同形宿主和 `App.DirectoryCall`；从 staging 后的共享清单加载插件。
+- `src/renderer/cloud-directories.js`：`PV.cloud` 管理来源配置表单、目录列表、详情、分页和在线文档打开；`app.js` 注入预览与快捷访问回调。
+- `pane.js` 的 `savedPaneData` 排除云来源预览，避免解析出的临时 URL 持久化；项目导航的云文档选中态同样不写入磁盘。
+- 接口推演、其他服务接入步骤与限制见 [目录插件体系](docs/design/external-directory-plugins.md)。
+
+## 飞书客户端设备授权
+
+`src/main/feishu-auth.js` / `mygo/feishu_auth.go`：`start/poll/take/token/cancel/clear`；共享配置 `src/shared/feishu-auth.json`。目录桥接新增 `authStart` / `authPoll`，`connect` 可消费一次性 `authId`，原始凭据不返回界面。方案、资格边界和真实测试资源见 [客户端授权设计](docs/design/feishu-client-authorization.md)。
+
+金山插件的官方接口、对象 ID 与鉴权边界见 [金山目录设计](docs/design/kdocs-directory-plugin.md)。目录宿主 `pin` / bridge `pin` 仅将已发现子目录独立挂载；单文档 provider 已移除，文档快捷项走原有网页链接。
+
+`src/main/kdocs-plugin.js` / `mygo/kdocs_plugin.go`：`start/poll/identity/invoke/logout`，官方浏览器引导页 + Skill exchange + 四个只读工具；协议配置在 `src/shared/kdocs-skill.json`。安全持久化由 `protected-credentials.js` 注入 Electron safeStorage，Go Windows 用 `kdocs_protection_windows.go` 的 DPAPI。目录桥接 `kdocsAuthStart/kdocsAuthPoll/kdocsLogout` 不返回原始凭据。
+
+## 界面生命周期与异步转换
+
+- `src/renderer/save-queue.js`：`PV.saveQueue.create / submit / dispose / state`，串行写最新期望内容，分离期望、在途和已落盘版本；SVG 编辑器拥有队列。
+- `pane.js`：`pane.lifecycle` 为 alive / destroyed，`task.stale` 同时检查终态与 reqId，销毁先撤销旧任务写入资格。
+- `app.js`：`workspacePhase / workspaceEpoch / navigationEpoch / columnRequest`；`beginNavigation / navigationCurrent` 贯穿快捷定位、恢复及本地链接。
+- `pv.list(dir, requestId=0)`：Electron preload / IPC 与 MyGo `App.List(dir, requestID)` 同步传递编号；`fs:meta` / `pv:meta` 回传 requestId，仅当前列接受。
+- `webview.js`：`acquireOcclusion / acquireDragHide` 返回独立且幂等的释放函数；弹层和手势各自持有。
+- `projects.js`：`pickerSession` 绑定原生图片选择的项目和弹层，旧结果不修改新项目。
+- [状态转换、取消规则与回归映射](docs/design/renderer-lifecycles.md)；单元 S14/S15，集成 L1–L4。

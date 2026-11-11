@@ -6,20 +6,21 @@
 
 只支持 **Windows**（x64），没有 macOS / Linux 的构建目标，也没有跨平台适配的计划。
 
-同一份界面有两个可发布版本：**Electron 版**（自带运行时，约 122 MB 安装包）与
-**MyGo 版**（Go + 系统 WebView2，约 5.5 MB 安装包）。两者功能一致、可并存，区别与
+**默认版本为 MyGo**（Go + 系统 WebView2）；**Electron 为备用版本**（自带 Chromium 运行时）。
+从 [Releases](https://github.com/wwjei/lit-explorer/releases) 下载 `Lit-Explorer-Setup-<version>.exe`
+或 `Lit-Explorer-<version>-portable.exe`；遇到 WebView2 兼容问题时可使用带 `Electron-Backup` 的备用包。两者共用界面、可并存，区别与
 取舍见 [发布](#发布) 与 [docs/design/mygo-port.md](docs/design/mygo-port.md)。
 
 图标以黑白灰层叠窗格表现多栏浏览与文件预览，使用透明背景的
 `assets/icon-source.png` 原图；`scripts/build-icons.mjs` 从它生成各尺寸 PNG 与 ICO。
 
-界面基线来自 `index.html`（早期设计原型），正式程序在 `src/`（Electron）。
+界面基线来自 `index.html`（早期设计原型），共享界面在 `src/renderer/`，默认宿主在 `mygo/`，备用宿主在 `src/main/`。
 
 ## 运行
 
 ```bash
 npm install      # 安装依赖（见下方镜像说明）
-npm start        # 启动程序
+npm start        # 启动 Electron 开发宿主（备用版）
 npm run dev      # 启动并打开开发者工具
 ```
 
@@ -217,7 +218,7 @@ pv.writeSvg('<root>/fig.svg', 旧版本)     → CONFLICT（磁盘上已经变�
 资源引用（内联后的基准是宿主页面，解析会错位）；一旦摘掉了东西就把这个文件标成只读，
 避免一次保存把文件里原本的脚本悄悄删掉。
 
-可读范围只有**当前打开的那一个工作区**：切换工作区时会清掉上一个的授权，
+可读范围包含**当前工作区和用户为该项目主动添加的外部参考目录**：切换工作区时会清掉上一个的授权，
 在 A 里读过的目录不会因为切到 B 而继续可读。
 
 ### 隐私与联网
@@ -226,14 +227,14 @@ pv.writeSvg('<root>/fig.svg', 旧版本)     → CONFLICT（磁盘上已经变�
 
 网络请求有两个来源，都是**你自己主动打开的**：预览的文件，以及快速访问里的网页条目。
 HTML 预览里的脚本、Markdown 里的外链图片、`fetch()` 都会照常联网——它们跑在 Chromium 里，
-行为和浏览器一致；网页预览更是直接加载你添加的在线页面。除此之外应用自身不发起任何请求，
+行为和浏览器一致；网页预览更是直接加载你添加的在线页面。用户主动连接云文档插件后，宿主会向该插件固定的 API 域名发送经过认证的目录 / 元数据请求；除此之外应用自身不发起请求，
 `pv://` 协议只解析本机文件。
 
 网页预览跑在独立的 `persist:web-docs` 会话里：登录态与 cookie 留在本机，不和系统浏览器
 共享，也不会上报给应用。只接受 `http(s)`，不挂 preload，默认拒绝权限与下载；页面读不到
 工作区，也拿不到宿主的 `pv` 桥接。
 
-可读范围就是工作区，边界见上面「安全模型」；不可信 HTML 预览能读到**当前工作区**内的文件
+可读范围是当前工作区及其已授权参考目录，边界见上面「安全模型」；不可信 HTML 预览能读到该范围内的文件
 （这是「HTML 预览要能引用相对资源」的直接结果），当时怎么权衡的记在
 [docs/audits/2026-10-19-security-review.md](docs/audits/2026-10-19-security-review.md) 末尾。
 
@@ -325,12 +326,12 @@ npm run shot -- --open="./sample-project" --shot=".tmp/shot.png" --shot-js=".tmp
 
 推送 `v` 开头的 tag 会触发 [.github/workflows/release.yml](.github/workflows/release.yml)：
 先在 `windows-latest` 上跑一遍 [.github/workflows/ci.yml](.github/workflows/ci.yml) 的测试，
-过了才构建 **Electron 与 MyGo 两个版本**的安装包 / 免安装版，然后创建 Release 并上传产物。
+过了才构建 **MyGo 默认版与 Electron 备用版**的安装包 / 免安装版，然后创建 Release 并上传产物。
 tag 里带连字符（如 `v0.0.1-alpha`）会自动标记为预发布。
 
 ```bash
-git tag v0.0.5-alpha
-git push origin v0.0.5-alpha
+git tag v0.0.7-alpha
+git push origin v0.0.7-alpha
 ```
 
 日常提交不需要打 tag：推 `main` 只跑测试，不构建。
@@ -338,16 +339,17 @@ git push origin v0.0.5-alpha
 本地打包（产物在 `dist/`）：
 
 ```bash
-npm run dist       # Electron 版；predist 先生成 Worker、图标与许可声明，dist/ 先清空
-npm run dist:mygo  # MyGo 版；需要 Go 1.27+
-npm run dist:all   # 两个都出（MyGo 必须在 Electron 之后，否则会被清掉）
+npm run dist           # 默认 MyGo 版；需要 Go 1.27+，先清空 dist/
+npm run dist:mygo      # 单独构建 MyGo（不清空 dist/，便于合并产物）
+npm run dist:electron  # Electron 备用版，先清空 dist/
+npm run dist:all       # 两个都出（先 Electron，后 MyGo，避免清掉默认产物）
 node scripts/build-checksums.mjs   # 生成 SHA256SUMS.txt
 ```
 
-- `Lit-Explorer-Setup-<version>.exe` —— Electron NSIS 安装包，可选安装目录
-- `Lit-Explorer-<version>-portable.exe` —— Electron 免安装版
-- `Lit-Explorer-MyGo-Setup-<version>.exe` —— MyGo NSIS 安装包（约 5.5 MB）
-- `Lit-Explorer-MyGo-<version>-portable.exe` —— MyGo 免安装版（约 18 MB）
+- `Lit-Explorer-Setup-<version>.exe` —— **默认 MyGo 安装包**
+- `Lit-Explorer-<version>-portable.exe` —— **默认 MyGo 免安装版**
+- `Lit-Explorer-Electron-Backup-Setup-<version>.exe` —— Electron 备用安装包
+- `Lit-Explorer-Electron-Backup-<version>-portable.exe` —— Electron 备用免安装版
 - `SHA256SUMS.txt` —— 上面四个的校验和
 
 MyGo 版不打包 Chromium，使用系统 WebView2：Windows 11 自带，Windows 10 一般随 Edge
@@ -359,7 +361,7 @@ MyGo 版不打包 Chromium，使用系统 WebView2：Windows 11 自带，Windows
 sha256sum -c SHA256SUMS.txt
 ```
 
-安装目录的 `resources/` 下附带 `LICENSE`、`FEATURES.md`、`docs/` 与第三方许可声明
+默认 MyGo 版的许可与说明嵌入程序，可从应用菜单打开；Electron 备用版在安装目录的 `resources/` 下附带 `LICENSE`、`FEATURES.md`、`docs/` 与第三方许可声明
 `notices/THIRD-PARTY-NOTICES.md`。
 
 ## 已知限制
@@ -414,3 +416,23 @@ pptx-preview 等，压缩后版权头不可读）各自的许可，由 `npm run 
 Windows 的更多菜单可注册 / 取消“用 Lit 打开”文件夹右键项；Electron 安装版自动管理该菜单，MyGo 便携版移除前请先取消注册。Windows 11 可能需要在“显示更多选项”中找到它。
 
 标题栏不再提供文件搜索输入框；Ctrl+F 查找当前文档或源码，源码虚拟滚动不限制搜索范围。右上角刷新（F5）仅重读发生变化的目录和预览。预览列头采用单行布局，悬停文件名查看完整路径。Markdown 文首 YAML 元数据可直接预览，本地链接在工作区内导航并打开预览。
+
+### 添加外部参考目录
+
+在快速访问标题栏点击文件夹加号“添加外部目录”，通过系统选择框选取目录。它按项目保存，点击后在当前项目内浏览，可以预览文件、固定参考内容、打开 Markdown 本地链接；点击“返回项目目录”继续浏览项目。每个项目最多 32 个参考目录。
+
+参考目录只读，不提供 SVG 编辑。右键选择从快速访问移除会撤销目录访问，并清理当前预览；目录中的文件和子目录也可单独加入快速访问。切换项目时旧项目的参考目录不再可读；目录不可访问时本次跳过授权，记录保留，恢复可用后重开项目即可重新载入。云目录插件的契约与其他服务接入说明见[插件文档](docs/design/external-directory-plugins.md)。
+
+### 云目录快捷项
+
+快速访问中的“添加云目录”支持飞书文件夹、指定 Wiki 节点目录和金山个人云文档文件夹。飞书可粘贴目录链接；Wiki 目录可浏览子项，也可“打开当前文档”。单篇文档直接通过原有网页链接加入快捷访问，不提供单文档插件。
+
+飞书可使用访问令牌，或选择实验性浏览器设备授权：创建用户自己的个人应用 / 使用自己的测试应用，由本机客户端领取及刷新令牌，无需 Lit 中转服务。平台资格仍待真实租户验证，详见[授权方案和测试准备](docs/design/feishu-client-authorization.md)。应用需具备相应读取权限和所选目录的访问范围。
+
+金山选择“金山云文档文件夹”，点击连接后在官方浏览器页面使用 WPS 个人账号确认授权，无需安装 CLI、创建开放平台应用或粘贴 token。目录标识留空浏览“我的文档”，进入目标子文件夹可“将此目录加入快捷访问”；也可填写已知文件夹 ID。目录中文档通过官方在线地址打开，不自动创建或修改分享。当前不支持 WPS 365 企业账号，真实账号联调仍待完成，见[金山插件说明](docs/design/kdocs-directory-plugin.md)。
+
+金山凭据由 Lit 在本机用系统能力保护，可在切项目 / 重启后复用；安全保护不可用时仅当前运行有效，界面会提示。授权过期需重新在浏览器确认；连接表单支持重新登录 / 切换账号和退出 Lit 的金山授权。飞书凭据仍仅当前连接会话保存。
+
+API 身份与网页预览里的登录身份分别管理，网页无法内嵌时可“在浏览器中打开”。解析出的在线链接不写布局，云预览不会跨重启恢复；独立添加的文件夹不依赖原来源项继续保留。
+
+通用契约和更多服务的接入步骤见[目录插件体系](docs/design/external-directory-plugins.md)。当前不安装任意第三方代码；金山认证与目录功能为内置模块，不下载或运行外部命令。

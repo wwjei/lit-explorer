@@ -18,7 +18,7 @@
  * 每次带上读取时的 size / mtime；磁盘上已经变了就停在「保存冲突」，不覆盖别人的修改。
  *
  * 加载顺序：shared/contracts.js → paths.js → icons.js → highlight.js → markdown.js →
- *           pane.js → preview-body.js → webview.js → svgedit.js →
+ *           pane.js → preview-body.js → webview.js → save-queue.js → svgedit.js →
  *           find.js → projects.js → app.js。
  */
 (function () {
@@ -321,8 +321,6 @@
     let undo = [];
     let redo = [];
     let expected = { size: ctx.size, mtime: ctx.mtime };
-    let savedXml = serialize();
-    let queue = Promise.resolve();
     let disposed = false;
 
     const bar = wrap.querySelector('.svg-bar');
@@ -365,6 +363,8 @@
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
     window.addEventListener('pointercancel', onCancel);
+    window.addEventListener('blur', onCancel);
+    wrap.addEventListener('lostpointercapture', onCancel);
 
     /* ---- 序列化与保存 ---- */
 
@@ -399,39 +399,27 @@
       updateUndo();
     }
 
-    /** 当前 DOM 与磁盘不一致时排队写一次；expected 在任务真正执行时才取 */
+    const saves = PV.saveQueue.create({
+      initial: serialize(),
+      write: (xml) => pv.writeSvg(node.path, fileText(xml), expected),
+      onState: (phase) => {
+        if (phase === 'idle') setStatus('已保存');
+        else if (phase === 'writing') setStatus('保存中…', 'busy');
+        else if (phase === 'conflict') setStatus('保存冲突', 'error');
+        else if (phase === 'error') setStatus('保存失败', 'error');
+      },
+      onSaved: (res) => {
+        expected = { size: res.size, mtime: res.mtime };
+        h.noteSaved(pane, node, expected);
+        PV.pane.renderPane(pane, false);
+      },
+      onError: (res) => h.toast(res.error === 'CONFLICT'
+        ? '文件已在磁盘上变化，请点列头刷新后再编辑'
+        : '保存失败：' + (res.message || res.error || '未知错误'))
+    });
+
     function save() {
-      if (risky || disposed) return;
-      const xml = serialize();
-      if (xml === savedXml) { setStatus('已保存'); return; }
-      setStatus('保存中…', 'busy');
-      const payload = fileText(xml);
-      queue = queue.then(async () => {
-        if (disposed) return;
-        let res;
-        try {
-          res = await pv.writeSvg(node.path, payload, expected);
-        } catch (err) {
-          res = { error: 'EWRITE', message: String((err && err.message) || err) };
-        }
-        if (disposed) return;
-        if (res && res.ok) {
-          savedXml = xml;
-          expected = { size: res.size, mtime: res.mtime };
-          setStatus('已保存');
-          h.noteSaved(pane, node, { size: res.size, mtime: res.mtime });
-          // 头部「磁盘上有变化」的红点要跟着灭掉
-          PV.pane.renderPane(pane, false);
-          return;
-        }
-        if (res && res.error === 'CONFLICT') {
-          setStatus('保存冲突', 'error');
-          h.toast('文件已在磁盘上变化，请点列头刷新后再编辑');
-          return;
-        }
-        setStatus('保存失败', 'error');
-        h.toast('保存失败：' + ((res && res.message) || (res && res.error) || '未知错误'));
-      }).catch(() => {});
+      if (!risky && !disposed) saves.submit(serialize());
     }
 
     /* ---- 选择框 ---- */
@@ -555,13 +543,13 @@
     function onMove(e) {
       if (disposed) return;
       // 鼠标键已经松开（例如松开在窗口外没收掉）：结束这次手势，不再跟着指针走
-      if (e.pointerType === 'mouse' && e.buttons === 0) { drag = null; resize = null; return; }
+      if (e.pointerType === 'mouse' && e.buttons === 0) { onCancel(e); return; }
       if (drag && e.pointerId === drag.pointerId) {
         const p = toLocal(drag.el, e.clientX, e.clientY, false);
         if (!p) return;
         if (!drag.moved
           && Math.hypot(e.clientX - drag.sx, e.clientY - drag.sy) < MOVE_SLOP) return;
-        if (!drag.moved) { drag.moved = true; pushUndo(drag.before); }
+        if (!drag.moved) { drag.history = { undo: undo.slice(), redo: redo.slice() }; drag.moved = true; pushUndo(drag.before); }
         const dx = p.x - drag.x;
         const dy = p.y - drag.y;
         const t = 'translate(' + fmt(dx) + ' ' + fmt(dy) + ')';
@@ -577,7 +565,7 @@
         if (!p) return;
         if (!resize.moved
           && Math.hypot(e.clientX - resize.sx, e.clientY - resize.sy) < MOVE_SLOP) return;
-        if (!resize.moved) { resize.moved = true; pushUndo(resize.before); }
+        if (!resize.moved) { resize.history = { undo: undo.slice(), redo: redo.slice() }; resize.moved = true; pushUndo(resize.before); }
         applyResize(p.x - resize.x, p.y - resize.y);
         placeBox();
         e.preventDefault();
@@ -599,9 +587,18 @@
       }
     }
 
-    function onCancel() {
+    // SVG 手势只有 pointerup 提交；取消、失焦、丢失捕获均回滚 DOM 和历史。
+    function onCancel(event) {
+      const gesture = drag || resize;
+      if (!gesture || (event && event.pointerId !== undefined && event.pointerId !== gesture.pointerId)) return;
       drag = null;
       resize = null;
+      if (gesture.moved) {
+        restore(gesture.before);
+        undo = gesture.history.undo;
+        redo = gesture.history.redo;
+        updateUndo();
+      }
     }
 
     function startResize(e, grip) {
@@ -716,7 +713,7 @@
 
     if (!risky) {
       stage.addEventListener('pointerdown', (e) => {
-        if (e.button !== 0) return;
+        if (e.button !== 0 || drag || resize) return;
         if (input) commitInput();
         const grip = e.target.closest ? e.target.closest('.svg-grip') : null;
         if (grip) { wrap.focus({ preventScroll: true }); startResize(e, grip); return; }
@@ -792,10 +789,13 @@
     return {
       destroy: function () {
         disposed = true;
+        saves.dispose();
         resizeObserver.disconnect();
         window.removeEventListener('pointermove', onMove);
         window.removeEventListener('pointerup', onUp);
         window.removeEventListener('pointercancel', onCancel);
+        window.removeEventListener('blur', onCancel);
+        wrap.removeEventListener('lostpointercapture', onCancel);
         if (input) { const el = input.el; input = null; el.remove(); }
         drag = null;
         resize = null;

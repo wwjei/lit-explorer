@@ -58,10 +58,14 @@ var (
 )
 
 type App struct {
-	win     *mygo.Window
-	seq     int
-	seqMu   sync.Mutex
-	saveTim *time.Timer
+	directoryMu      sync.Mutex
+	directoryPlugins *directoryPluginService
+	referenceRoot    string
+	references       []string
+	win              *mygo.Window
+	seq              int
+	seqMu            sync.Mutex
+	saveTim          *time.Timer
 
 	// 网页窗格：按地址保活一个子 webview（对应 Electron 的 web-views.js）
 	webMu    sync.Mutex
@@ -347,6 +351,10 @@ func (a *App) openWorkspaceWith(dir string, resolve func(string) (string, error)
 	seq := a.seq
 	a.seqMu.Unlock()
 	real, err := resolve(dir)
+	references := []string{}
+	if err == nil {
+		references = savedReferences(real)
+	}
 
 	var result map[string]any
 	commit := func() {
@@ -364,6 +372,12 @@ func (a *App) openWorkspaceWith(dir string, resolve func(string) (string, error)
 		// 检查、授权、持久化和事件是一次提交；被取代的请求不能留下副作用。
 		resetAllowedRoots()
 		allowResolvedRoot(real)
+		a.directoryService().activate(real)
+		a.referenceRoot = real
+		a.references = references
+		for _, p := range references {
+			allowReferenceRoot(p)
+		}
 		offerRoot(real)
 		state := loadState()
 		recent := []any{real}
@@ -446,14 +460,14 @@ func extractEmbedded(prefix, dest string) error {
  * 文件系统
  * ------------------------------------------------------------------ */
 
-func (a *App) List(dir string) map[string]any {
+func (a *App) List(dir string, requestID int) map[string]any {
 	abs, entries, err := listDir(dir)
 	if err != nil {
 		return map[string]any{"error": codeOf(err), "message": err.Error()}
 	}
 	statEntries(abs, entries, func(dir string, metas map[string]any) {
 		if a.win != nil && !a.win.IsDestroyed() {
-			evMeta.Emit(a.win, map[string]any{"dir": dir, "metas": metas})
+			evMeta.Emit(a.win, map[string]any{"dir": dir, "metas": metas, "requestId": requestID})
 		}
 	})
 	return map[string]any{"dir": abs, "entries": entries}

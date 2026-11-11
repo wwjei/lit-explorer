@@ -69,8 +69,8 @@ if (!setup || !appExe) {
 
 fs.mkdirSync(distDir, { recursive: true });
 const targets = [
-  [path.join(outDir, setup), path.join(distDir, `Lit-Explorer-MyGo-Setup-${pkg.version}.exe`)],
-  [path.join(outDir, appExe), path.join(distDir, `Lit-Explorer-MyGo-${pkg.version}-portable.exe`)],
+  [path.join(outDir, setup), path.join(distDir, `Lit-Explorer-Setup-${pkg.version}.exe`)],
+  [path.join(outDir, appExe), path.join(distDir, `Lit-Explorer-${pkg.version}-portable.exe`)],
 ];
 for (const [from, to] of targets) {
   fs.copyFileSync(from, to);

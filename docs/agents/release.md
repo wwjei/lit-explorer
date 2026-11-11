@@ -26,11 +26,11 @@ git push origin refs/tags/v<新版本>          # 推 tag 才触发 release.yml
 
 只有 `v*` 开头的 tag 会触发 [.github/workflows/release.yml](../../.github/workflows/release.yml)：
 先跑 [ci.yml](../../.github/workflows/ci.yml) 那套测试（单元 + 集成 + MyGo 的 `go test`），
-**过了才**在 `windows-latest` 上 `npm ci` → `npm run dist` → `node scripts/build-mygo.mjs`
+**过了才**在 `windows-latest` 上 `npm ci` → `npm run dist:electron` → `node scripts/build-mygo.mjs`
 → 生成校验和 → `softprops/action-gh-release` 发布 Release。测试挂了就不会产出安装包，
 也不会建 Release。
 
-顺序不能反：`npm run dist` 里的 `scripts/clean-dist.mjs` 会清空 `dist/`，MyGo 产物必须在它
+顺序不能反：`npm run dist:electron` 里的 `scripts/clean-dist.mjs` 会清空 `dist/`，MyGo 产物必须在它
 之后构建（MyGo 脚本只写 `dist/`，不会再清）。MyGo 构建脚本在调用 CLI 前 staging 并生成
 Go 依赖许可，不能依赖其他 job 的生成目录；每个 job 都从独立检出开始。
 
@@ -43,11 +43,11 @@ tag 名里带连字符（`-alpha` / `-beta`）会被自动标记为预发布。*
 
 | 文件 | 说明 |
 | --- | --- |
-| `Lit-Explorer-Setup-<版本>.exe` | Electron NSIS 安装包，可选安装目录（约 122 MB） |
-| `Lit-Explorer-<版本>-portable.exe` | Electron 免安装版（约 111 MB） |
-| `Lit-Explorer-Setup-<版本>.exe.blockmap` | electron-builder 生成的差分块图 |
-| `Lit-Explorer-MyGo-Setup-<版本>.exe` | MyGo NSIS 安装包，使用系统 WebView2（约 5.5 MB） |
-| `Lit-Explorer-MyGo-<版本>-portable.exe` | MyGo 免安装版（约 18 MB） |
+| `Lit-Explorer-Setup-<版本>.exe` | 默认 MyGo NSIS 安装包，使用系统 WebView2 |
+| `Lit-Explorer-<版本>-portable.exe` | 默认 MyGo 免安装版 |
+| `Lit-Explorer-Electron-Backup-Setup-<版本>.exe` | Electron 备用 NSIS 安装包 |
+| `Lit-Explorer-Electron-Backup-<版本>-portable.exe` | Electron 备用免安装版 |
+| `Lit-Explorer-Electron-Backup-Setup-<版本>.exe.blockmap` | 备用安装包差分块图 |
 | `SHA256SUMS.txt` | 上面四个 exe 的校验和 |
 
 两个版本可以并存：安装目录、卸载项与用户数据目录各自独立
@@ -60,12 +60,12 @@ WebView2 依赖与两者的区别；改产物命名时要同步改正文和
 
 没有代码签名，`SHA256SUMS.txt` 是用户唯一能自己核对「下载到的就是 CI 构建出来的那一份」
 的手段，Release 说明里也据此给出了 `sha256sum -c` 的用法。由
-`scripts/build-checksums.mjs` 生成，只收录**当前版本号**的 exe——`dist` 脚本现在会先
+`scripts/build-checksums.mjs` 生成，只收录**当前版本号的四个指定产物**，缺失任意一个就失败，避免发布缺少默认版或备用版的包；忽略旧命名和其他版本的 exe——`dist` 脚本现在会先
 清空 `dist/`（`scripts/clean-dist.mjs`），这条过滤是防止有人手工往目录里放旧包的兜底。
 
 ## 不要让 electron-builder 自己发布
 
-`dist` 脚本里的 `--publish never` 不能去掉：在 tag 上构建时 electron-builder 会尝试
+`dist:electron` 脚本里的 `--publish never` 不能去掉：在 tag 上构建时 electron-builder 会尝试
 「隐式发布」，并因缺少 `GH_TOKEN` 报错退出——包其实已经构建成功，失败只发生在最后一步。
 发布统一交给 workflow 里的 action-gh-release。
 
@@ -81,3 +81,5 @@ WebView2 依赖与两者的区别；改产物命名时要同步改正文和
 都还没做，原因和选项记在 [further_notes.md](../../further_notes.md) 的 N4 / N5。
 **签名之前不要接自动更新**：给未签名的包做自动更新，等于每次更新都让用户再吃一遍
 SmartScreen 警告。
+
+默认打包命令 `npm run dist` 构建 MyGo；`dist:electron` 构建 Electron 备用版。`dist:all` 先构建 Electron 再 MyGo，两个宿主的安装标识与用户数据目录不因下载文件改名而变化。

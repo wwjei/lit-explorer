@@ -1,0 +1,7 @@
+{
+  "accountsOrigin": "https://accounts.feishu.cn",
+  "registrationPath": "/oauth/v1/app/registration",
+  "devicePath": "/oauth/v1/device_authorization",
+  "tokenPath": "/oauth/v3/token",
+  "scopes": "drive:drive:readonly drive:drive.metadata:readonly wiki:wiki:readonly offline_access"
+}

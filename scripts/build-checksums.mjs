@@ -19,16 +19,21 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dir = path.resolve(root, process.argv[2] || 'dist');
 
 if (!fs.existsSync(dir)) {
-  console.error('[checksums] 找不到目录：' + dir + '，先跑 npm run dist');
+  console.error('[checksums] 找不到目录：' + dir + '，先跑 npm run dist:all');
   process.exit(1);
 }
 
-// 只认当前版本号：本地 dist/ 里可能还堆着以前几次打包的 exe，
-// 一起列进去的话 SHA256SUMS.txt 会把不相干的旧包也算上
+// 默认 MyGo 与 Electron 备用版必须各有安装包和便携包，缺一则停止发布。
 const { version } = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
-const files = fs.readdirSync(dir).filter((f) => /\.exe$/i.test(f) && f.includes(version)).sort();
-if (!files.length) {
-  console.error('[checksums] ' + dir + ' 里没有 ' + version + ' 的 .exe，先跑 npm run dist');
+const files = [
+  `Lit-Explorer-Setup-${version}.exe`,
+  `Lit-Explorer-${version}-portable.exe`,
+  `Lit-Explorer-Electron-Backup-Setup-${version}.exe`,
+  `Lit-Explorer-Electron-Backup-${version}-portable.exe`,
+];
+const missing = files.filter((file) => !fs.existsSync(path.join(dir, file)));
+if (missing.length) {
+  console.error('[checksums] 发布产物不完整：' + missing.join(', '));
   process.exit(1);
 }
 

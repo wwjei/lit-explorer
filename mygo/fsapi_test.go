@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/egoist/mygo"
@@ -134,13 +135,14 @@ func TestWriteSvgBoundaries(t *testing.T) {
 func isolateRoots(t *testing.T) {
 	t.Helper()
 	roots.Lock()
-	allowed, offered := roots.allowed, roots.offered
+	allowed, offered, writable := roots.allowed, roots.offered, roots.writable
 	roots.allowed = map[string]string{}
 	roots.offered = map[string]bool{}
+	roots.writable = map[string]string{}
 	roots.Unlock()
 	t.Cleanup(func() {
 		roots.Lock()
-		roots.allowed, roots.offered = allowed, offered
+		roots.allowed, roots.offered, roots.writable = allowed, offered, writable
 		roots.Unlock()
 	})
 }
@@ -327,6 +329,7 @@ func TestLoadStateKeepsProjectsOutsideRecentRoots(t *testing.T) {
 	// 再次冷启动前触发内部保存，也不能因 offered 尚为空丢掉图标与布局。
 	roots.Lock()
 	roots.offered = map[string]bool{}
+	roots.writable = map[string]string{}
 	roots.Unlock()
 	patched = patchInternal(map[string]any{"window": map[string]any{"width": 1000, "height": 700}})
 	assertJSONEqual(t, patched["projects"], projects)
@@ -362,5 +365,64 @@ func TestRealPathResolvesJunctionTail(t *testing.T) {
 	}
 	if real == "" || filepath.Base(real) != "not-created.txt" {
 		t.Fatalf("realPath(%q) = %q", missing, real)
+	}
+}
+
+func TestReferenceReadOnly(t *testing.T) {
+	isolateRoots(t)
+	project, err := realPath(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference, err := realPath(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	allowResolvedRoot(project)
+	allowReferenceRoot(reference)
+	target := filepath.Join(reference, "ref.svg")
+	if err := os.WriteFile(target, []byte("<svg/>"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := assertAllowed(target); err != nil {
+		t.Fatal(err)
+	}
+	if result := writeSvgFile(target, "<svg/>", 6, 0, true); result["error"] != "EREAD_ONLY" {
+		t.Fatalf("write reference: %v", result)
+	}
+	resetAllowedRoots()
+	allowResolvedRoot(project)
+	if _, err := assertAllowed(target); err == nil {
+		t.Fatal("removed reference remains readable")
+	}
+}
+
+func TestReferencePersistenceAndRemoval(t *testing.T) {
+	isolateState(t)
+	project, err := realPath(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference, err := realPath(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &App{referenceRoot: project}
+	allowResolvedRoot(project)
+	a.saveReferences([]string{reference})
+	allowReferenceRoot(reference)
+	if len(savedReferences(project)) != 1 {
+		t.Fatal("reference was not persisted")
+	}
+	patchFromPage(map[string]any{"referenceDirs": map[string]any{strings.ToLower(project): []any{"C:\\"}}})
+	if len(savedReferences(project)) != 1 {
+		t.Fatal("page altered protected reference roots")
+	}
+	result := a.RemoveReferenceDir(reference)
+	if result["error"] != nil || len(savedReferences(project)) != 0 {
+		t.Fatalf("remove reference: %v", result)
+	}
+	if _, err := assertAllowed(reference); err == nil {
+		t.Fatal("removed reference is still authorized")
 	}
 }
