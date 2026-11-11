@@ -48,8 +48,8 @@ const vm = require('node:vm');
 const JSZip = require('jszip');
 const { ROOT, TMP, run, ok, eq, eqJson, done, freshDir, linkDir } = require('./helpers.cjs');
 
-const fsApi = require(path.join(ROOT, 'src/main/fs-api.js'));
-const webViews = require(path.join(ROOT, 'src/main/web-views.js'));
+const fsApi = require(path.join(ROOT, 'test/host/fs-api.js'));
+const webViews = require(path.join(ROOT, 'test/host/web-views.js'));
 app.setPath('userData', path.join(TMP, 'user-data'));
 
 /** 各用例里人为注入的延迟，集中在这里便于调整；它们是竞态用例的机制，不要为提速随意缩短 */
@@ -120,12 +120,12 @@ function loadMainModule() {
   const ctx = {
     require: (n) => (n === 'electron' ? Object.assign({}, electron, { app: fakeApp, ipcMain: recorder })
       : n === './fs-api' ? fsApi
-        : n === './state-sanitize' ? require(path.join(ROOT, 'src/main/state-sanitize.js'))
-          : n === './protected-credentials' ? require(path.join(ROOT, 'src/main/protected-credentials.js'))
-          : n === './directory-plugins' ? require(path.join(ROOT, 'src/main/directory-plugins.js'))
-          : n === './reference-dirs' ? require(path.join(ROOT, 'src/main/reference-dirs.js'))
-          : n === './web-url' ? require(path.join(ROOT, 'src/main/web-url.js'))
-            : n === '../shared/contracts' ? require(path.join(ROOT, 'src/shared/contracts.js'))
+        : n === './state-sanitize' ? require(path.join(ROOT, 'test/host/state-sanitize.js'))
+          : n === './protected-credentials' ? require(path.join(ROOT, 'test/host/protected-credentials.js'))
+          : n === './directory-plugins' ? require(path.join(ROOT, 'test/host/directory-plugins.js'))
+          : n === './reference-dirs' ? require(path.join(ROOT, 'test/host/reference-dirs.js'))
+          : n === './web-url' ? require(path.join(ROOT, 'test/host/web-url.js'))
+            : n === '../../src/shared/contracts' ? require(path.join(ROOT, 'src/shared/contracts.js'))
               : n === './web-views' ? {
                 attachWindow: () => {},
                 sync: () => {},
@@ -135,10 +135,10 @@ function loadMainModule() {
                 : n === './store' ? { load: async () => ({}), patch: async () => ({}) }
                   : require(n)),
     process: process,
-    __dirname: path.join(ROOT, 'src/main'),
+    __dirname: path.join(ROOT, 'test/host'),
     URL, Response, console, setTimeout, clearTimeout
   };
-  vm.runInNewContext(fs.readFileSync(path.join(ROOT, 'src/main/main.js'), 'utf8'), ctx, { filename: 'main.js' });
+  vm.runInNewContext(fs.readFileSync(path.join(ROOT, 'test/host/main.js'), 'utf8'), ctx, { filename: 'main.js' });
   ctx.registerIpc();
   ctx.handlers = recorder.handlers;
   /** 测试用假窗口：openWorkspace 会调 setTitle / webContents.send */
@@ -191,7 +191,7 @@ function renderer() {
       createdWin = new BrowserWindow({
         show: false,
         webPreferences: {
-          preload: path.join(ROOT, 'src/main/preload.js'),
+          preload: path.join(ROOT, 'test/host/preload.js'),
           sandbox: true, contextIsolation: true, nodeIntegration: false
         }
       });
@@ -498,7 +498,7 @@ async function main() {
     fs.writeFileSync(path.join(external, 'docs', 'ref.md'), '# EXTERNAL_REFERENCE\n[Sibling](../target.md)');
     fs.writeFileSync(path.join(external, 'target.md'), '# SIBLING_REFERENCE');
     let saved = {};
-    const service = require('../src/main/reference-dirs').createReferenceDirs({ fsApi,
+    const service = require('./host/reference-dirs').createReferenceDirs({ fsApi,
       store: { load: async () => saved, patch: async (p) => { saved = { ...saved, ...p }; } },
       pick: async () => external
     });
@@ -550,7 +550,7 @@ async function main() {
 
   await run('D1', '云目录插件：文件夹与 Wiki 快捷项', async () => {
     const f=await prepare(); const runPage=await renderer();
-    const {createDirectoryPlugins,invokeDirectoryPlugin}=require('../src/main/directory-plugins');
+    const {createDirectoryPlugins,invokeDirectoryPlugin}=require('./host/directory-plugins');
     const fixture=require('./fixtures/feishu-directory.json');
     let saved={};
     const service=createDirectoryPlugins({store:{load:async()=>saved,patch:async(p)=>{saved={...saved,...p};}},fetch:async(raw,options)=>{
@@ -628,7 +628,7 @@ async function main() {
 
   await run('D2', '飞书浏览器授权连接文件夹与关闭取消', async () => {
     const f=await prepare(), runPage=await renderer();
-    const {createDirectoryPlugins,invokeDirectoryPlugin}=require('../src/main/directory-plugins');
+    const {createDirectoryPlugins,invokeDirectoryPlugin}=require('./host/directory-plugins');
     const fixture=require('./fixtures/feishu-auth.json'), directory=require('./fixtures/feishu-directory.json');
     let saved={}, clock=100000, opened=[], replies=[], cancelled=false, fast=true;
     const service=createDirectoryPlugins({authNow:()=>clock,store:{load:async()=>saved,patch:async(p)=>{saved={...saved,...p};}},fetch:async(raw,options)=>{
@@ -685,7 +685,7 @@ async function main() {
 
   await run('D3', '金山内置授权、目录快捷项与网页预览', async () => {
     const f=await prepare(),runPage=await renderer();
-    const {createDirectoryPlugins,invokeDirectoryPlugin}=require('../src/main/directory-plugins');
+    const {createDirectoryPlugins,invokeDirectoryPlugin}=require('./host/directory-plugins');
     const fixture=require('./fixtures/kdocs-skill.json');let saved={},secure=null,clock=100000,opened=[];
     const service=createDirectoryPlugins({authNow:()=>clock,kdocsCredentials:{load:async()=>secure,save:async(v)=>{secure=v;return true;},remove:async()=>{secure=null;}},store:{load:async()=>saved,patch:async(p)=>{saved={...saved,...p};}},fetch:async(raw,options)=>{
       const url=new URL(raw),body=JSON.parse(options.body);
@@ -1768,7 +1768,7 @@ async function main() {
 
   await run('D4', '云文件夹右键刷新，仅失效目标目录', async () => {
     const runPage=await renderer(), ws=freshDir('cloud-cache-ui');
-    const {createDirectoryPlugins,invokeDirectoryPlugin}=require('../src/main/directory-plugins');
+    const {createDirectoryPlugins,invokeDirectoryPlugin}=require('./host/directory-plugins');
     const fixture=require('./fixtures/feishu-directory.json');
     let state={},calls={root:0,folderA:0,folderC:0};
     const service=createDirectoryPlugins({store:{load:async()=>state,patch:async(p)=>{state={...state,...p};}},fetch:async(raw)=>{

@@ -19,7 +19,7 @@ const {
   MAX_PINS,
   MAX_PANES_PER_COL,
   PINNED_KINDS: PINNED_KIND_LIST
-} = require('../shared/contracts');
+} = require('../../src/shared/contracts');
 
 const MAX_ICON_CHARS = 512 * 1024;
 const MAX_NAV_LEVELS = 16;

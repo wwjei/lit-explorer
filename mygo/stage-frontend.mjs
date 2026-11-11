@@ -1,8 +1,7 @@
 /**
  * 把共享渲染层与资源拷进 mygo/frontend/，供 go:embed 打包。
  *
- * 两个 shell 共用 src/renderer 与 src/shared；这里只带渲染层、资源与示例项目，
- * 不带 src/main（Electron 主进程）与 docs/（MyGo 版的菜单不引用这些文档）。
+ * 只带产品渲染层、共享配置、资源与示例项目，不带 test/host、测试工具或开发文档。
  * 示例项目要落到磁盘上才能当工作区打开（见 main.go 的 GetSampleRoot）。
  * 许可声明在资源复制后按实际 Go 依赖生成；失败时删除本次 stage，禁止嵌入半成品。
  *

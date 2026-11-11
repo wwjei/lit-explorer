@@ -1,6 +1,6 @@
 'use strict';
 // 参考飞书官方 CLI 的公开协议；实验入口，不分发公共 App Secret。
-const config = require('../shared/feishu-auth.json');
+const config = require('../../src/shared/feishu-auth.json');
 const fail = (code) => Object.assign(new Error(code), { code });
 const secret = (v) => typeof v === 'string' && v.length > 0 && v.length <= 4096 && !/[\s\x00-\x1f\x7f]/.test(v);
 function verificationURL(raw) {

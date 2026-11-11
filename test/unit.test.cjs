@@ -147,7 +147,7 @@ function loadRenderer() {
   });
 
   await run('S3', '工作区路径边界', async () => {
-    const fsApi = require(path.join(ROOT, 'src/main/fs-api.js'));
+    const fsApi = require(path.join(ROOT, 'test/host/fs-api.js'));
 
     const ws = freshDir('ws');
     const outside = freshDir('outside');
@@ -187,7 +187,7 @@ function loadRenderer() {
   });
 
   await run('S4', '渲染进程不能自行扩大授权根', () => {
-    const fsApi = require(path.join(ROOT, 'src/main/fs-api.js'));
+    const fsApi = require(path.join(ROOT, 'test/host/fs-api.js'));
     const sample = path.join(ROOT, 'sample-project');
     const other = path.join(ROOT, 'docs');
 
@@ -204,7 +204,7 @@ function loadRenderer() {
   });
 
   await run('S5', '切换工作区后旧工作区不再可读', async () => {
-    const fsApi = require(path.join(ROOT, 'src/main/fs-api.js'));
+    const fsApi = require(path.join(ROOT, 'test/host/fs-api.js'));
 
     const first = freshDir('ws-first');
     const second = freshDir('ws-second');
@@ -225,7 +225,7 @@ function loadRenderer() {
   });
 
   await run('S6', '渲染进程提交的设置：字段白名单与路径校验', () => {
-    const san = require(path.join(ROOT, 'src/main/state-sanitize.js'));
+    const san = require(path.join(ROOT, 'test/host/state-sanitize.js'));
 
     const bounds = san.windowBounds({
       width: 1200, height: 800, x: 10, y: -20,
@@ -265,7 +265,7 @@ function loadRenderer() {
     eqJson('文字图标去掉空白并只留两个字符', patch.projects[2].icon, { type: 'text', text: '中文' });
 
     // 网页快捷方式：只认 http(s)，且不能借网页条目把 path 写进设置
-    const webUrl = require(path.join(ROOT, 'src/main/web-url.js'));
+    const webUrl = require(path.join(ROOT, 'test/host/web-url.js'));
     eq('http(s) 地址规范化', webUrl.normalizeWebUrl(' HTTP://A.EXAMPLE '), 'http://a.example/');
     eq('危险 / 本地 / 带凭据的地址一律拒绝',
       ['javascript:alert(1)', 'file:///C:/secret', 'data:text/html,x', 'ms-msdt:/id',
@@ -347,8 +347,8 @@ function loadRenderer() {
   });
 
   await run('S8', '外部参考目录的授权、撤销与只读边界', async () => {
-    const fsApi = require('../src/main/fs-api');
-    const { createReferenceDirs } = require('../src/main/reference-dirs');
+    const fsApi = require('./host/fs-api');
+    const { createReferenceDirs } = require('./host/reference-dirs');
     const project = freshDir('reference-project');
     const other = freshDir('reference-other');
     const external = freshDir('reference-external');
@@ -379,7 +379,7 @@ function loadRenderer() {
       try { await fsApi.assertAllowed(path.join(link, 'secret')); } catch (err) { error = err.code; }
       ok('参考目录中的链接不能越界', !!error, error);
     }
-    const sanitized = require('../src/main/state-sanitize').sanitizePatch({ referenceDirs: { [root]: [other] } }, () => true);
+    const sanitized = require('./host/state-sanitize').sanitizePatch({ referenceDirs: { [root]: [other] } }, () => true);
     eq('页面设置不能伪造参考目录授权', Object.keys(sanitized).length, 0);
     await service.remove(external);
     error = null;
@@ -398,7 +398,7 @@ function loadRenderer() {
   });
 
   await run('S9', '目录插件契约、飞书接口、权限及凭据隔离', async () => {
-    const {createDirectoryPlugins, safeDocumentUrl, providers} = require('../src/main/directory-plugins');
+    const {createDirectoryPlugins, safeDocumentUrl, providers} = require('./host/directory-plugins');
     const manifest = require('../src/shared/directory-providers.json');
     const fixture = require('./fixtures/feishu-directory.json');
     let state = {}, requests = [], mode = 'normal';
@@ -486,7 +486,7 @@ function loadRenderer() {
   });
 
   await run('S10', 'Wiki 目录挂载与移除单文档入口', async () => {
-    const {createDirectoryPlugins}=require('../src/main/directory-plugins');
+    const {createDirectoryPlugins}=require('./host/directory-plugins');
     const fixture=require('./fixtures/feishu-directory.json');
     let state={},calls=[];
     const api=createDirectoryPlugins({store:{load:async()=>state,patch:async(p)=>{state={...state,...p};}},fetch:async(raw,options)=>{
@@ -518,7 +518,7 @@ function loadRenderer() {
   });
 
   await run('S12', '内置金山插件：浏览器授权、目录与独立文件夹', async () => {
-    const {createDirectoryPlugins,invokeDirectoryPlugin}=require('../src/main/directory-plugins');
+    const {createDirectoryPlugins,invokeDirectoryPlugin}=require('./host/directory-plugins');
     const fixture=require('./fixtures/kdocs-skill.json');
     let saved={},calls=[],clock=100000,mode='normal',secure=null;
     const api=createDirectoryPlugins({authNow:()=>clock,kdocsCredentials:{load:async()=>secure,save:async(v)=>{secure=v;return true;},remove:async()=>{secure=null;}},store:{load:async()=>saved,patch:async(p)=>{saved={...saved,...p};}},fetch:async(raw,options)=>{
@@ -567,8 +567,8 @@ function loadRenderer() {
   });
 
   await run('S13', '金山原生授权边界与系统保护存储', async () => {
-    const {createKdocsPlugin}=require('../src/main/kdocs-plugin');
-    const {protectedCredentials}=require('../src/main/protected-credentials');
+    const {createKdocsPlugin}=require('./host/kdocs-plugin');
+    const {protectedCredentials}=require('./host/protected-credentials');
     const fixture=require('./fixtures/kdocs-skill.json');
     const file=path.join(freshDir('kdocs-credentials'),'credential.bin');
     const store=protectedCredentials({file,available:()=>true,encrypt:(s)=>Buffer.from(s).map(v=>v^170),decrypt:(b)=>Buffer.from(b.map(v=>v^170)).toString()});
@@ -609,7 +609,7 @@ function loadRenderer() {
   });
 
   await run('S11', '飞书设备授权：本机凭据、注册、取消与刷新', async () => {
-    const { createFeishuAuth, verificationURL } = require('../src/main/feishu-auth');
+    const { createFeishuAuth, verificationURL } = require('./host/feishu-auth');
     const fixture = require('./fixtures/feishu-auth.json');
     let clock = 100000, queue = [], calls = [];
     const auth = createFeishuAuth({ now: () => clock, fetch: async (raw, options) => {
@@ -739,7 +739,7 @@ function loadRenderer() {
   });
 
   await run('S16', '目录缓存 48 小时、文件夹分页失效与旧响应隔离', async () => {
-    const {createDirectoryPlugins}=require('../src/main/directory-plugins');
+    const {createDirectoryPlugins}=require('./host/directory-plugins');
     const fixture=require('./fixtures/feishu-directory.json');
     let now=0, state={}, calls=0, cursor='next-page', hold=false, release;
     const api=createDirectoryPlugins({cacheNow:()=>now,store:{load:async()=>state,patch:async(p)=>{state={...state,...p};}},fetch:async(raw)=>{

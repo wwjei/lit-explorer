@@ -78,3 +78,29 @@ jobs:
         # 构建工具链分开，只有前者出现 high / critical 才返回非零。原始 npm audit 列表
         # 把两类混在一起，看了没法决定要不要紧张。
         run: npm run audit
+
+  installer:
+    name: 安装与升级验证
+    if: github.event_name == 'pull_request'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: mygo/go.mod
+          cache-dependency-path: mygo/go.sum
+      - name: 安装 NSIS
+        shell: pwsh
+        run: |
+          choco install nsis --yes --no-progress
+          "${env:ProgramFiles(x86)}\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+      - name: 构建唯一产品
+        run: npm run dist
+      - name: 验证安装、升级与卸载
+        shell: pwsh
+        run: ./scripts/verify-installer.ps1
