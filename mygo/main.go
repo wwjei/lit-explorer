@@ -1,6 +1,6 @@
 package main
 
-// lit explorer 的 MyGo 版：用系统 WebView2 承载同一份渲染层，
+// Lit Explorer 原生宿主：用系统 WebView2 承载渲染层，
 // Go 侧重新实现 preload 暴露的那些能力（文件系统、状态、菜单、协议、窗口）。
 // 内嵌网页由 fork 的 ChildWebView 承载，状态与可见性在 UI 线程上同步。
 
@@ -68,7 +68,7 @@ type App struct {
 	seqMu            sync.Mutex
 	saveTim          *time.Timer
 
-	// 网页窗格：按地址保活一个子 webview（对应 Electron 的 web-views.js）
+	// 网页窗格：按地址保活一个子 webview
 	webMu    sync.Mutex
 	webViews map[string]*webViewRec
 }
@@ -743,7 +743,7 @@ func (a *App) CopyText(text string) map[string]any {
 
 const maxWebViews = 6
 
-// WebSync 对应 Electron 的 web:sync：按地址保活子 webview，并更新矩形 / 可见性。
+// WebSync 实现 web:sync：按地址保活子 webview，并更新矩形 / 可见性。
 // 地址不在列表里的视图销毁；同一地址只留一份（与 web-views.js 一致）。
 func (a *App) WebSync(list []webSyncItem) map[string]any {
 	var result map[string]any
@@ -822,7 +822,7 @@ func rectOf(r webSyncRect) mygo.Rectangle {
 
 func (a *App) emitWebState(rec *webViewRec, st mygo.ChildWebViewState) {
 	if st.Status == "popup" {
-		// 页面要开新窗口：与 Electron 一样交给系统浏览器
+		// 页面要开新窗口：交给系统浏览器
 		openExternal(st.CurrentURL)
 		return
 	}

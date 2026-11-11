@@ -11,8 +11,8 @@
 
 release.yml 复用 ci.yml 测试，然后安装 Go / NSIS，执行 `npm run dist`。
 构建脚本根据 `src/shared/product.json` 生成技术配置，原生编译后用
-`build/installer.nsi` 创建产品安装器。`scripts/verify-installer.ps1` 在 CI 临时目录
-验证安装、同目录升级、卸载及可执行文件/注册表的产品名称。
+`build/installer.nsi` 创建产品安装器。`scripts/verify-installer.ps1` 在一次性 Windows CI 账户的默认目录
+验证上一版迁移、安装、同目录升级、卸载及可执行文件/注册表的产品名称。
 
 默认安装目录 `%LOCALAPPDATA%\Programs\Lit Explorer`；产品 EXE、快捷方式与卸载登记均为
 Lit Explorer。历史技术标识仅用于升级兼容。旧版本设置和兼容密文由 `product_data.go`
