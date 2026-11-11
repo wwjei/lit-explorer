@@ -1,173 +1,56 @@
 # CODEMAP
 
-面向 Agent 与新会话的代码入口索引：**先查这张表，再决定读哪几个文件**。产品行为以
-[FEATURES.md](FEATURES.md) 为准，施工约束见 [AGENTS.md](AGENTS.md)，本文只记结构与入口，
-不重复需求细节。
+产品：Lit Explorer，Windows x64，唯一宿主为 Go + WebView2。Electron 只作为界面测试工具。
 
-维护规则：新增业务组件、关键方法、IPC / 协议 / DOM 约定时同步本表；只列稳定入口，
-不列随时会改的私有小函数。表里的「搜索」列是改代码时最省事的落点。
+## 启动、安装与状态
 
-## 1. 进程与启动
+- `mygo/main.go`：应用、窗口、桥接、工作区提交、网页视图、原生菜单与预览服务。
+- `src/shared/product.json`：产品名称、构建 slug、稳定技术标识。
+- `mygo/product_data.go`：首次升级迁移设置与兼容密文；不覆盖新数据或复制不兼容凭据。
+- `mygo/statefile.go`：设置白名单、项目、收藏、布局与原子持久化。
+- `mygo/fsapi.go`：真实路径授权、文件列表、读取、SVG 版本冲突保存。
+- `mygo/bridge.js`：`window.pv` 契约，原生 RPC 与事件。
+- `build/installer.nsi` / `build/close-app.ps1`：安装目录、旧安装接管、快捷方式、卸载、文件夹右键菜单；只请求关闭目标应用，不强杀。
+- `scripts/build-mygo.mjs`：生成框架配置、staging、原生编译及产品安装器；`scripts/verify-installer.ps1` 在 CI 验证安装/升级/卸载。
 
-- `src/main/main.js`：主进程。`createWindow()`、`registerPreviewProtocol()`（`pv://`）、
-  `registerIpc()`、`openWorkspace()`、`showContextMenu()`、`showAppMenu()`。
-- `src/main/preload.js`：`contextBridge` 只暴露 `pv.*`；渲染进程所有读写都从这里过。
-- `src/shared/contracts.js`：主进程与渲染进程共用的数量上限与可固定类型白名单
-  （`MAX_PINS`、`MAX_PROJECTS`、`MAX_FAV_ITEMS`、`MAX_URL_CHARS`、`PINNED_KINDS`…）。
-- `src/renderer/index.html` → `app.js`：界面编排。模块是 IIFE + `window.PV`，加载顺序是契约：
-  `shared/contracts → paths → icons → highlight → markdown → pane → preview-body → webview →
-  save-queue → svgedit → find → projects → app`。`vendor/docpreview` 不在这条链上，由 `PV.body.loadDocPreview()`
-  在第一次打开 docx / pptx 时按需注入。
-- `src/renderer/vendor/`、`build/icons/`、`build/notices/` 是生成物，不手改。
+## 渲染层
 
-## 2. 按任务找入口
+普通 IIFE，加载顺序在 `src/renderer/index.html`：
+`contracts → paths → icons → highlight → markdown → pane → preview-body → webview → save-queue → svgedit → find → projects → changes → cloud-directories → app`。
 
-| 要改什么 | 先看 | 关键方法 / 选择器 | 搜索关键字 |
-| --- | --- | --- | --- |
-| 窗口、标题栏、原生菜单、文件右键菜单 | `src/main/main.js`、`src/renderer/app.js` | `createWindow()`、`showContextMenu()`、`showAppMenu()`、`ui:context-menu` | `app:rescan`、`window:minimize`、`showItemInFolder` |
-| 打开工作区、路径授权边界 | `main.js`、`src/main/fs-api.js` | `openWorkspace()`、`offerRoot()`、`allowRoot()`、`assertAllowed()`、`isInsideAnyRoot()` | `EACCES_ROOT`、`NOT_OFFERED`、`workspace:open`、`workspace:opened` |
-| 文件列表、多栏导航、虚拟滚动 | `src/renderer/app.js` | `loadColumn()`、`buildColumn()`、`renderColumns()`、`renderColumnWindow()`、`selectNode()`、`itemsOf()`、`restoreNav()` | `state.path`、`state.cols`、`nav`、`revealPreview`、`.col-list`、`.row`、`ensureVisible` |
-| 预览区布局、宽度、固定列、分屏、项目布局快照 | `src/renderer/pane.js`、`src/renderer/styles.css` | `createColumn()`、`layoutColumn()`、`renderPreview()`、`pinCurrent()`、`makePinPaneFromTemp()`、`applySplit()`、`applyInsert()`、`dropInfo()`、`paneBudget()`、`unpinPane()`、`layoutSnapshot()`、`restoreLayout()` | `bodyKey`、`reqId`、`pending`、`MAX_PINS`、`MAX_PANES_PER_COL`、`nav.layout`、`mainFloor`、`.pane-col`、`.pane-stack`、`.pane-split`、`.pv-grip` |
-| 路径比较 / 相对工作区的显示路径 | `src/renderer/paths.js` | `same()`、`within()`、`partsUnder()`、`relUnder()`、`compareNodes()`、`baseName()` | `PV.paths` |
-| 跨进程上限与可固定类型 | `src/shared/contracts.js` | `MAX_PINS`、`MAX_PANES_PER_COL`、`MAX_PROJECTS`、`MAX_FAV_ITEMS`、`MAX_URL_CHARS`、`MAX_MD_IMAGES`、`PINNED_KINDS` | `PV.contracts` |
-| 预览正文按类型分派、头部按钮 | `src/renderer/preview-body.js` | `RENDERERS`、`pickRenderer()`、`capabilities()`、`renderPaneBody()`、`bodyKeyFor()`、`paneHeadHtml()`、`webHeadHtml()`、`loadDocPreview()`、`noteLoaded()` | `PV.body`、`RENDERERS`、`match`、`capabilities`、`pane.mode`、`pane.svgEdit`、`loadingState`、`fallbackCard` |
-| Markdown 渲染、链接与图片白名单 | `src/renderer/markdown.js` | `toHtml()`、`imageSources()`、`safeHref()`、`safeImgSrc()` | `javascript:`、`markdown`、`inline()`、`md-img-missing` |
-| 代码高亮、降级与 Worker | `src/renderer/highlight.js`、`src/renderer/highlight/` | `mount()`、`plan()`、`tokenize()`、`tokenHtml()`、`highlightFences()` | `PV.highlight`、`shiki`、`cacheGet`、`getWorker` |
-| Word / PPT 内嵌预览 | `src/renderer/docpreview.js`、`preview-body.js` | `renderDocx()`、`renderPptx()`、`renderDocPreview()`、`loadDocPreview()`、`sanitizeDocDom()` | `docx-preview`、`pptx-preview`、`altChunk`、`PV.docpreview`、按需加载 |
-| 图片 / HTML / PDF 的协议预览地址 | `src/main/main.js`、`preview-body.js` | `toPreviewUrl()`、`registerPreviewProtocol()`、`resolveImageTargets()`、`renderImageView()`、`renderImageSeq()` | `pv://local`、`fs:preview-url`、`fs:resolve-images`、`?v=<mtime>-<size>`、`cache-control: no-store` |
-| 图片缩放、连续预览 | `preview-body.js`、`pane.js` | `renderImageView()`、`renderImageSeq()`、`setZoom()`、`toggleSeq()`、`paneScrollKeep()` | `pane.zoom`、`pane.continuous`、`.imgseq`、`.img-wrap` |
-| 网页快速访问 / 内嵌网页 | `app.js`、`src/renderer/webview.js`、`src/main/web-views.js`、`src/main/web-url.js` | `openWebFavorite()`、`openWebForm()`、`handleWebState()`、`PV.web.sync()`、`webViews.sync()`、`normalizeWebUrl()`、`configureSession()`、`clipboardAllowed()`、`askClipboard()` | `web:sync`、`WebContentsView`、`favs`、`pane.webCurrentUrl`、`acquireOcclusion`、`acquireDragHide`、`clipboard-read`、`clipboard-sanitized-write`、`permissions.query` |
-| 预览内查找 | `src/renderer/find.js` | `open()`、`refresh()`、`carryFrom()`、`afterRender()`、`markMatches()` | `PV.find`、`.find-bar`、`mark.find-hit`、`Ctrl+F` |
-| SVG 编辑与受限保存 | `src/renderer/svgedit.js`、`preview-body.js`、`src/main/fs-api.js` | `mount()`、`parseSvg()`、`sanitize()`、`createEditor()`、`writeSvgFile()`、`pv.writeSvg` | `fs:write-svg`、`pane.svgEdit`、`pane.view`、`CONFLICT`、`MAX_SVG_WRITE_BYTES` |
-| 项目切换条、项目图标、下划线动画 | `src/renderer/projects.js`、`styles.css` | `renderDock()`、`markActive()`、`rememberLine()`、`applyLineMove()`、`openPicker()`、`quickHtml()`、`setIcon()`、`applyTextIcon()`、`sanitizeIcon()`、`navOf()`、`saveNav()` | `PV.projects`、`nav`、`.proj-dock`、`.proj-tile`、`is-line-move`、`--proj-line-from`、`.pj-pop`、`.pj-text-in` |
-| 设置持久化与白名单 | `src/main/store.js`、`src/main/state-sanitize.js` | `load()`、`patch()`、`sanitizePatch()`、`sanitizeProjects()`、`sanitizeNav()`、`sanitizeLayout()`、`sanitizeIcon()`、`sanitizeFavorites()` | `app:get-state`、`app:set-state`、`state.json`、`DEFAULTS`、`nav.layout` |
-| 外部变更监测、重新扫描提示 | `app.js` | `startChangeWatch()`、`pollPane()`、`pollOpenDirs()`、`rescan()`、`PV.pane.renderPane()` | `dirtyDirs`、`dirKnown`、`is-changed`、`[data-rescan]`、`setInterval` |
-| 主题、窗口几何、面板比例 | `app.js`、`main.js`、`src/main/state-sanitize.js`、`styles.css` | `applyTheme()`、`setPreviewVisible()`、`swapLeftPanels()`、`applyLeftSplit()`、`windowBounds()` | `[data-theme]`、`previewOpen`、`leftSplitRatio`、`favTop`、`window` |
-| 单元 / 集成 / 界面测试 | `test/unit.test.cjs`、`test/integration.test.cjs`、`test/probe-harness.js`、`scripts/run-probe.mjs` | `run()`、`ok()`、`eq()`、`done()`、`H.pick / H.temp / H.cols / H.pins` | `--only`、`--skip`、`npm run probe`、`[shot-js]` |
-
-## 3. 关键数据与 DOM 契约
-
-- **文件节点 `node`**：`{ path, name, isDir, kind, size, mtime }`；网页节点另有
-  `{ kind:'web', url, webCurrentUrl, webError }`。`kind` 由 `fs-api.kindFor()` 与
-  `app.js` 的网页条目共同决定。
-- **窗格 `pane`**：`bodyKey`（内容身份）、`lifecycle`（alive / destroyed）、`reqId` / `pending`（异步任务身份）、`node`、
-  `mode`、`view`、`svgEdit`、`zoom`、`continuous`、`changed`、`known`、`col`、`findEl`。
-- **列 `column`**：`{ el, stack, splitEl, panes:[pane…], w, split, temp }`。宽度和上下比例
-  属于列，不属于单个窗格；一列最多 2 个窗格。
-- **项目 `project`**：`{ path, name, icon, nav }`；`icon` 只接受
-  `{type:'glyph',id}`、`{type:'image',data}`、`{type:'text',text}` 或 `null`（名字首字）。
-- **`state.json`**：`theme / previewOpen / previewWidth / lastRoot / window / recentRoots /
-  projects / hideDot / favorites / favTop / leftSplitRatio / previewDocx / previewPptx`。
-  渲染进程只能通过 `app:set-state` 写白名单字段。
-- **DOM / CSS 契约**：`.pane-col > .pane-stack > .pane`、`.pane-split`、`.pv-grip`、
-  `.proj-dock > .proj-tile`、`.proj-tile.is-on::after`、`.pj-pop`；改结构先更新
-  `test/probe-harness.js` 顶部的选择器约定与 [docs/agents/build.md](docs/agents/build.md)。
-
-## 4. 主要链路
-
-- **打开工作区**：`openWorkspace()`（main）→ `workspace:opened` → `app.openRoot()` →
-  `PV.projects.setActive/noteOpened()`（记录旧下划线位置）→ `render()` 重建第一栏 →
-  `PV.projects.mount()` / `renderDock()` → `applyLineMove()`。
-- **预览渲染**：`app.render()` → `PV.pane.renderPreview()` → `renderPane()` →
-  `runTask()` → `PV.body.render()` → `task.write/replace`（晚到的旧任务因 `reqId` 丢弃）→
-  `afterLayout()` → `PV.web.schedule()`。
-- **固定 / 分屏**：`.pv-grip` pointerdown → `dropInfo()` 决定 `split` 或 `insert` →
-  `makePinPaneFromTemp()` / `adoptPaneBody()` → `applySplit()` / `applyInsert()` →
-  `renderPreview()` → `restorePaneTop()`。
-- **查找**：`Ctrl+F` → `PV.find.open()`；渲染完成后 `afterRender()` 重落高亮；固定 / 分屏迁移时
-  `carryFrom()` 把查询词带到新窗格。
-- **SVG 保存**：`PV.svgedit.mount()` → 编辑动作 → 自动保存队列 → `pv.writeSvg()` →
-  `fs:write-svg` → `writeSvgFile()`（校验真实路径 / 扩展名 / size+mtime 基线，临时文件原子替换）。
-- **项目切换**：`.proj-tile` click → `switchProject()` → `pv.openRoot()` → 主进程
-  `openWorkspace()` → `workspace:opened` → `app.openRoot()`。
-
-## 5. 测试与探针
-
-- 纯逻辑：`npm run test:unit`（`test/unit.test.cjs`，S2–S7 等）。
-- Electron 集成：`npm run test:integration -- --only=P3,P4`（`test/integration.test.cjs`）；
-  全部用例 id 在文件头。
-- 界面截图：`npm run probe -- .tmp/my-probe.js --open=.tmp/ws`；探针骨架是
-  `test/probe-harness.js`，`H.*` 选择器与等待都在里面，**改界面结构要先改骨架**。
-- 文档索引：`npm run check:docs`（`scripts/check-docs.mjs`）检查 `docs/` 下的文档都进了
-  AGENTS.md / CODEMAP.md，且相对链接没有死链；CI 在开 PR 与合并进 main 时跑。
-- 会受原生 `WebContentsView` 影响的网页列，`capturePage()` 拍不到页面内容；只截图宿主 UI。
-
-## 6. MyGo shell（`mygo/`，随 Release 一起发布）
-
-用 Go + 系统 WebView2 承载同一份 `src/renderer`，只重写主进程能力。实测与能力对照见
-[docs/design/mygo-port.md](docs/design/mygo-port.md)，构建与差异见
-[mygo/README.md](mygo/README.md)。**两个 shell 共用界面代码：改 `src/renderer` 时
-要同时想一遍 Go 侧有没有对应实现。**
-
-| 要改什么 | 先看 | 关键入口 | 搜索关键字 |
-| --- | --- | --- | --- |
-| 窗口、菜单、单实例、预览服务 | `mygo/main.go` | `createWindow()`、`saveWindowBounds()`、`startPreviewServer()`、`OpenContextMenu()`、`OpenAppMenu()` | `mygo.BindAs`、`mygo.Shell`、`Frameless` |
-| 工作区切换提交 | `mygo/main.go` | `openWorkspace()`、`openWorkspaceWith()`、`resolveWorkspaceRoot()` | `seqMu`、`SUPERSEDED`、`RunOnMain` |
-| 文件系统授权边界与 SVG 保存 | `mygo/fsapi.go` | `assertAllowed()`、`realPath()`、`listDir()`、`writeSvgFile()`、`kindFor()` | `EACCES_ROOT`、`CONFLICT`、`cachedError` |
-| 设置持久化与白名单 | `mygo/statefile.go` | `loadState()`、`patchFromPage()`、`sanitizeProjects()`、`sanitizeLayout()` | 磁盘项目校验结构、页面项目校验 `isOfferedRoot`、`state.json` |
-| 渲染层桥接 | `mygo/bridge.js` | `window.pv`、`capabilities.webPane` | `mygo.call`、`on('pv:…')` |
-| 前端资源打包 | `mygo/stage-frontend.mjs` | 生成 `mygo/frontend/`（gitignore）供 `go:embed`；调用 CLI 前完成 | `stage-frontend` |
-| MyGo 第三方许可 | `scripts/build-mygo-notices.mjs` | 合并 npm、实际链接的 Go 模块及运行时许可 | `Module.Replace`、`THIRD-PARTY-NOTICES.md` |
-| MyGo 回归测试 | `mygo/fsapi_test.go`、`mygo/main_test.go` | 文件写入边界、项目恢复、并发授权、网页状态、窗口几何 | `go test ./...` |
-| 安装包与产物命名 | `scripts/build-mygo.mjs` | 配置生成、CLI 前 staging、`dist/` 改名 | `MYGO_CLI`、`Lit-Explorer`（默认）、`Lit-Explorer-Electron-Backup`（备用） |
-| 网页窗格（内嵌网页） | `mygo/main.go`、`mygo/bridge.js` | `WebSync()`、`syncWebViews()`、`WebReload()`、`emitWebState()`、`applyState()`、`syncVisibility()` | `ChildWebView`、`webViewRec`、加载成功才显示、`pv:web-state` |
-
-网页窗格用 fork 的 `Window.NewChildWebView()`（`go.mod` 的 `replace` 指向
-`wwjei/mygo v0.7.1-lit.2`）：`App.WebSync` 按地址保活视图、`WebReload` 刷新、
-状态转成 `web:state`。`app.js` 的 `openWebFavorite()` 按
-`pv.capabilities.webPane` 决定是否内嵌（Electron 与 MyGo 都是 true，其他后端为 false）。
-
-## 7. 文档地图
-
-| 文档 | 用途 |
+| 模块 | 入口与职责 |
 | --- | --- |
-| [FEATURES.md](FEATURES.md) | 产品行为、明确的非目标 |
-| [README.md](README.md) | 用户用法与已知限制 |
-| [AGENTS.md](AGENTS.md) | 施工红线、按场景读的索引 |
-| [docs/agents/build.md](docs/agents/build.md) | renderer 分层、构建、加载顺序 |
-| [docs/agents/verify.md](docs/agents/verify.md) | 测试 / 探针 / 安装包验证 |
-| [docs/agents/security.md](docs/agents/security.md) | preload、IPC、自定义协议、写入通道 |
-| [docs/security-debt.md](docs/security-debt.md) | 已知但暂无可行修法的依赖 / 安全问题 |
-| [further_notes.md](further_notes.md) / [PENDING.md](PENDING.md) | 想做的功能 / 顺手清的小问题 |
+| `app.js` | `openRoot/loadColumn/selectNode/restoreNav/rescan`，工作区代次、导航事务、目录列与接线 |
+| `pane.js` | `createPane/renderPane/beginTask/destroyPane`，alive/destroyed、reqId、正文身份、固定、分屏、拖动与滚动 |
+| `preview-body.js` | `RENDERERS/renderPaneBody/bodyKeyFor`，内容分派、图片、Markdown、文档组件按需加载 |
+| `save-queue.js` | `PV.saveQueue.create/submit/dispose/state`，期望/在途/已落盘版本、串行最新写入 |
+| `svgedit.js` | 编辑、历史、手势取消回滚、保存队列及资源清理 |
+| `webview.js` | 几何同步、`acquireOcclusion/acquireDragHide` 的独立遮挡租约 |
+| `find.js` | 查找条、全文命中、迁移及重渲染后重落高亮 |
+| `projects.js` | 项目条、布局快照、图标 picker session 和异步结果归属 |
+| `changes.js` | stat 基线与变更检测，工作区/任务/保存版本隔离 |
+| `cloud-directories.js` | 授权表单、目录、分页、详情、快捷项、`refreshFolder/closeContextMenu` |
+| `highlight.js` / `highlight/worker.js` | Worker 分词、缓存、虚拟列表、降级 |
+| `markdown.js` / `docpreview.js` | Markdown / Office DOM 渲染与安全清洗 |
+| `paths.js` / `icons.js` / `styles.css` | 路径展示、图标、布局与视觉 |
 
-## 磁盘监测与系统集成
+## 云目录
 
-- `src/renderer/changes.js`：`PV.changes.create()` 注入工作区状态与回调，负责目录及预览版本监测；刷新调度与按钮呈现在 `app.js`。
-- `src/main/folder-menu.js`：当前用户 Windows 文件夹菜单注册与取消；安装 / 卸载钩子在 `build/installer.nsh`。MyGo 对应逻辑在 `main.go`。
-- `PV.highlight.mount().find()`：在完整源码中查找，按命中行滚动虚拟视图并保留语法颜色；`find.js` 共用查询条与快捷键。
+- `src/shared/directory-providers.json`：版本化声明、固定 API 域名、目录根与节点映射。
+- `mygo/directory_plugins.go`：`DirectoryCall`、会话/已发现节点/游标授权；48 小时、128 页缓存；刷新文件夹失效其全部分页，版本检查阻止旧响应回填。
+- `mygo/feishu_auth.go` / `src/shared/feishu-auth.json`：实验设备授权、注册、令牌刷新与取消。
+- `mygo/kdocs_plugin.go` / `kdocs_protection_windows.go` / `src/shared/kdocs-skill.json`：官方浏览器授权、四个读取工具、DPAPI 保存。
+- `mygo/references.go`：原生目录选择授权与项目只读参考根。
+- `pv.list(dir, requestId=0)` 的元信息事件带 requestId，只有当前列接受。
 
-## 外部参考目录
+## 测试与构建
 
-- `src/main/reference-dirs.js`：`createReferenceDirs()` 管理原生选择框授权、每项目持久化、恢复与移除；`main.js` 在工作区提交前准备参考目录，并在序号检查后同步登记。
-- `mygo/references.go`：`ReferenceDirs / AddReferenceDir / RemoveReferenceDir` 为同形 bridge 能力，`seqMu` 保护活动项目与目录授权的提交。
-- `fs-api.js` / `mygo/fsapi.go` 区分可读根与可写根，参考目录不会进入 SVG 可写范围；`app.js` 的 `rootForPath / browseRoot / refreshFavorites` 区分项目身份与浏览来源。
-- 云目录插件的后续方案见 [设计文档](docs/design/external-directory-plugins.md)。
+- `test/unit.test.cjs`：渲染纯逻辑、Node 测试宿主契约及 S14–S16 并发回归。
+- `test/integration.test.cjs`：真实 DOM + 受控 IPC，C/P/E/F/R/D/W/L 段落。
+- `test/host/`：仅测试用的 Node 适配与 preload，不是第二个产品；`main.js` 不包含产品窗口/生命周期。
+- `mygo/*_test.go`：原生授权、安全边界、凭据、缓存、工作区提交、数据迁移、窗口状态。
+- `mygo/stage-frontend.mjs`：仅复制 renderer/shared/资源/产品文档，生成 Go + npm 第三方许可；不复制测试宿主。
+- `scripts/run-native.mjs`：Windows 开发启动；`scripts/run-probe.mjs`：独立 profile 的原生探针。
 
-## 目录插件、飞书与金山
-
-- `src/shared/directory-providers.json`：共享版本化插件清单，包含飞书文件夹 / Wiki 目录和金山个人文件夹映射；金山使用内置 Skill transport（原生 HTTP，不运行 CLI）；默认根、节点映射和分页在清单声明。
-- `src/main/directory-plugins.js`：`createDirectoryPlugins / invokeDirectoryPlugin` 管理挂载、会话令牌、节点与分页授权、请求、缓存、取消和标准化。
-- `mygo/directory_plugins.go`：同形宿主和 `App.DirectoryCall`；从 staging 后的共享清单加载插件。
-- `src/renderer/cloud-directories.js`：`PV.cloud` 管理来源配置表单、目录列表、详情、分页和在线文档打开；`app.js` 注入预览与快捷访问回调。
-- `pane.js` 的 `savedPaneData` 排除云来源预览，避免解析出的临时 URL 持久化；项目导航的云文档选中态同样不写入磁盘。
-- 接口推演、其他服务接入步骤与限制见 [目录插件体系](docs/design/external-directory-plugins.md)。
-
-## 飞书客户端设备授权
-
-`src/main/feishu-auth.js` / `mygo/feishu_auth.go`：`start/poll/take/token/cancel/clear`；共享配置 `src/shared/feishu-auth.json`。目录桥接新增 `authStart` / `authPoll`，`connect` 可消费一次性 `authId`，原始凭据不返回界面。方案、资格边界和真实测试资源见 [客户端授权设计](docs/design/feishu-client-authorization.md)。
-
-金山插件的官方接口、对象 ID 与鉴权边界见 [金山目录设计](docs/design/kdocs-directory-plugin.md)。目录宿主 `pin` / bridge `pin` 仅将已发现子目录独立挂载；单文档 provider 已移除，文档快捷项走原有网页链接。
-
-`src/main/kdocs-plugin.js` / `mygo/kdocs_plugin.go`：`start/poll/identity/invoke/logout`，官方浏览器引导页 + Skill exchange + 四个只读工具；协议配置在 `src/shared/kdocs-skill.json`。安全持久化由 `protected-credentials.js` 注入 Electron safeStorage，Go Windows 用 `kdocs_protection_windows.go` 的 DPAPI。目录桥接 `kdocsAuthStart/kdocsAuthPoll/kdocsLogout` 不返回原始凭据。
-
-## 界面生命周期与异步转换
-
-- `src/renderer/save-queue.js`：`PV.saveQueue.create / submit / dispose / state`，串行写最新期望内容，分离期望、在途和已落盘版本；SVG 编辑器拥有队列。
-- `pane.js`：`pane.lifecycle` 为 alive / destroyed，`task.stale` 同时检查终态与 reqId，销毁先撤销旧任务写入资格。
-- `app.js`：`workspacePhase / workspaceEpoch / navigationEpoch / columnRequest`；`beginNavigation / navigationCurrent` 贯穿快捷定位、恢复及本地链接。
-- `pv.list(dir, requestId=0)`：Electron preload / IPC 与 MyGo `App.List(dir, requestID)` 同步传递编号；`fs:meta` / `pv:meta` 回传 requestId，仅当前列接受。
-- `webview.js`：`acquireOcclusion / acquireDragHide` 返回独立且幂等的释放函数；弹层和手势各自持有。
-- `projects.js`：`pickerSession` 绑定原生图片选择的项目和弹层，旧结果不修改新项目。
-- [状态转换、取消规则与回归映射](docs/design/renderer-lifecycles.md)；单元 S14/S15，集成 L1–L4。
-
-云目录缓存：`directory-plugins.js` 的 `DIRECTORY_CACHE_MS / pageVersions`、Go `directoryCacheTTL / directoryCacheKey`；48 小时、128 页，文件夹刷新失效其全部页及旧游标，版本检查阻止旧请求回填。`cloud-directories.js` 的 `refreshFolder / closeContextMenu` 管理目录和快捷项右键刷新；复用 `list(refresh=true)` bridge。回归 S16 / D4 / TestDirectoryFolderCacheRefresh。
+规则与验证：[AGENTS.md](AGENTS.md)、[docs/agents/verify.md](docs/agents/verify.md)。
+状态契约：[docs/design/renderer-lifecycles.md](docs/design/renderer-lifecycles.md)。

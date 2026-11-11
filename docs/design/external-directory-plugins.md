@@ -10,7 +10,7 @@
 
 ## 共享清单与契约
 
-`src/shared/directory-providers.json` 是随应用构建并审查的 V1 声明式清单。Node `src/main/directory-plugins.js` 与 Go `mygo/directory_plugins.go` 实现同形宿主；`src/renderer/cloud-directories.js` 只处理标准化对象。页面不能注册域名、清单、请求模板或任意代码。
+`src/shared/directory-providers.json` 是随应用构建并审查的 V1 声明式清单。Node `test/host/directory-plugins.js` 与 Go `mygo/directory_plugins.go` 实现同形宿主；`src/renderer/cloud-directories.js` 只处理标准化对象。页面不能注册域名、清单、请求模板或任意代码。
 
 | 概念 | 字段与约束 |
 | --- | --- |

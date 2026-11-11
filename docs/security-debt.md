@@ -57,3 +57,7 @@ electron-builder 原样分发，却一直落在「仅构建期」里。现在 `e
 shipped 集合；补上之后立刻露出 GHSA-jr5w-w6x2-84p9（影响 44.0.0-alpha.1 – 44.9.0，
 high），已把依赖从 44.9.0 升到 44.9.3（`package.json` 与 `package-lock.json` 同步），
 `npm run audit` 恢复 0 退出。上面 D1 的三条 moderate 与可达性结论不变。
+
+## 2026-11-11 更新：仅保留原生产品
+
+Electron 已从产品源代码和发行链路移除，仅作测试工具；不再计为随产品分发的运行时。上述历史 Electron 公告处理记录保留为审查背景。npm 扫描仍对真正编入渲染层的 high/critical 项阻止发布。

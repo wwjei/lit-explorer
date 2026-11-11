@@ -35,11 +35,11 @@ API 授权与在线网页自身登录仍各自管理。普通网页文件夹链�
 | 入口 | 职责 |
 | --- | --- |
 | `src/shared/kdocs-skill.json` | 固定引导页、交换端点、工具端点和参考协议版本 |
-| `src/main/kdocs-plugin.js` | Node 原生授权、到期 / 取消、四个读取操作、账号身份绑定 |
-| `src/main/protected-credentials.js` | 宿主注入系统加密能力，写受保护的凭据文件 |
+| `test/host/kdocs-plugin.js` | Node 原生授权、到期 / 取消、四个读取操作、账号身份绑定 |
+| `test/host/protected-credentials.js` | 宿主注入系统加密能力，写受保护的凭据文件 |
 | `mygo/kdocs_plugin.go` | Go 同形协议、授权与读取操作 |
 | `mygo/kdocs_protection_windows.go` | Windows 当前用户 DPAPI，无外部命令或新增库 |
-| `src/main/directory-plugins.js` / `mygo/directory_plugins.go` | 节点 / 分页授权、目录验证、快捷项、缓存和项目切换 |
+| `test/host/directory-plugins.js` / `mygo/directory_plugins.go` | 节点 / 分页授权、目录验证、快捷项、缓存和项目切换 |
 
 `kdocsAuthStart` 返回临时授权链接和状态，`kdocsAuthPoll` 轮询，`kdocsLogout` 删除本机授权；原始 token / 服务错误信息不经 IPC 返回。目录入口沿用 connect / list / details / open / pin。
 
