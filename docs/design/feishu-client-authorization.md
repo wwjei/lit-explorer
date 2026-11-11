@@ -59,7 +59,7 @@ Lit 可以实现“不部署 Lit 授权服务，凭据留在用户客户端”�
 
 ## 代码入口
 
-- Electron：`src/main/feishu-auth.js`，设备流程与内存凭据；`directory-plugins.js` 连接挂载并在请求前取有效 token。
+- Electron：`test/host/feishu-auth.js`，设备流程与内存凭据；`directory-plugins.js` 连接挂载并在请求前取有效 token。
 - MyGo：`mygo/feishu_auth.go`，同一共享配置和状态机；`directory_plugins.go` 接业务桥接。
 - 界面：`src/renderer/cloud-directories.js`，授权方式、确认码、系统浏览器、取消和连接状态。
 - 桥接方法：`authStart`、`authPoll`、现有 `cancel`、带一次性 authId 的 `connect`。不提供获取原始 token、任意请求或任意认证端点的方法。

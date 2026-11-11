@@ -12,7 +12,7 @@
  * 地址里带账号密码的一律拒绝，避免把凭据写进 state.json。
  */
 
-const { MAX_URL_CHARS } = require('../shared/contracts');
+const { MAX_URL_CHARS } = require('../../src/shared/contracts');
 
 /** 返回规范化后的地址；不可用返回空字符串 */
 function normalizeWebUrl(raw) {

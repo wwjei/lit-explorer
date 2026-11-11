@@ -1,6 +1,6 @@
 package main
 
-// 设置持久化：对应 src/main/store.js + state-sanitize.js。
+// 设置持久化：对应 test/host/store.js + state-sanitize.js。
 // 渲染进程只能改界面偏好；window / lastRoot / recentRoots 由 Go 侧自己维护。
 
 import (

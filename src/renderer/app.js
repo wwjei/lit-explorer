@@ -300,7 +300,7 @@
    */
   function openWebFavorite(fav, reveal, transaction = beginNavigation()) {
     if (!navigationCurrent(transaction)) return;
-    // MyGo 版没有 WebContentsView，内嵌网页不可用：交给系统浏览器，不建网页窗格
+    // 不具备网页内嵌能力的测试或旧宿主交给系统浏览器。
     if (pv.capabilities && pv.capabilities.webPane === false) {
       pv.openExternalUrl(fav.url);
       toast('当前版本不支持内嵌网页，已用系统浏览器打开');

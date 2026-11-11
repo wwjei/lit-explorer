@@ -1,7 +1,7 @@
 'use strict';
 
 const { randomUUID } = require('node:crypto');
-const catalog = require('../shared/directory-providers.json');
+const catalog = require('../../src/shared/directory-providers.json');
 const DIRECTORY_CACHE_MS = 48 * 60 * 60 * 1000;
 const get = (object, path) => String(path || '').split('.').reduce((v, k) => v && v[k], object);
 const fail = (code) => Object.assign(new Error(code), { code });

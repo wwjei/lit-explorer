@@ -1,11 +1,12 @@
 package main
 
-// lit explorer 的 MyGo 版：用系统 WebView2 承载同一份渲染层，
+// Lit Explorer 原生宿主：用系统 WebView2 承载渲染层，
 // Go 侧重新实现 preload 暴露的那些能力（文件系统、状态、菜单、协议、窗口）。
 // 内嵌网页由 fork 的 ChildWebView 承载，状态与可见性在 UI 线程上同步。
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"embed"
 	"encoding/base64"
 	"encoding/hex"
@@ -67,7 +68,7 @@ type App struct {
 	seqMu            sync.Mutex
 	saveTim          *time.Timer
 
-	// 网页窗格：按地址保活一个子 webview（对应 Electron 的 web-views.js）
+	// 网页窗格：按地址保活一个子 webview
 	webMu    sync.Mutex
 	webViews map[string]*webViewRec
 }
@@ -126,9 +127,35 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	// 与 Electron 版一样只允许一个实例：第二次启动把已有窗口叫到前台
+	mygo.App.SetName(productName)
+	if profile := argValue("--user-data-dir="); profile != "" {
+		absolute, err := filepath.Abs(profile)
+		if err != nil {
+			log.Fatal(err)
+		}
+		key := sha256.Sum256([]byte(absolute))
+		mygo.App.SetName(fmt.Sprintf("%s.test.%x", productName, key[:8]))
+	}
+	// 独立 profile 使用独立实例锁，探针不会把命令交给用户正在使用的应用。
 	if !mygo.App.RequestSingleInstanceLock() {
 		return
+	}
+	mygo.App.SetName(productName)
+	if override := argValue("--user-data-dir="); override != "" {
+		abs, err := filepath.Abs(override)
+		if err != nil {
+			log.Fatal(err)
+		}
+		mygo.App.SetPath(mygo.PathUserData, abs)
+		mygo.App.SetPath(mygo.PathCache, filepath.Join(abs, "cache"))
+	} else {
+		base, err := os.UserConfigDir()
+		if err != nil {
+			log.Fatal(err)
+		}
+		if err := migrateProductData(base); err != nil {
+			log.Fatalf("迁移应用设置失败: %v", err)
+		}
 	}
 	mygo.App.OnSecondInstance(func(args []string, wd string) {
 		for _, arg := range args {
@@ -199,7 +226,7 @@ func main() {
 func createWindow(state map[string]any) {
 	w, h, x, y, hasPos := windowBounds(state["window"])
 	opts := mygo.WindowOptions{
-		Title:     "lit explorer",
+		Title:     productName,
 		URL:       "/src/renderer/index.html",
 		Width:     w,
 		Height:    h,
@@ -716,7 +743,7 @@ func (a *App) CopyText(text string) map[string]any {
 
 const maxWebViews = 6
 
-// WebSync 对应 Electron 的 web:sync：按地址保活子 webview，并更新矩形 / 可见性。
+// WebSync 实现 web:sync：按地址保活子 webview，并更新矩形 / 可见性。
 // 地址不在列表里的视图销毁；同一地址只留一份（与 web-views.js 一致）。
 func (a *App) WebSync(list []webSyncItem) map[string]any {
 	var result map[string]any
@@ -795,7 +822,7 @@ func rectOf(r webSyncRect) mygo.Rectangle {
 
 func (a *App) emitWebState(rec *webViewRec, st mygo.ChildWebViewState) {
 	if st.Status == "popup" {
-		// 页面要开新窗口：与 Electron 一样交给系统浏览器
+		// 页面要开新窗口：交给系统浏览器
 		openExternal(st.CurrentURL)
 		return
 	}
@@ -1121,16 +1148,18 @@ func openExternal(raw string) {
 
 // 注册项只使用当前用户的注册表，不提升权限。
 func (a *App) configureFolderMenu(enable bool) {
-	key := `HKCU\Software\Classes\Directory\shell\LitExplorerMyGo`
+	key := `HKCU\Software\Classes\Directory\shell\LitExplorer`
 	exe, err := os.Executable()
 	if err != nil {
 		log.Print(err)
 		return
 	}
+	// 清理由旧产品名称创建的登记；不存在时无需提示。
+	_ = exec.Command("reg.exe", "delete", `HKCU\Software\Classes\Directory\shell\LitExplorerMyGo`, "/f").Run()
 	commands := [][]string{{"delete", key, "/f"}}
 	if enable {
 		commands = [][]string{
-			{"add", key, "/ve", "/d", "用 Lit MyGo 打开", "/f"},
+			{"add", key, "/ve", "/d", "用 Lit Explorer 打开", "/f"},
 			{"add", key, "/v", "Icon", "/d", exe, "/f"},
 			{"add", key + `\command`, "/ve", "/d", `"` + exe + `" "--open=%1"`, "/f"},
 		}

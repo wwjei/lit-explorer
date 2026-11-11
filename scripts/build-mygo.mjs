@@ -1,7 +1,7 @@
 /**
- * 构建 MyGo 版 Windows 产物：单文件 exe 与 NSIS 安装包。
+ * 构建 Lit Explorer Windows 产物：单文件 exe 与 NSIS 安装包。
  *
- * 与 Electron 版共用 src/renderer；mygo/stage-frontend.mjs 把渲染层拷进
+ * mygo/stage-frontend.mjs 把渲染层拷进
  * mygo/frontend/，再由 `mygo build` 嵌进 Go 二进制。产物统一放进 dist/，
  * 文件名带版本号，scripts/build-checksums.mjs 与 Release 上传都能直接收进去。
  *
@@ -9,7 +9,7 @@
  * 本地想用自己编译的 CLI 时设 MYGO_CLI=<可执行文件路径>。
  * NSIS 缺失时 mygo build 会自己下载（GitHub Releases）。
  *
- * 用法：npm run dist:mygo（会先跑 npm run build 与 notices）
+ * 用法：npm run dist（先构建渲染层，再编译、收集许可与构建产品安装器）
  */
 
 import { execFileSync } from 'node:child_process';
@@ -21,13 +21,14 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const mygoDir = path.join(root, 'mygo');
 const distDir = path.join(root, 'dist');
 const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+const product = JSON.parse(fs.readFileSync(path.join(root, 'src/shared/product.json'), 'utf8'));
 const cli = process.env.MYGO_CLI || 'github.com/egoist/mygo/cmd/mygo@v0.7.1';
 
 /* mygo.json 由这里生成：版本号只有一个来源（package.json），避免两处漂移 */
 const config = {
-  name: 'Lit Explorer MyGo',
-  slug: 'lit-explorer-mygo',
-  identifier: 'com.litexplorer.app.mygo',
+  name: product.name,
+  slug: product.slug,
+  identifier: product.identifier, // 保留技术标识以兼容已有单实例和卸载登记。
   version: pkg.version,
   copyright: '© 2026 wwjei',
   buildCommand: 'node stage-frontend.mjs',
@@ -68,8 +69,19 @@ if (!setup || !appExe) {
 }
 
 fs.mkdirSync(distDir, { recursive: true });
+// 产品安装策略由本仓库管理：统一名称、旧版本卸载、快捷方式及文件夹菜单。
+const compiler = process.env.MAKENSIS || 'makensis';
+execFileSync(compiler, [
+  ...(process.platform === 'win32' ? ['/V2'] : ['-V2']),
+  ...[
+    ['APP_EXE',path.join(outDir,appExe)],
+    ['OUTPUT',path.join(distDir,`Lit-Explorer-Setup-${pkg.version}.exe`)],
+    ['VERSION',pkg.version], ['ICON',path.join(root,'build/icon.ico')],
+    ['CLOSE_SCRIPT',path.join(root,'build/close-app.ps1')]
+  ].map(([key,value]) => `${process.platform === 'win32' ? '/' : '-'}D${key}=${value}`),
+  path.join(root,'build/installer.nsi')
+],{cwd:root,stdio:'inherit'});
 const targets = [
-  [path.join(outDir, setup), path.join(distDir, `Lit-Explorer-Setup-${pkg.version}.exe`)],
   [path.join(outDir, appExe), path.join(distDir, `Lit-Explorer-${pkg.version}-portable.exe`)],
 ];
 for (const [from, to] of targets) {

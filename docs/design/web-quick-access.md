@@ -99,7 +99,7 @@
 - 网页条目**不写 `path`**，避免被按路径分派的代码误当成文件；
 - 名称上限 120 字符，URL 上限 2048 字符。
 
-主进程 `src/main/state-sanitize.js` 的 `sanitizeFavorites()` 是唯一写入闸门，现在
+主进程 `test/host/state-sanitize.js` 的 `sanitizeFavorites()` 是唯一写入闸门，现在
 没有 `path` 的条目会被直接丢掉，必须增加分支：
 
 ```js
@@ -119,7 +119,7 @@ function sanitizeWebUrl(raw) {
 
 ## 5. 预览集成
 
-- 新增主进程模块 `src/main/web-views.js`，持有 `Map<url, { view, rect, visible, loaded, failed }>`；
+- 新增主进程模块 `test/host/web-views.js`，持有 `Map<url, { view, rect, visible, loaded, failed }>`；
 - 新增 `kind: 'web'` 的预览节点；`preview-body.js` 只画一个加载 / 失败占位区和头部，
   真实页面由主进程的 `WebContentsView` 覆盖在窗格正文上；
 - 渲染进程通过 `web:sync` 声明式提交

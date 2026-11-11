@@ -1,11 +1,6 @@
 /*
- * MyGo 版的 window.pv：与 src/main/preload.js 暴露的接口同形，
- * 让 src/renderer 下的界面代码原样运行。调用在 window.mygo 注入之后才发生，
- * 所以这里只保存函数，不在加载时解析 window.mygo。
- *
- * 与 Electron 版的差异（能力屏蔽）：
- *   - webPane: false —— 没有 WebContentsView，内嵌网页改为在系统浏览器打开；
- *   - 网页列的 webSync / webReload / onWebState 是空实现。
+ * 原生宿主的 window.pv 适配层，实现 src/shared/contracts.js 中的界面契约。
+ * 调用在 window.mygo 注入之后才发生；加载时只保存函数，不解析原生桥。
  */
 (function () {
   'use strict';

@@ -1,8 +1,8 @@
 # 内嵌网页预览 · 安全与实现审查
 
 - 审查日期：2026-10-25。
-- 范围：快速访问的网页条目（A18）、`src/main/web-views.js`、`src/main/web-url.js`、
-  `src/main/state-sanitize.js` 的 favorites 分支，以及渲染进程的 `webview.js` /
+- 范围：快速访问的网页条目（A18）、`test/host/web-views.js`、`test/host/web-url.js`、
+  `test/host/state-sanitize.js` 的 favorites 分支，以及渲染进程的 `webview.js` /
   `preview-body.js` / `app.js` 接线。
 - 结论：没有已知的未修复问题；下面是这次审查确认的边界与残留风险。
 
@@ -16,7 +16,7 @@
 
 | 风险 | 控制 | 位置 |
 | --- | --- | --- |
-| 地址是 `file:` / `javascript:` / `data:` / 自定义协议 | 只接受 `http(s)`，拒绝 C0 控制字符与带账号密码的地址；渲染进程与主进程各校验一次 | `src/main/web-url.js`、`state-sanitize.js` 的 `sanitizeFavorites` |
+| 地址是 `file:` / `javascript:` / `data:` / 自定义协议 | 只接受 `http(s)`，拒绝 C0 控制字符与带账号密码的地址；渲染进程与主进程各校验一次 | `test/host/web-url.js`、`state-sanitize.js` 的 `sanitizeFavorites` |
 | 页面拿到 Node / 宿主 `pv` 桥接 | 独立 `persist:web-docs` 会话，不挂 preload，`sandbox` + `contextIsolation`；宿主的 `pv://` 处理器不在该会话，会话层再取消 `pv://` / `file://` 请求 | `web-views.js` 的 `create` / `configureSession` |
 | 页面申请摄像头 / 定位 / 通知 | 权限默认拒绝；只放行复制用的 `clipboard-sanitized-write` | `configureSession` |
 | 页面静默下载文件 | `will-download` 直接取消，并给一条轻提示 | `configureSession` |

@@ -19,17 +19,15 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dir = path.resolve(root, process.argv[2] || 'dist');
 
 if (!fs.existsSync(dir)) {
-  console.error('[checksums] 找不到目录：' + dir + '，先跑 npm run dist:all');
+  console.error('[checksums] 找不到目录：' + dir + '，先跑 npm run dist');
   process.exit(1);
 }
 
-// 默认 MyGo 与 Electron 备用版必须各有安装包和便携包，缺一则停止发布。
+// 产品仅发布安装包和便携包，两者缺一则停止发布。
 const { version } = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 const files = [
   `Lit-Explorer-Setup-${version}.exe`,
   `Lit-Explorer-${version}-portable.exe`,
-  `Lit-Explorer-Electron-Backup-Setup-${version}.exe`,
-  `Lit-Explorer-Electron-Backup-${version}-portable.exe`,
 ];
 const missing = files.filter((file) => !fs.existsSync(path.join(dir, file)));
 if (missing.length) {

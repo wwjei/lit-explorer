@@ -10,7 +10,7 @@
 | --- | --- | --- | --- | --- |
 | 1 | P1 | Markdown 行内代码占位符在 `href` 生成后回填，代码里的引号可逃出属性 | 链接地址正则排除 `\u0000`，行内代码文本额外转义引号；`safeHref` 拒绝控制字符 | 单测 S2 |
 | 2 | P1 | DOCX 超链接 `java&#9;script:` 被当成相对路径放行 | `safeDocUrl()` 拒绝 C0 控制字符（浏览器解析 URL 时会忽略制表符 / 换行） | 集成 S1（新增 `TABLINK`） |
-| 3 | P1 | `app:set-state` 接受任意字段，可持久化 `window.webPreferences` 与任意 `projects[].path` | 新增 `src/main/state-sanitize.js`：设置字段白名单、窗口只取 `{x,y,width,height}`、项目路径必须 `isOfferedRoot()`；启动时同样走 `windowBounds()` | 单测 S6 |
+| 3 | P1 | `app:set-state` 接受任意字段，可持久化 `window.webPreferences` 与任意 `projects[].path` | 新增 `test/host/state-sanitize.js`：设置字段白名单、窗口只取 `{x,y,width,height}`、项目路径必须 `isOfferedRoot()`；启动时同样走 `windowBounds()` | 单测 S6 |
 | 4 | P2 | 并发切换工作区时 `resetAllowedRoots()` 与异步 `realpath` 交错，留下两个授权根 | `openWorkspace()` 先 `resolveReal()`，再用 `workspaceSeq` 判断自己是否已被取代，最后同步「清空 + `allowResolvedRoot()`」 | 集成 S6 |
 | 5 | P2 | 旧图片请求在 `task.replace()` 判断过期前改写 `pane.images` | `newImage()` 不再直接写 `pane.images`；单张与连续预览都在正文落地后才赋值 | 集成 P2 |
 | 6 | P2 | 代码块异步高亮用 `innerHTML` 整块替换，吞掉查找 `<mark>`，计数还指着旧节点 | `highlightFences()` 收尾时调 `PV.find.refreshIn()`，按原命中序号重落高亮 | 集成 F2（5000 行 Lua 块确保查找先落点） |

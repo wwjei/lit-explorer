@@ -3,9 +3,7 @@
  *
  * 为什么需要分开看：这个项目所有依赖都在 devDependencies，但其中一部分会被 esbuild
  * 打进 `src/renderer/vendor/`（shiki、docx-preview、pptx-preview 及其依赖树），
- * 跟着安装包一起分发；另一部分（electron-builder、esbuild）只在构建机上跑。
- * Electron 比较特殊：它的 JS 包不经过 esbuild，但运行时代码与二进制由 electron-builder
- * 原样随安装包分发，所以也必须算进「会进安装包」这一堆。
+ * 跟着安装包一起分发；另一部分（Electron 测试工具、esbuild）仅开发期使用。
  *
  * 判断依据是 `npm run build` 留下的 `src/renderer/vendor/meta.json`——「这次真正打进了
  * 哪些文件」的清单，所以它反映的是实际产物，不是 package.json 里的声明。
@@ -43,8 +41,7 @@ for (const input of meta.inputs) {
   const m = input.replace(/\\/g, '/').match(/^node_modules\/((?:@[^/]+\/)?[^/]+)\//);
   if (m) bundled.add(m[1]);
 }
-// Electron 不经过 esbuild，但它是随安装包分发的运行时本体（electron-builder 打包）
-bundled.add('electron');
+// Electron 仅作为测试工具，不随产品分发。
 
 let report;
 const injected = process.env.AUDIT_JSON;

@@ -1,6 +1,6 @@
 package main
 
-// 目录插件清单与 Electron 共用；认证、网络、挂载授权均由宿主管理。
+// 目录插件采用共享契约；认证、网络、挂载授权均由宿主管理。
 import (
 	"bytes"
 	"context"

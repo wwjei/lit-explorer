@@ -1,7 +1,7 @@
 'use strict';
 // 按官方公开授权脚本与目录协议实现，只暴露四个读取工具，不依赖 CLI / MCP 客户端。
 const { randomUUID, randomBytes, createHash } = require('node:crypto');
-const protocol = require('../shared/kdocs-skill.json');
+const protocol = require('../../src/shared/kdocs-skill.json');
 const fail = (code) => Object.assign(new Error(code), { code });
 const secret = (v) => typeof v === 'string' && v.length > 0 && v.length <= 16384 && !/[\s\x00-\x1f\x7f]/.test(v);
 const fingerprint = (token) => createHash('sha256').update(token).digest('hex');
