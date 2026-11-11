@@ -2,6 +2,7 @@
 
 const { randomUUID } = require('node:crypto');
 const catalog = require('../shared/directory-providers.json');
+const DIRECTORY_CACHE_MS = 48 * 60 * 60 * 1000;
 const get = (object, path) => String(path || '').split('.').reduce((v, k) => v && v[k], object);
 const fail = (code) => Object.assign(new Error(code), { code });
 const text = (v, max = 256) => typeof v === 'string' && v.length <= max && !/[\x00-\x1f\x7f]/.test(v) ? v : '';
@@ -77,7 +78,7 @@ function rootConfig(provider, raw) {
   return { rootId, rootType };
 }
 
-function createDirectoryPlugins({ store, fetch: fetcher = globalThis.fetch, manifest = catalog, authNow, kdocsCredentials, kdocs: injectedPlugin }) {
+function createDirectoryPlugins({ store, fetch: fetcher = globalThis.fetch, manifest = catalog, authNow, cacheNow = Date.now, kdocsCredentials, kdocs: injectedPlugin }) {
   const registry = providers(manifest);
   const kdocs = injectedPlugin || require('./kdocs-plugin').createKdocsPlugin({ credentials: kdocsCredentials, fetch: fetcher, now: authNow });
   const auth = require('./feishu-auth').createFeishuAuth({ fetch: fetcher, now: authNow });
@@ -184,10 +185,17 @@ function createDirectoryPlugins({ store, fetch: fetcher = globalThis.fetch, mani
       if (node.kind !== 'directory' || cursor !== '') throw fail('BAD_REQUEST');
     }
     if (cursor && !(s.cursors.get(nodeId) || new Set()).has(cursor)) throw fail('OUTSIDE_MOUNT');
-    const cacheKey = nodeId + ':' + cursor;
+    if (refresh && !cursor) {
+      s.pageVersions.set(nodeId, (s.pageVersions.get(nodeId) || 0) + 1);
+      for (const [key, cached] of s.cache) if (cached.value.directory.id === nodeId) s.cache.delete(key);
+      s.cursors.delete(nodeId);
+    }
+    const version = s.pageVersions.get(nodeId) || 0;
+    const cacheKey = JSON.stringify([nodeId, cursor]);
     const cached = s.cache.get(cacheKey);
-    if (!refresh && cached && cached.until > Date.now()) return cached.value;
+    if (!refresh && cached && cached.until > cacheNow()) return cached.value;
     const body = await request(s, s.provider.list, node, cursor);
+    if (s.abort.signal.aborted || version !== (s.pageVersions.get(nodeId) || 0)) throw fail('SUPERSEDED');
     const raw = get(body, s.provider.list.entries);
     if (!Array.isArray(raw) || raw.length > 200) throw fail('BAD_RESPONSE');
     const entries = raw.map((entry) => normalize(entry, s.provider, s.provider.list.fields));
@@ -205,8 +213,8 @@ function createDirectoryPlugins({ store, fetch: fetcher = globalThis.fetch, mani
     entries.forEach((entry) => s.nodes.set(entry.id, entry));
     if (nextCursor) { if (!s.cursors.has(nodeId)) s.cursors.set(nodeId, new Set()); s.cursors.get(nodeId).add(nextCursor); }
     const value = { directory: node, entries, nextCursor };
-    if (s.cache.size >= 128) s.cache.delete(s.cache.keys().next().value);
-    s.cache.set(cacheKey, { until: Date.now() + 60000, value });
+    if (s.cache.size >= 128 && !s.cache.has(cacheKey)) s.cache.delete(s.cache.keys().next().value);
+    s.cache.set(cacheKey, { until: cacheNow() + DIRECTORY_CACHE_MS, value });
     return value;
   }
   async function connect(input, credentialOverride = null, expectedGeneration = generation) {
@@ -225,7 +233,7 @@ function createDirectoryPlugins({ store, fetch: fetcher = globalThis.fetch, mani
     if (!previous && saved.length >= 32) throw fail('LIMIT');
     let root = { id: config.rootId, name: config.name, type: config.rootType || provider.root.defaultType, kind: provider.root.kind };
     const credential = credentialOverride || (input.authId ? auth.take(input.authId) : null);
-    const s = { provider, credential, attemptId: text(input.attemptId, 128), token: input.token, nodes: new Map([[root.id, root]]), cache: new Map(), cursors: new Map(), abort: new AbortController(), pending: 0 };
+    const s = { provider, credential, attemptId: text(input.attemptId, 128), token: input.token, nodes: new Map([[root.id, root]]), cache: new Map(), pageVersions: new Map(), cursors: new Map(), abort: new AbortController(), pending: 0 };
     // 先验证凭据和根目录，成功才保存挂载；失败不覆盖已有连接。
     connecting.add(s);
     try {

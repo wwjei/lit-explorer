@@ -738,6 +738,41 @@ function loadRenderer() {
     eq('销毁窗格不再被 poll 更新',pane.changed,false);
   });
 
+  await run('S16', '目录缓存 48 小时、文件夹分页失效与旧响应隔离', async () => {
+    const {createDirectoryPlugins}=require('../src/main/directory-plugins');
+    const fixture=require('./fixtures/feishu-directory.json');
+    let now=0, state={}, calls=0, cursor='next-page', hold=false, release;
+    const api=createDirectoryPlugins({cacheNow:()=>now,store:{load:async()=>state,patch:async(p)=>{state={...state,...p};}},fetch:async(raw)=>{
+      calls++;const url=new URL(raw);
+      if(hold && url.searchParams.get('page_token')) { hold=false; return new Promise(resolve=>{release=()=>resolve(new Response(JSON.stringify(fixture.lastPage)));}); }
+      const page=url.searchParams.get('folder_token')==='folderA'?fixture.nestedPage:url.searchParams.get('page_token')?fixture.lastPage:structuredClone(fixture.firstPage);
+      if(page.data.has_more) page.data.next_page_token=cursor;
+      return new Response(JSON.stringify(page));
+    }});
+    api.activate('/cache');
+    const mount=await api.connect({providerId:'feishu-drive',rootId:'root',name:'cache',token:'fixture'});
+    await api.list(mount.id,'root','next-page');await api.list(mount.id,'folderA','');
+    const initial=calls;
+    now=47*60*60*1000;
+    await api.list(mount.id,'root','');await api.list(mount.id,'root','next-page');await api.list(mount.id,'folderA','');
+    eq('47 小时内各分页仍复用缓存',calls,initial);
+    now=48*60*60*1000;
+    await api.list(mount.id,'root','');eq('恰好 48 小时不再命中',calls,initial+1);
+    await api.list(mount.id,'folderA',''); // 重建独立子目录缓存。
+    const childCalls=calls;
+    cursor='next-v2';await api.list(mount.id,'root','',true);
+    await api.list(mount.id,'folderA','');eq('刷新父目录不清其他文件夹缓存',calls,childCalls+1);
+    let error;try{await api.list(mount.id,'root','next-page');}catch(err){error=err.code;}
+    eq('刷新清除该文件夹旧分页游标',error,'OUTSIDE_MOUNT');
+    hold=true;
+    const stale=api.list(mount.id,'root','next-v2').then(()=>'',err=>err.code);
+    await Promise.resolve();
+    cursor='next-v3';await api.list(mount.id,'root','',true);release();
+    eq('刷新前发出的旧页不能重建缓存',await stale,'SUPERSEDED');
+    const fresh=await api.list(mount.id,'root','');eq('最新第一页游标保留',fresh.nextCursor,'next-v3');
+    const before=calls;await api.list(mount.id,'root','next-v3');eq('新分页重新从服务获取',calls,before+1);
+  });
+
   done();
 })().catch((err) => {
   console.error(err);
