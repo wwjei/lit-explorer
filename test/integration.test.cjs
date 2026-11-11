@@ -1766,6 +1766,55 @@ async function main() {
       { roots: roots, rb: rb });
   });
 
+  await run('D4', '云文件夹右键刷新，仅失效目标目录', async () => {
+    const runPage=await renderer(), ws=freshDir('cloud-cache-ui');
+    const {createDirectoryPlugins,invokeDirectoryPlugin}=require('../src/main/directory-plugins');
+    const fixture=require('./fixtures/feishu-directory.json');
+    let state={},calls={root:0,folderA:0,folderC:0};
+    const service=createDirectoryPlugins({store:{load:async()=>state,patch:async(p)=>{state={...state,...p};}},fetch:async(raw)=>{
+      const url=new URL(raw),folder=url.searchParams.get('folder_token')||'root';calls[folder]++;
+      let data=structuredClone(folder==='root'?fixture.firstPage:fixture.nestedPage);
+      if(folder==='root') data.data.files.push({token:'folderC',type:'folder',name:'其他文件夹'});
+      else data.data.files[0].name=folder==='folderA'&&calls.folderA>1?'刷新后的内容':'原始内容';
+      return new Response(JSON.stringify(data));
+    }});
+    service.activate(ws);const mount=await service.connect({providerId:'feishu-drive',rootId:'root',name:'Cache',token:'fixture'});
+    await service.list(mount.id,'folderA','');await service.list(mount.id,'folderC','');
+    ipcMain.removeHandler('directories:call');ipcMain.handle('directories:call',(_e,m,a)=>invokeDirectoryPlugin(service,m,a));
+    stubList(ws,['cache.md']);createdWin.webContents.send('workspace:opened',ws);
+    await waitPage(runPage,'document.querySelector(".col-list .nm")?.textContent==="cache.md"');
+    await runPage(`(async()=>{
+      await waitFor(()=>document.querySelector('.cloud-fav'));document.querySelector('.cloud-fav').click();
+      await waitFor(()=>document.querySelectorAll('.cloud-entry').length===3);
+      const folder=document.querySelector('[data-cloud-entry="0"]'),r=folder.getBoundingClientRect();
+      folder.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,clientX:r.x+20,clientY:r.y+15}));
+      return true;
+    })()`);
+    ok('文件夹右键提供刷新菜单',await runPage('document.querySelector(".cloud-context-menu")?.textContent.includes("刷新此文件夹")'));
+    ok('菜单保持在视口内且首项可键盘操作',await runPage('(()=>{const el=document.querySelector(".cloud-context-menu"),r=el.getBoundingClientRect();return r.x>=0&&r.y>=0&&r.right<=innerWidth&&r.bottom<=innerHeight&&el.contains(document.activeElement);})()'));
+    await runPage('document.querySelector(".cloud-context-menu button").dispatchEvent(new KeyboardEvent("keydown",{key:"Escape",bubbles:true})); true');
+    ok('Esc 只关闭右键菜单，保留目录面板',await runPage('!document.querySelector(".cloud-context-menu") && document.querySelector(".cloud-dialog").open'));
+    await runPage(`document.querySelector('[data-cloud-entry="0"]').dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true}));document.querySelector('.cloud-context-menu button').click();true`);
+    await waitPage(runPage,'document.querySelector("#toast").textContent.includes("已刷新：资料")');
+    eqJson('只请求右键目标文件夹',calls,{root:1,folderA:2,folderC:1});
+    eq('父级目录仍然展示',await runPage('document.querySelectorAll(".cloud-entry").length'),3);
+    await runPage(`document.querySelector('[data-cloud-entry="0"]').click();true`);
+    await waitPage(runPage,'document.querySelector(".cloud-entries")?.textContent.includes("刷新后的内容")');
+    eq('打开目标直接展示刚刷新的缓存',calls.folderA,2);
+    await runPage(`document.querySelector('[data-cloud-up]').click();true`);
+    await waitPage(runPage,'document.querySelectorAll(".cloud-entry").length===3');
+    await runPage('document.querySelector("#btn-refresh").click();true');
+    await waitPage(async()=>calls.root===2,'root refresh');
+    await waitPage(runPage,'!document.querySelector("#btn-refresh").disabled');
+    await service.list(mount.id,'folderC','');eq('应用级刷新同样不清其他目录缓存',calls.folderC,1);
+    await runPage('document.querySelector("[data-cloud-close]").click();document.querySelector(".cloud-fav").dispatchEvent(new MouseEvent("contextmenu",{bubbles:true,cancelable:true}));document.querySelector(".cloud-context-menu button").click();true');
+    await waitPage(async()=>calls.root===3,'shortcut refresh');
+    ok('快捷访问根目录也可单独刷新而不打开面板',await runPage('!document.querySelector(".cloud-dialog").open'));
+    await service.remove(mount.id);
+    ipcMain.removeHandler('directories:call');ipcMain.handle('directories:call',(_e,m)=>({value:m==='mounts'||m==='providers'?[]:true}));
+    await runPage('PV.cloud.setProject('+JSON.stringify(ws)+')');
+  });
+
   await run('L1', '销毁窗格终止异步渲染资源创建', async () => {
     const f = await prepare(), runPage = await renderer();
     stubList(f.ws, ['lifecycle.svg']);

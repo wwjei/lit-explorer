@@ -169,3 +169,5 @@
 - `webview.js`：`acquireOcclusion / acquireDragHide` 返回独立且幂等的释放函数；弹层和手势各自持有。
 - `projects.js`：`pickerSession` 绑定原生图片选择的项目和弹层，旧结果不修改新项目。
 - [状态转换、取消规则与回归映射](docs/design/renderer-lifecycles.md)；单元 S14/S15，集成 L1–L4。
+
+云目录缓存：`directory-plugins.js` 的 `DIRECTORY_CACHE_MS / pageVersions`、Go `directoryCacheTTL / directoryCacheKey`；48 小时、128 页，文件夹刷新失效其全部页及旧游标，版本检查阻止旧请求回填。`cloud-directories.js` 的 `refreshFolder / closeContextMenu` 管理目录和快捷项右键刷新；复用 `list(refresh=true)` bridge。回归 S16 / D4 / TestDirectoryFolderCacheRefresh。
