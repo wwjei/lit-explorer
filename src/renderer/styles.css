@@ -924,3 +924,6 @@ body.has-web #toast.on{transform:translateY(0)}
 
 .cloud-connect .cloud-reauth{display:flex;align-items:center;gap:8px}
 .cloud-connect input[type=checkbox]{width:auto}
+
+.cloud-context-menu{position:fixed;z-index:1000;min-width:160px;padding:5px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--text);box-shadow:0 8px 28px #0003}
+.cloud-context-menu button{width:100%;justify-content:flex-start}

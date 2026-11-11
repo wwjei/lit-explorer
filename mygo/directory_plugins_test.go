@@ -2,11 +2,14 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 type directoryRoundTrip func(*http.Request) (*http.Response, error)
@@ -188,5 +191,104 @@ func TestDirectoryPluginDocumentAndWiki(t *testing.T) {
 	detail, err := s.details(id, "wikiRoot")
 	if err != nil || detail.Name != "知识库入口" {
 		t.Fatalf("wiki details: %v %v", detail, err)
+	}
+}
+
+func TestDirectoryFolderCacheRefresh(t *testing.T) {
+	isolateState(t)
+	bytes, err := os.ReadFile("../test/fixtures/feishu-directory.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixtures := map[string]json.RawMessage{}
+	if err := json.Unmarshal(bytes, &fixtures); err != nil {
+		t.Fatal(err)
+	}
+	s := newDirectoryPlugins()
+	s.activate("cache")
+	var calls atomic.Int32
+	var revision atomic.Int32
+	revision.Store(1)
+	var block atomic.Bool
+	started, release := make(chan struct{}), make(chan struct{})
+	s.client.Transport = directoryRoundTrip(func(req *http.Request) (*http.Response, error) {
+		calls.Add(1)
+		response := string(fixtures["firstPage"])
+		if req.URL.Query().Get("folder_token") == "folderA" {
+			response = string(fixtures["nestedPage"])
+		} else if token := req.URL.Query().Get("page_token"); token != "" {
+			if token == "next-2" && block.CompareAndSwap(true, false) {
+				close(started)
+				<-release
+			}
+			response = string(fixtures["lastPage"])
+		} else {
+			response = strings.ReplaceAll(response, "next-page", fmt.Sprintf("next-%d", revision.Load()))
+		}
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(response))}, nil
+	})
+	result, err := s.connect(map[string]any{"providerId": "feishu-drive", "rootId": "root", "name": "cache", "token": "fixture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := result.(map[string]any)["id"].(string)
+	session, _, err := s.getNode(id, "root")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.page(session, "root", "next-1", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.page(session, "folderA", "", false); err != nil {
+		t.Fatal(err)
+	}
+	s.mu.Lock()
+	cached := session.cache[directoryCacheKey("root", "")]
+	ttl := time.Until(cached.until)
+	// 用记录的期限验证 48 小时，然后手动推进过期边界，不等待真实时钟。
+	if ttl < 48*time.Hour-time.Minute || ttl > 48*time.Hour {
+		t.Fatalf("TTL=%v", ttl)
+	}
+	cached.until = time.Now().Add(-time.Second)
+	session.cache[directoryCacheKey("root", "")] = cached
+	s.mu.Unlock()
+	before := calls.Load()
+	if _, err = s.page(session, "root", "", false); err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != before+1 {
+		t.Fatal("expired cache did not refetch")
+	}
+	revision.Store(2)
+	if _, err = s.page(session, "root", "", true); err != nil {
+		t.Fatal(err)
+	}
+	before = calls.Load()
+	if _, err = s.page(session, "folderA", "", false); err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != before {
+		t.Fatal("unrelated folder cache evicted")
+	}
+	if _, err = s.page(session, "root", "next-1", false); err == nil || err.Error() != "OUTSIDE_MOUNT" {
+		t.Fatalf("old cursor: %v", err)
+	}
+	block.Store(true)
+	stale := make(chan error, 1)
+	go func() { _, err := s.page(session, "root", "next-2", false); stale <- err }()
+	waitWorkspace(t, started)
+	revision.Store(3)
+	if _, err = s.page(session, "root", "", true); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	if err := waitWorkspace(t, stale); err == nil || err.Error() != "SUPERSEDED" {
+		t.Fatalf("old page committed: %v", err)
+	}
+	s.mu.Lock()
+	_, hit := session.cache[directoryCacheKey("root", "next-2")]
+	s.mu.Unlock()
+	if hit {
+		t.Fatal("old in-flight page repopulated cache")
 	}
 }

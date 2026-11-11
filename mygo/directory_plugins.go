@@ -95,6 +95,14 @@ type directoryPage struct {
 	Entries    []directoryNode `json:"entries"`
 	NextCursor string          `json:"nextCursor"`
 }
+
+const directoryCacheTTL = 48 * time.Hour
+
+func directoryCacheKey(nodeID, cursor string) string {
+	key, _ := json.Marshal([2]string{nodeID, cursor})
+	return string(key)
+}
+
 type directoryCache struct {
 	page  directoryPage
 	until time.Time
@@ -112,6 +120,7 @@ type directorySession struct {
 	ctx           context.Context
 	cancel        context.CancelFunc
 	nodes         map[string]directoryNode
+	pageVersions  map[string]uint64
 	cache         map[string]directoryCache
 	pending       int
 }
@@ -519,8 +528,25 @@ func (s *directoryPluginService) getNode(mountID, nodeID string) (*directorySess
 }
 func (s *directoryPluginService) page(session *directorySession, nodeID, cursor string, refresh bool) (directoryPage, error) {
 	s.mu.Lock()
+	if session.seq != s.seq || session.ctx.Err() != nil {
+		s.mu.Unlock()
+		return directoryPage{}, fmt.Errorf("SUPERSEDED")
+	}
 	node, ok := session.nodes[nodeID]
-	cached, hit := session.cache[nodeID+":"+cursor]
+	if refresh && cursor == "" && ok && node.Kind == "directory" {
+		if session.pageVersions == nil {
+			session.pageVersions = map[string]uint64{}
+		}
+		session.pageVersions[nodeID]++
+		for key, cached := range session.cache {
+			if cached.page.Directory.ID == nodeID {
+				delete(session.cache, key)
+			}
+		}
+		delete(session.cursors, nodeID)
+	}
+	version := session.pageVersions[nodeID]
+	cached, hit := session.cache[directoryCacheKey(nodeID, cursor)]
 	allowedCursor := cursor == "" || session.cursors[nodeID][cursor]
 	s.mu.Unlock()
 	empty := directoryPage{}
@@ -578,7 +604,7 @@ func (s *directoryPluginService) page(session *directorySession, nodeID, cursor 
 	page := directoryPage{Directory: node, Entries: entries, NextCursor: next}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if session.seq != s.seq || session.ctx.Err() != nil {
+	if session.seq != s.seq || session.ctx.Err() != nil || version != session.pageVersions[nodeID] {
 		return empty, fmt.Errorf("SUPERSEDED")
 	}
 	if len(session.nodes)+len(entries) > 10000 {
@@ -593,13 +619,15 @@ func (s *directoryPluginService) page(session *directorySession, nodeID, cursor 
 		}
 		session.cursors[nodeID][next] = true
 	}
-	if len(session.cache) >= 128 {
+	cacheKey := directoryCacheKey(nodeID, cursor)
+	_, replacing := session.cache[cacheKey]
+	if !replacing && len(session.cache) >= 128 {
 		for key := range session.cache {
 			delete(session.cache, key)
 			break
 		}
 	}
-	session.cache[nodeID+":"+cursor] = directoryCache{page, time.Now().Add(time.Minute)}
+	session.cache[cacheKey] = directoryCache{page, time.Now().Add(directoryCacheTTL)}
 	return page, nil
 }
 func directoryRootConfig(provider directoryProvider, raw string) (string, string, error) {

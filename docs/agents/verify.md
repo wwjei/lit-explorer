@@ -194,3 +194,5 @@ MyGo 版装到 `%LOCALAPPDATA%\Programs\Lit Explorer MyGo`，产物是单个 exe
 A→B→A 列表/元信息与导航恢复隔离、遮挡所有权与异步图标选择。
 用可控 IPC 返回和条件等待验证交错，完整规则见
 [界面生命周期设计](../design/renderer-lifecycles.md)。
+
+云目录缓存与单文件夹刷新：S16 用可控时钟验证 48 小时到期、目录分页失效和在途旧响应；D4 验证右键子文件夹、目录根与应用级刷新仅影响目标目录；Go `TestDirectoryFolderCacheRefresh` 同步验证 TTL、独立缓存和并发刷新隔离。

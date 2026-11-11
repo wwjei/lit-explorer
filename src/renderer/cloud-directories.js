@@ -22,6 +22,7 @@
   let mounts = [], providers = [], hooks = {}, current = null;
   const trails = new Map();
   let releaseWeb = null;
+  let contextMenu = null;
   const dialog = document.createElement('dialog');
   dialog.className = 'cloud-dialog';
   document.body.appendChild(dialog);
@@ -31,6 +32,7 @@
     return response.value;
   }
   function close() {
+    closeContextMenu();
     stopAuthWait();
     if (pendingAttempt) { pv.directoryCall('cancel', { attemptId: pendingAttempt }).catch(() => {}); pendingAttempt = ''; }
     requestId++;
@@ -41,6 +43,7 @@
     releaseWeb = null;
   }
   function show(html) {
+    closeContextMenu();
     dialog.innerHTML = '<div class="cloud-toolbar"><strong>参考来源</strong><button class="btn-quiet" data-cloud-close>关闭</button></div>' + html;
     if (!dialog.open) dialog.showModal();
     if (!releaseWeb && PV.web) releaseWeb = PV.web.acquireOcclusion();
@@ -189,9 +192,11 @@
   async function load(append, refresh = false) {
     const state = current;
     if (!state) return;
+    closeContextMenu();
     const seq = epoch, req = ++requestId;
     const node = state.trail[state.trail.length - 1];
     const nextButton = dialog.querySelector('[data-cloud-next]'); nextButton.disabled = true;
+    if (refresh) { state.next = ''; nextButton.hidden = true; }
     dialog.querySelector('.cloud-path').textContent = state.trail.map((n) => n.name).join(' / ');
     dialog.querySelector('[data-cloud-up]').disabled = state.trail.length <= 1;
     message('正在加载…');
@@ -234,6 +239,69 @@
       } else { close(); hooks.openWeb({ url: result.url, name: result.name, kind: 'web', isDir: false, cloudMountId: state.mount.id, cloudNodeId: node.id }); }
     } catch (err) { if (seq === epoch && req === requestId) { message(err.message); if (err.code === 'AUTH_REQUIRED') { await reloadMounts(); state.mount.connected = false; dialog.querySelector('.cloud-message').insertAdjacentHTML('beforeend', ' <button class="btn-quiet" data-cloud-reconnect>重新连接</button>'); } } }
   }
+  function closeContextMenu() {
+    if (!contextMenu) return;
+    const menu = contextMenu;
+    contextMenu = null;
+    menu.el.remove();
+    if (menu.releaseWeb) menu.releaseWeb();
+    if (menu.focus && menu.focus.isConnected) menu.focus.focus({ preventScroll: true });
+  }
+  async function refreshFolder(mount, node, workspace, view) {
+    if (workspace !== epoch) return;
+    if (!mount.connected) { connectForm(mount); return; }
+    if (current && current.mount.id === mount.id && current.trail.at(-1).id === node.id) {
+      await load(false, true);
+      return;
+    }
+    const req = requestId;
+    try {
+      await call('list', { mountId: mount.id, nodeId: node.id, cursor: '', refresh: true });
+      if (workspace === epoch && req === requestId && view === current) hooks.toast('已刷新：' + node.name);
+    } catch (err) {
+      if (workspace !== epoch || req !== requestId || view !== current || err.code === 'SUPERSEDED') return;
+      if (err.code === 'AUTH_REQUIRED') await reloadMounts();
+      if (workspace === epoch) hooks.toast(err.message);
+    }
+  }
+  document.addEventListener('contextmenu', (event) => {
+    const entry = event.target.closest('[data-cloud-entry]');
+    const shortcut = event.target.closest('[data-cloud-mount]');
+    const path = event.target.closest('.cloud-path');
+    let mount, node;
+    if (entry && current) { mount = current.mount; node = current.entries[+entry.dataset.cloudEntry]; }
+    else if (shortcut) {
+      mount = mounts.find((item) => item.id === shortcut.dataset.cloudMount);
+      if (mount) node = { id: mount.rootId, name: mount.name, kind: 'directory' };
+    } else if (path && current) { mount = current.mount; node = current.directory; }
+    if (!mount || !node || node.kind !== 'directory') return;
+    event.preventDefault();
+    event.stopPropagation(); // 快捷项不冒泡到本地文件系统右键菜单。
+    closeContextMenu();
+    const el = document.createElement('div');
+    el.className = 'cloud-context-menu'; el.setAttribute('role', 'menu');
+    const button = document.createElement('button');
+    button.type = 'button'; button.className = 'btn-quiet'; button.setAttribute('role', 'menuitem');
+    button.textContent = '刷新此文件夹'; button.dataset.cloudRefreshFolder = node.id;
+    el.appendChild(button);
+    (dialog.open ? dialog : document.body).appendChild(el);
+    const rect = el.getBoundingClientRect();
+    el.style.left = Math.max(8, Math.min(event.clientX, innerWidth - rect.width - 8)) + 'px';
+    el.style.top = Math.max(8, Math.min(event.clientY, innerHeight - rect.height - 8)) + 'px';
+    const workspace = epoch, view = current;
+    contextMenu = { el, focus: entry || shortcut || path, releaseWeb: PV.web ? PV.web.acquireOcclusion() : null };
+    button.addEventListener('click', () => { closeContextMenu(); refreshFolder(mount, node, workspace, view).catch((err) => { if (workspace === epoch) hooks.toast(err.message); }); });
+    button.focus({ preventScroll: true });
+  }, true);
+  document.addEventListener('pointerdown', (event) => {
+    if (contextMenu && !contextMenu.el.contains(event.target)) closeContextMenu();
+  }, true);
+  document.addEventListener('keydown', (event) => {
+    if (contextMenu && event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); closeContextMenu(); }
+  }, true);
+  document.addEventListener('scroll', closeContextMenu, true);
+  window.addEventListener('resize', closeContextMenu);
+
   dialog.addEventListener('cancel', (event) => { event.preventDefault(); close(); });
   dialog.addEventListener('keydown', (event) => event.stopPropagation());
   document.addEventListener('click', (event) => {
