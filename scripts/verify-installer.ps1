@@ -6,9 +6,17 @@ $target = Join-Path $env:LOCALAPPDATA 'Programs\Lit Explorer'
 if (Test-Path $target) { throw 'Installer verification requires a clean CI machine' }
 $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\com.litexplorer.app.mygo'
 try {
+    # 使用真实上一版安装器，验证旧名称目录和卸载登记能被接管。
+    $legacy = Join-Path $env:TEMP 'lit-previous-installer.exe'
+    Invoke-WebRequest 'https://github.com/wwjei/lit-explorer/releases/download/v0.0.8-alpha/Lit-Explorer-Setup-0.0.8-alpha.exe' -OutFile $legacy
+    $p = Start-Process -FilePath $legacy -ArgumentList '/S' -PassThru -Wait
+    if ($p.ExitCode -ne 0) { throw 'Previous release installation failed' }
+    $oldTarget = (Get-ItemProperty $key).InstallLocation
+    if ($oldTarget -eq $target) { throw 'Previous release did not exercise directory migration' }
     $p = Start-Process -FilePath $installer -ArgumentList '/S' -PassThru -Wait
     if ($p.ExitCode -ne 0) { throw "Installer exit: $($p.ExitCode)" }
     if (!(Test-Path "$target\Lit Explorer.exe")) { throw 'Missing product executable' }
+    if (Test-Path "$oldTarget\Lit Explorer MyGo.exe") { throw 'Previous executable remained' }
     $entry = Get-ItemProperty $key
     if ($entry.DisplayName -ne 'Lit Explorer' -or $entry.InstallLocation -ne $target) { throw 'Wrong product identity' }
     if ((Get-Item "$target\Lit Explorer.exe").VersionInfo.ProductName -ne 'Lit Explorer') { throw 'Wrong executable metadata' }
