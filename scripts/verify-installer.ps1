@@ -1,11 +1,12 @@
-# 仅在 CI 临时目录安装，不运行产品，不接触实际用户的应用。
+# 仅在一次性 Windows CI 账户验证真实默认目录，不运行产品。
 $ErrorActionPreference = 'Stop'
 $version = (Get-Content package.json | ConvertFrom-Json).version
 $installer = (Resolve-Path "dist/Lit-Explorer-Setup-$version.exe").Path
-$target = Join-Path $env:TEMP "lit-install-test-$([guid]::NewGuid())\Lit Explorer"
+$target = Join-Path $env:LOCALAPPDATA 'Programs\Lit Explorer'
+if (Test-Path $target) { throw 'Installer verification requires a clean CI machine' }
 $key = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\com.litexplorer.app.mygo'
 try {
-    $p = Start-Process -FilePath $installer -ArgumentList "/S /D=$target" -PassThru -Wait
+    $p = Start-Process -FilePath $installer -ArgumentList '/S' -PassThru -Wait
     if ($p.ExitCode -ne 0) { throw "Installer exit: $($p.ExitCode)" }
     if (!(Test-Path "$target\Lit Explorer.exe")) { throw 'Missing product executable' }
     $entry = Get-ItemProperty $key
