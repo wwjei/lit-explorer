@@ -18,7 +18,7 @@ func TestFrontendEntryServesHTMLWithoutRedirect(t *testing.T) {
 		t.Fatal(err)
 	}
 	response := httptest.NewRecorder()
-	mygo.FileServer(files).ServeHTTP(response, httptest.NewRequest("GET", "mygo://localhost/src/renderer/", nil))
+	mygo.FileServer(files).ServeHTTP(response, httptest.NewRequest("GET", "mygo://localhost"+frontendEntryURL, nil))
 	if response.Code != http.StatusOK || response.Header().Get("Location") != "" || !strings.Contains(response.Body.String(), `id="root-name"`) {
 		t.Fatalf("frontend entry: status=%d location=%q", response.Code, response.Header().Get("Location"))
 	}

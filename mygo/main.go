@@ -105,6 +105,8 @@ func (rec *webViewRec) syncVisibility() {
 	rec.view.SetVisible(rec.visible && rec.status == "loaded")
 }
 
+const frontendEntryURL = "/src/renderer/"
+
 var app = &App{}
 
 func main() {
@@ -228,7 +230,7 @@ func createWindow(state map[string]any) {
 	w, h, x, y, hasPos := windowBounds(state["window"])
 	opts := mygo.WindowOptions{
 		Title:     productName,
-		URL:       "/src/renderer/",
+		URL:       frontendEntryURL,
 		Width:     w,
 		Height:    h,
 		MinWidth:  900,
