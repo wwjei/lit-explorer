@@ -36,17 +36,17 @@ try {
   fs.writeFileSync(outside, 'outside workspace');
   const probe = path.join(temp, 'probe.js');
   fs.writeFileSync(probe, `(async () => {
-    const wait = async (fn) => { const until=Date.now()+15000; while(!fn()) { if(Date.now()>until) throw Error('DOM timeout'); await new Promise(r=>setTimeout(r,40)); } };
+    const wait = async (fn, stage) => { const until=Date.now()+15000; while(!fn()) { if(Date.now()>until) throw Error(stage+' timeout '+JSON.stringify({body:document.body.innerText.slice(0,6000),root:document.querySelector('#root-name')?.textContent,prose:document.querySelector('.prose')?.innerHTML,html:document.querySelector('.pane-body')?.innerHTML?.slice(0,2000)})); await new Promise(r=>setTimeout(r,40)); } };
     if (pv.platform !== 'darwin') throw Error('Wrong platform bridge');
-    await wait(()=>[...document.querySelectorAll('.row')].some(e=>e.textContent.includes('readme.md')));
+    await wait(()=>[...document.querySelectorAll('.row')].some(e=>e.textContent.includes('readme.md')), 'workspace');
     [...document.querySelectorAll('.row')].find(e=>e.textContent.includes('readme.md')).click();
-    await wait(()=>document.querySelector('.prose')?.textContent.includes('MACOS_PREVIEW'));
+    await wait(()=>document.querySelector('.prose')?.textContent.includes('MACOS_PREVIEW'), 'markdown');
     document.querySelector('.prose a').click();
-    await wait(()=>document.querySelector('.prose')?.textContent.includes('MACOS_LOCAL_LINK'));
+    await wait(()=>document.querySelector('.prose')?.textContent.includes('MACOS_LOCAL_LINK'), 'local-link');
     const denied=await pv.read(${JSON.stringify(outside)});
     if (!denied.error) throw Error('Workspace boundary bypass');
     document.querySelector('[data-network-add]').click();
-    await wait(()=>document.querySelector('.network-add-menu'));
+    await wait(()=>document.querySelector('.network-add-menu'), 'network-menu');
     document.querySelector('.network-add-menu [data-web-add]').click();
     if(!document.querySelector('.web-url')) throw Error('Link form missing');
     document.querySelector('[data-web-cancel]').click();
