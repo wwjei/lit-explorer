@@ -34,7 +34,7 @@ jobs:
         run: npm ci
 
       - name: 安装 Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: mygo/go.mod
           cache-dependency-path: mygo/go.sum
@@ -69,7 +69,7 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: mygo/go.mod
           cache-dependency-path: mygo/go.sum
