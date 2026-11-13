@@ -36,7 +36,7 @@ try {
   fs.writeFileSync(outside, 'outside workspace');
   const probe = path.join(temp, 'probe.js');
   fs.writeFileSync(probe, `(async () => {
-    const wait = async (fn, stage) => { const until=Date.now()+15000; while(!fn()) { if(Date.now()>until) throw Error(stage+' timeout '+JSON.stringify({body:document.body.innerText.slice(0,6000),root:document.querySelector('#root-name')?.textContent,prose:document.querySelector('.prose')?.innerHTML,html:document.querySelector('.pane-body')?.innerHTML?.slice(0,2000)})); await new Promise(r=>setTimeout(r,40)); } };
+    const wait = async (fn, stage) => { const until=Date.now()+15000; while(!fn()) { if(Date.now()>until) throw Error(stage+' timeout '+JSON.stringify({url:location.href,document:document.documentElement.outerHTML.slice(0,5000),body:document.body.innerText.slice(0,6000),root:document.querySelector('#root-name')?.textContent,prose:document.querySelector('.prose')?.innerHTML,html:document.querySelector('.pane-body')?.innerHTML?.slice(0,2000)})); await new Promise(r=>setTimeout(r,40)); } };
     if (pv.platform !== 'darwin') throw Error('Wrong platform bridge');
     await wait(()=>[...document.querySelectorAll('.row')].some(e=>e.textContent.includes('readme.md')), 'workspace');
     [...document.querySelectorAll('.row')].find(e=>e.textContent.includes('readme.md')).click();

@@ -228,7 +228,7 @@ func createWindow(state map[string]any) {
 	w, h, x, y, hasPos := windowBounds(state["window"])
 	opts := mygo.WindowOptions{
 		Title:     productName,
-		URL:       "/src/renderer/index.html",
+		URL:       "/src/renderer/",
 		Width:     w,
 		Height:    h,
 		MinWidth:  900,
