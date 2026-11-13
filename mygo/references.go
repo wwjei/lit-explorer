@@ -2,8 +2,6 @@ package main
 
 // 参考目录只能由系统选择框添加；页面设置不是目录授权来源。
 import (
-	"strings"
-
 	"github.com/egoist/mygo"
 )
 
@@ -16,7 +14,7 @@ func referenceMap(state map[string]any) map[string]any {
 }
 
 func savedReferences(root string) []string {
-	list, _ := referenceMap(loadState())[strings.ToLower(root)].([]any)
+	list, _ := referenceMap(loadState())[pathKey(root)].([]any)
 	out := []string{}
 	for i, raw := range list {
 		if i >= 32 {
@@ -43,7 +41,7 @@ func (a *App) saveReferences(next []string) {
 	for _, p := range next {
 		list = append(list, p)
 	}
-	m[strings.ToLower(a.referenceRoot)] = list
+	m[pathKey(a.referenceRoot)] = list
 	patchInternal(map[string]any{"referenceDirs": m})
 	a.references = next
 }
@@ -75,7 +73,7 @@ func (a *App) AddReferenceDir() map[string]any {
 		return map[string]any{"error": "LIMIT"}
 	}
 	for _, p := range append(append([]string{}, a.references...), root) {
-		if strings.EqualFold(p, real) {
+		if pathKey(p) == pathKey(real) {
 			return map[string]any{"dirs": append([]string{}, a.references...)}
 		}
 	}
@@ -92,7 +90,7 @@ func (a *App) RemoveReferenceDir(dir string) map[string]any {
 	}
 	next := []string{}
 	for _, p := range a.references {
-		if !strings.EqualFold(p, dir) {
+		if pathKey(p) != pathKey(dir) {
 			next = append(next, p)
 		}
 	}

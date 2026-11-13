@@ -52,47 +52,84 @@ jobs:
         shell: pwsh
         run: ./scripts/verify-installer.ps1
 
-      - name: 生成校验和
-        # 没有代码签名，SHA256SUMS.txt 是用户唯一能自己核对产物的手段
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-packages
+          path: dist/*.exe
+          if-no-files-found: error
+
+  macos:
+    name: 构建 macOS 通用安装包
+    needs: test
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: mygo/go.mod
+          cache-dependency-path: mygo/go.sum
+      - run: npm run dist
+      - name: 原生单元测试
+        working-directory: mygo
+        run: go test ./...
+      - name: DMG 与 WKWebView 实际启动验证
+        run: node scripts/verify-macos.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-packages
+          path: dist/*.dmg
+          if-no-files-found: error
+
+  publish:
+    name: 汇总并发布
+    needs: [windows, macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: '*-packages'
+          path: dist
+          merge-multiple: true
+      - name: 核对完整产物并生成校验和
         run: node scripts/build-checksums.mjs
-
-      - name: 列出产物
-        run: Get-ChildItem -Recurse dist | Where-Object { !$_.PSIsContainer } | Select-Object Name, Length
-        shell: pwsh
-
       - name: 发布 Release
         uses: softprops/action-gh-release@v3
         with:
           name: ${{ github.ref_name }}
           tag_name: ${{ github.ref_name }}
-          # tag 里带连字符视为预发布（如 v0.0.1-alpha）
           prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
-          # generate_release_notes 开启时，body 会放在自动生成的说明前面；
-          # append_body 是布尔开关（追加到已有 Release 正文），不能拿来装这段文字
           body: |
-            ### Lit Explorer · Windows x64
+            ### Lit Explorer · Windows / macOS
 
             | 文件 | 说明 |
             | --- | --- |
-            | `Lit-Explorer-Setup-<版本>.exe` | 安装包，默认目录为 `%LOCALAPPDATA%\Programs\Lit Explorer` |
-            | `Lit-Explorer-<版本>-portable.exe` | 免安装版 |
+            | `Lit-Explorer-Setup-<版本>.exe` | Windows x64 安装包 |
+            | `Lit-Explorer-<版本>-portable.exe` | Windows x64 免安装版 |
+            | `Lit-Explorer-<版本>-macOS-universal.dmg` | macOS 12+，同时支持 Apple Silicon 和 Intel；拖入 Applications 安装 |
 
-            需要 WebView2 Runtime（Windows 11 自带，Windows 10 通常随 Edge 提供）。
-            旧版本项目设置和本机授权会在首次启动时迁移，已有新设置不会被覆盖。
+            Windows 需要 WebView2 Runtime，默认安装到 `%LOCALAPPDATA%\Programs\Lit Explorer`。
+            macOS 使用系统 WKWebView，无需额外安装运行时，快捷键使用 Command。
+            macOS 本地文件在应用内预览，网页链接和云文档内容由默认浏览器打开，云目录列表仍在应用内浏览。
 
-            ### 校验下载
+            当前未配置 Developer ID 签名和 Apple 公证。macOS 包采用临时签名，首次打开可能被 Gatekeeper 拦截；
+            确认下载来源后，可从“系统设置 → 隐私与安全性 → 仍要打开”允许运行。
+            Windows SmartScreen 可能提示“未知发布者”。
 
-            本构建未配置代码签名，Windows SmartScreen 会提示「未知发布者」。下载后可以核对
-            `SHA256SUMS.txt`：
-
-            ```
-            sha256sum -c SHA256SUMS.txt
-            ```
-
-            许可与说明嵌入程序，可从应用菜单打开。
+            `SHA256SUMS.txt` 包含全部三个下载包的 SHA-256，可用 `shasum -a 256 -c SHA256SUMS.txt` 核对。
+            许可与说明可从应用菜单打开。
           files: |
             dist/*.exe
+            dist/*.dmg
             dist/SHA256SUMS.txt
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

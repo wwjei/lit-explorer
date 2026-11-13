@@ -23,8 +23,8 @@
   }
 
   window.pv = {
-    platform: 'win32',
-    capabilities: { webPane: true },
+    platform: '__LIT_PLATFORM__' === 'windows' ? 'win32' : '__LIT_PLATFORM__',
+    capabilities: { webPane: '__LIT_PLATFORM__' === 'windows' },
 
     /* 工作区 */
     pickFolder: function () { return call('App.PickFolder'); },

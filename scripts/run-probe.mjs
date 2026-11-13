@@ -1,4 +1,4 @@
-// Windows 原生探针；独立 profile 和实例锁，不操作用户实例。
+// 原生探针；独立 profile 和实例锁，不操作用户实例。
 import {spawn,execFileSync} from 'node:child_process';
 import {mkdirSync,readFileSync,writeFileSync} from 'node:fs';
 import path from 'node:path';

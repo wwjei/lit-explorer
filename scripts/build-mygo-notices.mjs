@@ -1,7 +1,7 @@
 /**
- * 为 MyGo 生成合并的 npm / Go 许可声明，写入 frontend/notices，不影响 Electron。
+ * 为 MyGo 生成合并的 npm / Go 许可声明，写入 frontend/notices。
  * stage-frontend.mjs 先复制 go:embed 输入，再调用本脚本；依赖 Go，但不新增 npm 依赖。
- * Go 模块由 Windows/amd64 主程序的 go list -deps 推导，replace 使用实际源码的身份与许可。
+ * Go 模块由目标平台主程序的 go list -deps 推导，replace 使用实际源码的身份与许可。
  * 用法：node mygo/stage-frontend.mjs（也可在 stage 后单独运行本脚本刷新声明）。
  */
 
@@ -14,7 +14,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const mygoDir = path.join(root, 'mygo');
 const outFile = path.join(mygoDir, 'frontend', 'notices', 'THIRD-PARTY-NOTICES.md');
 const env = {
-  ...process.env, GOOS: 'windows', GOARCH: 'amd64',
+  ...process.env, GOOS: process.env.LIT_GOOS || (process.platform === 'darwin' ? 'darwin' : 'windows'), GOARCH: process.env.LIT_GOARCH || process.arch.replace('x64', 'amd64'),
   CGO_ENABLED: process.env.CGO_ENABLED || '0',
 };
 const go = (...args) => execFileSync('go', args, {
@@ -116,7 +116,7 @@ components.push({
 
 const lines = [
   '', '---', '', '# 应用链接的 Go 代码', '',
-  '以下模块由 Windows/amd64 主程序（不含测试与构建工具）的 `go list -deps` 推导；',
+  '以下模块由目标平台主程序（不含测试与构建工具）的 `go list -deps` 推导；',
   '模块替换按实际源码列出。另附编入可执行文件的 Go runtime、标准库及其 vendor 许可。', '',
   '| 模块 / 组件 | 版本 | 许可 |', '| --- | --- | --- |',
   ...components.map((item) => `| ${item.name} | ${item.version} | ${item.license} |`), '',

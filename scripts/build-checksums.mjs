@@ -23,11 +23,12 @@ if (!fs.existsSync(dir)) {
   process.exit(1);
 }
 
-// 产品仅发布安装包和便携包，两者缺一则停止发布。
+// 发布必须包含 Windows 安装包、便携包和 macOS 通用 DMG，缺一则停止。
 const { version } = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 const files = [
   `Lit-Explorer-Setup-${version}.exe`,
   `Lit-Explorer-${version}-portable.exe`,
+  `Lit-Explorer-${version}-macOS-universal.dmg`,
 ];
 const missing = files.filter((file) => !fs.existsSync(path.join(dir, file)));
 if (missing.length) {

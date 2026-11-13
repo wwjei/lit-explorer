@@ -1,6 +1,6 @@
 package main
 
-// Lit Explorer 原生宿主：用系统 WebView2 承载渲染层，
+// Lit Explorer 原生宿主：用系统 WebView2 / WKWebView 承载渲染层，
 // Go 侧重新实现 preload 暴露的那些能力（文件系统、状态、菜单、协议、窗口）。
 // 内嵌网页由 fork 的 ChildWebView 承载，状态与可见性在 UI 线程上同步。
 
@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -234,7 +235,12 @@ func createWindow(state map[string]any) {
 		MinHeight: 560,
 		Hidden:    true,
 		Frameless: true,
-		Page:      mygo.PageOptions{PreloadScript: bridgeJS},
+		Page:      mygo.PageOptions{PreloadScript: strings.ReplaceAll(bridgeJS, "__LIT_PLATFORM__", runtime.GOOS)},
+	}
+	if runtime.GOOS == "darwin" {
+		opts.Frameless = false
+		opts.TitleBarStyle = mygo.TitleBarHiddenInset
+		opts.TitleBarHeight = 52
 	}
 	if hasPos {
 		opts.X, opts.Y = x, y
@@ -410,7 +416,7 @@ func (a *App) openWorkspaceWith(dir string, resolve func(string) (string, error)
 		recent := []any{real}
 		if old, ok := state["recentRoots"].([]any); ok {
 			for _, r := range old {
-				if s, ok := r.(string); ok && !strings.EqualFold(s, real) && len(recent) < 8 {
+				if s, ok := r.(string); ok && pathKey(s) != pathKey(real) && len(recent) < 8 {
 					recent = append(recent, s)
 				}
 			}
@@ -728,9 +734,7 @@ func (a *App) Reveal(path string) map[string]any {
 	if err != nil {
 		return map[string]any{"error": codeOf(err), "message": err.Error()}
 	}
-	if err := exec.Command("explorer", "/select,"+abs).Start(); err != nil {
-		return map[string]any{"error": "EREVEAL", "message": err.Error()}
-	}
+	mygo.Shell.ShowItemInFolder(abs)
 	return map[string]any{"ok": true}
 }
 
@@ -1032,12 +1036,13 @@ func (a *App) OpenContextMenu(payload map[string]any) map[string]any {
 			mygo.Separator(),
 			&mygo.MenuItem{Label: "复制路径", Click: func(*mygo.MenuItem, *mygo.Window) { copyText(target) }},
 			&mygo.MenuItem{Label: "复制名称", Click: func(*mygo.MenuItem, *mygo.Window) { copyText(baseName(target)) }},
-			&mygo.MenuItem{Label: "在资源管理器中显示", Click: func(*mygo.MenuItem, *mygo.Window) { reveal(target) }},
+			&mygo.MenuItem{Label: fileManagerLabel(), Click: func(*mygo.MenuItem, *mygo.Window) { reveal(target) }},
 			mygo.Separator())
 	}
 	items = append(items, &mygo.MenuItem{Label: "刷新已变化内容", Accelerator: "F5", Click: func(*mygo.MenuItem, *mygo.Window) {
 		evRescan.Emit(a.win, struct{}{})
 	}})
+	items = platformMenu(items)
 	mygo.NewMenu(items).Popup(a.win)
 	return map[string]any{"ok": true}
 }
@@ -1081,6 +1086,7 @@ func (a *App) OpenAppMenu() map[string]any {
 		}},
 		{Label: "示例项目目录", Click: func(*mygo.MenuItem, *mygo.Window) { a.openWorkspace(a.GetSampleRoot()) }},
 	}
+	items = platformMenu(items)
 	mygo.NewMenu(items).Popup(a.win)
 	return map[string]any{"ok": true}
 }
@@ -1133,7 +1139,7 @@ func openPath(path string) {
 }
 
 func reveal(path string) {
-	_ = exec.Command("explorer", "/select,"+path).Start()
+	mygo.Shell.ShowItemInFolder(path)
 }
 
 func copyText(text string) {
@@ -1148,6 +1154,9 @@ func openExternal(raw string) {
 
 // 注册项只使用当前用户的注册表，不提升权限。
 func (a *App) configureFolderMenu(enable bool) {
+	if runtime.GOOS != "windows" {
+		return
+	}
 	key := `HKCU\Software\Classes\Directory\shell\LitExplorer`
 	exe, err := os.Executable()
 	if err != nil {
@@ -1171,4 +1180,30 @@ func (a *App) configureFolderMenu(enable bool) {
 			return
 		}
 	}
+}
+
+// 原生菜单沿用同一业务操作，仅调整平台相关文案与快捷键。
+func fileManagerLabel() string {
+	if runtime.GOOS == "darwin" {
+		return "在 Finder 中显示"
+	}
+	return "在资源管理器中显示"
+}
+func platformMenu(items []*mygo.MenuItem) []*mygo.MenuItem {
+	if runtime.GOOS != "darwin" {
+		return items
+	}
+	out := make([]*mygo.MenuItem, 0, len(items))
+	for _, item := range items {
+		if item.Label == "注册文件夹右键菜单" || item.Label == "取消文件夹右键菜单" {
+			continue
+		}
+		item.Accelerator = strings.ReplaceAll(item.Accelerator, "Ctrl+", "Cmd+")
+		item.Label = strings.ReplaceAll(item.Label, "Ctrl+", "⌘")
+		if item.Submenu != nil {
+			item.Submenu = platformMenu(item.Submenu)
+		}
+		out = append(out, item)
+	}
+	return out
 }

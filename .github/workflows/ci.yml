@@ -104,3 +104,25 @@ jobs:
       - name: 验证安装、升级与卸载
         shell: pwsh
         run: ./scripts/verify-installer.ps1
+
+  macos:
+    name: macOS 构建与原生验证
+    if: github.event_name == 'pull_request'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: mygo/go.mod
+          cache-dependency-path: mygo/go.sum
+      - run: npm run dist
+      - name: 原生单元测试
+        working-directory: mygo
+        run: go test ./...
+      - name: DMG 与 WKWebView 实际启动验证
+        run: node scripts/verify-macos.mjs
