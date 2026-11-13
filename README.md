@@ -3,7 +3,7 @@
 <img src="assets/icon-source.png" width="88" height="88" alt="Lit Explorer">
 
 面向开发者的本地项目文件浏览器：多栏目录导航、即时文件预览、固定与分屏阅读。
-仅支持 Windows x64。
+支持 Windows x64 与 macOS 12+（Apple Silicon / Intel）。
 
 ## 下载与安装
 
@@ -11,7 +11,8 @@
 
 - `Lit-Explorer-Setup-<version>.exe`：安装版，可选择目录。
 - `Lit-Explorer-<version>-portable.exe`：免安装版。
-- `SHA256SUMS.txt`：两个 EXE 的 SHA-256 校验和。
+- `Lit-Explorer-<version>-macOS-universal.dmg`：macOS 通用包，打开后拖入 Applications。
+- `SHA256SUMS.txt`：以上三个文件的 SHA-256 校验和。
 
 产品名称统一为 **Lit Explorer**，仅提供一个版本。默认安装目录为
 `%LOCALAPPDATA%\Programs\Lit Explorer`，设置与本机授权位于 `%APPDATA%\Lit Explorer`。
@@ -25,6 +26,16 @@
 ```bash
 sha256sum -c SHA256SUMS.txt
 ```
+
+### macOS
+
+使用系统 WKWebView，无需另装 WebView2。设置位于 `~/Library/Application Support/Lit Explorer`。
+保留系统红黄绿窗口按钮，快捷键使用 `Command`（如 `⌘O`、`⌘F`）。
+本地文件在应用内预览；网页链接及云文档内容通过默认浏览器打开，云目录列表仍在应用内浏览。
+金山授权用登录钥匙串保护随机密钥，本地只保存加密授权；系统保护不可用时仅保留本次会话。
+
+当前 DMG 采用临时签名，尚未做 Developer ID 签名与 Apple 公证。
+若首次打开被拦截，确认下载来源后可在“系统设置 → 隐私与安全性 → 仍要打开”允许。
 
 ## 使用
 

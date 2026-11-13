@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Lit Explorer：Windows 原生项目文件浏览器。唯一产品宿主在 `mygo/`（Go + WebView2），
+Lit Explorer：Windows / macOS 原生项目文件浏览器。唯一产品宿主在 `mygo/`（Go + WebView2 / WKWebView），
 渲染层在 `src/renderer/`。MyGo 是技术框架名，只出现在技术说明与许可中，不作产品名称。
 Electron 仅用于开发期界面测试，Node 契约宿主在 `test/host/`，绝不进入发行产物。
 
@@ -14,7 +14,7 @@ Electron 仅用于开发期界面测试，Node 契约宿主在 `test/host/`，�
 | 测试与探针 | [docs/agents/verify.md](docs/agents/verify.md) |
 | 原生宿主 | [mygo/README.md](mygo/README.md)、`mygo/main.go` |
 | 路径授权与凭据 | [docs/agents/security.md](docs/agents/security.md) |
-| 安装身份、迁移与发布 | `src/shared/product.json`、`mygo/product_data.go`、`build/installer.nsi`、[docs/agents/release.md](docs/agents/release.md) |
+| 安装身份、迁移与发布 | `src/shared/product.json`、`mygo/product_data.go`、`build/installer.nsi`、`scripts/verify-macos.mjs`、[docs/agents/release.md](docs/agents/release.md) |
 | 文档与注释 | [docs/agents/conventions.md](docs/agents/conventions.md) |
 | 生命周期与取消 | [docs/design/renderer-lifecycles.md](docs/design/renderer-lifecycles.md) |
 | 云目录 | [docs/design/external-directory-plugins.md](docs/design/external-directory-plugins.md) |

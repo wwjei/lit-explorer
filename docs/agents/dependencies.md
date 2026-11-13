@@ -7,7 +7,7 @@ Electron 仅用于界面测试。不得恢复 electron-builder 或第二个产�
 改 npm 依赖同步 `package-lock.json`，用 `npm ci --dry-run` 校验；改 Go 依赖同步
 `mygo/go.sum`，不能只改模块版本或 replace。
 
-`mygo/stage-frontend.mjs` 调 `scripts/build-mygo-notices.mjs`，根据 Windows 主程序实际
+`mygo/stage-frontend.mjs` 调 `scripts/build-mygo-notices.mjs`，根据目标平台主程序实际
 `go list -deps` 的结果，合并 npm、Go 模块、替换模块与标准库许可。
 技术组件的真实名称与版权声明必须保留，产品品牌统一不能删掉法律署名。
 

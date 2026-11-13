@@ -68,3 +68,9 @@
 插件契约、飞书推演和其他服务接入步骤见 [外部目录插件体系](docs/design/external-directory-plugins.md)。
 
 金山已改为内置 Skill 认证和目录模块，不依赖 CLI 或手动令牌；真实个人账号、原生交换协议、系统保护与在线链接仍需联调，见 [金山目录插件](docs/design/kdocs-directory-plugin.md)。
+
+## macOS 网页内嵌
+
+macOS 已提供本地目录和文件预览、云目录列表；网页链接及云文档内容当前由默认浏览器打开。
+后续为原生宿主补齐 WKWebView 子视图、独立会话、导航状态及遮挡生命周期，再启用网页预览列。
+Windows 子视图实现不能直接声明为 macOS 能力，避免出现无法加载的空白列。
