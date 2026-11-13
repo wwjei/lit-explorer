@@ -25,7 +25,7 @@ try {
   assert.equal(field('CFBundleDisplayName'), 'Lit Explorer');
   assert.equal(field('CFBundleShortVersionString'), version);
   const binary = path.join(app, 'Contents/MacOS', field('CFBundleExecutable'));
-  run('lipo', ['-verify_arch', 'arm64', 'x86_64', binary]);
+  run('lipo', [binary, '-verify_arch', 'arm64', 'x86_64']);
 
   const workspace = path.join(temp, '示例 Project');
   fs.mkdirSync(workspace);
