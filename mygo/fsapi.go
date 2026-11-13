@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -87,7 +88,7 @@ var mimeByExt = map[string]string{
 
 type rootsMu struct {
 	sync.RWMutex
-	// 键是小写真实路径，值保留原始大小写，用于 resolveImages 拼工作区相对地址
+	// 键是按平台归一化的真实路径，值保留原始大小写，用于 resolveImages 拼工作区相对地址
 	allowed  map[string]string
 	writable map[string]string
 	offered  map[string]bool
@@ -145,8 +146,17 @@ func realPath(target string) (string, error) {
 	}
 }
 
+// Windows 路径忽略大小写；Unix 保留大小写，避免越过区分大小写卷的授权边界。
+func pathKey(path string) string {
+	path = filepath.Clean(path)
+	if runtime.GOOS == "windows" {
+		return strings.ToLower(path)
+	}
+	return path
+}
+
 func within(root, abs string) bool {
-	r, a := strings.ToLower(filepath.Clean(root)), strings.ToLower(filepath.Clean(abs))
+	r, a := pathKey(root), pathKey(abs)
 	if r == a {
 		return true
 	}
@@ -180,14 +190,14 @@ func allowResolvedRoot(real string) {
 	}
 	roots.Lock()
 	defer roots.Unlock()
-	roots.allowed[strings.ToLower(real)] = real
-	roots.writable[strings.ToLower(real)] = real
+	roots.allowed[pathKey(real)] = real
+	roots.writable[pathKey(real)] = real
 }
 
 func allowReferenceRoot(real string) {
 	roots.Lock()
 	defer roots.Unlock()
-	roots.allowed[strings.ToLower(real)] = real
+	roots.allowed[pathKey(real)] = real
 }
 
 func offerRoot(dir string) string {
@@ -200,7 +210,7 @@ func offerRoot(dir string) string {
 	}
 	roots.Lock()
 	defer roots.Unlock()
-	roots.offered[strings.ToLower(filepath.Clean(abs))] = true
+	roots.offered[pathKey(abs)] = true
 	return dir
 }
 
@@ -214,7 +224,7 @@ func isOfferedRoot(dir string) bool {
 	}
 	roots.RLock()
 	defer roots.RUnlock()
-	return roots.offered[strings.ToLower(filepath.Clean(abs))]
+	return roots.offered[pathKey(abs)]
 }
 
 func isInsideAnyRoot(abs string) bool {

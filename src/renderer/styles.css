@@ -929,3 +929,7 @@ body.has-web #toast.on{transform:translateY(0)}
 
 .cloud-context-menu{position:fixed;z-index:1000;min-width:160px;padding:5px;border:1px solid var(--line);border-radius:8px;background:var(--panel);color:var(--text);box-shadow:0 8px 28px #0003}
 .cloud-context-menu button{width:100%;justify-content:flex-start}
+
+/* macOS 使用系统红黄绿窗口控件，标题栏为它们留出空间。 */
+[data-platform="darwin"] .topbar{padding-left:84px}
+[data-platform="darwin"] .winctl{display:none}

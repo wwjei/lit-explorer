@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -12,17 +13,18 @@ import (
 )
 
 func TestWithin(t *testing.T) {
-	root := `C:\work`
+	root := filepath.Join(t.TempDir(), "Work")
 	cases := []struct {
 		abs  string
 		want bool
 	}{
-		{`C:\work`, true},
-		{`C:\work\a\b.txt`, true},
-		{`c:\WORK\a`, true},
-		{`C:\workshop`, false},
-		{`C:\work2\x`, false},
+		{root, true},
+		{filepath.Join(root, "a", "b.txt"), true},
+		{strings.ToUpper(root), runtime.GOOS == "windows"},
+		{root + "shop", false},
+		{root + "2" + string(filepath.Separator) + "x", false},
 	}
+
 	for _, c := range cases {
 		if got := within(root, c.abs); got != c.want {
 			t.Errorf("within(%q, %q) = %v, want %v", root, c.abs, got, c.want)
@@ -414,7 +416,7 @@ func TestReferencePersistenceAndRemoval(t *testing.T) {
 	if len(savedReferences(project)) != 1 {
 		t.Fatal("reference was not persisted")
 	}
-	patchFromPage(map[string]any{"referenceDirs": map[string]any{strings.ToLower(project): []any{"C:\\"}}})
+	patchFromPage(map[string]any{"referenceDirs": map[string]any{pathKey(project): []any{"C:\\"}}})
 	if len(savedReferences(project)) != 1 {
 		t.Fatal("page altered protected reference roots")
 	}

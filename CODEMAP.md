@@ -1,6 +1,6 @@
 # CODEMAP
 
-产品：Lit Explorer，Windows x64，唯一宿主为 Go + WebView2。Electron 只作为界面测试工具。
+产品：Lit Explorer，Windows x64 / macOS 13+ 通用包，唯一宿主为 Go + 系统 WebView。Electron 只作为界面测试工具。
 
 ## 启动、安装与状态
 
@@ -11,7 +11,7 @@
 - `mygo/fsapi.go`：真实路径授权、文件列表、读取、SVG 版本冲突保存。
 - `mygo/bridge.js`：`window.pv` 契约，原生 RPC 与事件。
 - `build/installer.nsi` / `build/close-app.ps1`：安装目录、旧安装接管、快捷方式、卸载、文件夹右键菜单；只请求关闭目标应用，不强杀。
-- `scripts/build-mygo.mjs`：生成框架配置、staging、原生编译及产品安装器；`scripts/verify-installer.ps1` 在 CI 验证安装/升级/卸载。
+- `scripts/build-mygo.mjs`：生成框架配置、staging、原生编译及产品安装器；`scripts/verify-installer.ps1` 在 Windows CI 验证安装/升级/卸载；`scripts/verify-macos.mjs` 验证 DMG、通用架构、临时签名与真实 WKWebView 启动。
 
 ## 渲染层
 
@@ -39,7 +39,7 @@
 - `src/shared/directory-providers.json`：版本化声明、固定 API 域名、目录根与节点映射。
 - `mygo/directory_plugins.go`：`DirectoryCall`、会话/已发现节点/游标授权；48 小时、128 页缓存；刷新文件夹失效其全部分页，版本检查阻止旧响应回填。
 - `mygo/feishu_auth.go` / `src/shared/feishu-auth.json`：实验设备授权、注册、令牌刷新与取消。
-- `mygo/kdocs_plugin.go` / `kdocs_protection_windows.go` / `src/shared/kdocs-skill.json`：官方浏览器授权、四个读取工具、DPAPI 保存。
+- `mygo/kdocs_plugin.go` / `kdocs_protection_windows.go` / `kdocs_protection_darwin.go` / `src/shared/kdocs-skill.json`：官方浏览器授权、四个读取工具、DPAPI / 钥匙串保护。
 - `mygo/references.go`：原生目录选择授权与项目只读参考根。
 - `pv.list(dir, requestId=0)` 的元信息事件带 requestId，只有当前列接受。
 
@@ -48,9 +48,10 @@
 - `test/unit.test.cjs`：渲染纯逻辑、Node 测试宿主契约及 S14–S16 并发回归。
 - `test/integration.test.cjs`：真实 DOM + 受控 IPC，C/P/E/F/R/D/W/L 段落。
 - `test/host/`：仅测试用的 Node 适配与 preload，不是第二个产品；`main.js` 不包含产品窗口/生命周期。
+- `mygo/frontend_test.go`：确认原生入口直接返回 HTML，不产生 WKWebView 自定义协议无法跟随的 index.html 重定向。
 - `mygo/*_test.go`：原生授权、安全边界、凭据、缓存、工作区提交、数据迁移、窗口状态。
 - `mygo/stage-frontend.mjs`：仅复制 renderer/shared/资源/产品文档，生成 Go + npm 第三方许可；不复制测试宿主。
-- `scripts/run-native.mjs`：Windows 开发启动；`scripts/run-probe.mjs`：独立 profile 的原生探针。
+- `scripts/run-native.mjs`：Windows / macOS 开发启动；`scripts/run-probe.mjs`：独立 profile 的原生探针。
 
 规则与验证：[AGENTS.md](AGENTS.md)、[docs/agents/verify.md](docs/agents/verify.md)。
 状态契约：[docs/design/renderer-lifecycles.md](docs/design/renderer-lifecycles.md)。

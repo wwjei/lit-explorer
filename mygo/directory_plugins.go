@@ -326,7 +326,7 @@ func (s *directoryPluginService) activate(root string) {
 func (s *directoryPluginService) savedLocked() []directoryMount {
 	out := []directoryMount{}
 	all, _ := loadState()["directoryMounts"].(map[string]any)
-	list, _ := all[strings.ToLower(s.root)].([]any)
+	list, _ := all[pathKey(s.root)].([]any)
 	for _, raw := range list {
 		if len(out) >= 32 {
 			break
@@ -353,7 +353,7 @@ func (s *directoryPluginService) persistLocked(next []directoryMount) {
 		json.Unmarshal(data, &value)
 		values = append(values, value)
 	}
-	all[strings.ToLower(s.root)] = values
+	all[pathKey(s.root)] = values
 	patchInternal(map[string]any{"directoryMounts": all})
 }
 func (s *directoryPluginService) mounts() []map[string]any {
