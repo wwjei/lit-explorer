@@ -28,3 +28,5 @@ Windows 安装器验证不运行产品，不触碰用户实例；其他手工验
 更多入口见 [CODEMAP](../../CODEMAP.md)。
 
 macOS CI 执行全部 Go 测试并构建通用 DMG。`scripts/verify-macos.mjs` 挂载真实镜像，核对签名、Apple Silicon / Intel 切片、产品身份，在独立 profile 启动 WKWebView，验证 Markdown、本地链接、越界拒绝和网络添加入口。
+
+- `TestFrontendEntryServesHTMLWithoutRedirect`：原生页面入口返回 200 和 HTML，不依赖自定义协议重定向。

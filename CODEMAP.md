@@ -48,6 +48,7 @@
 - `test/unit.test.cjs`：渲染纯逻辑、Node 测试宿主契约及 S14–S16 并发回归。
 - `test/integration.test.cjs`：真实 DOM + 受控 IPC，C/P/E/F/R/D/W/L 段落。
 - `test/host/`：仅测试用的 Node 适配与 preload，不是第二个产品；`main.js` 不包含产品窗口/生命周期。
+- `mygo/frontend_test.go`：确认原生入口直接返回 HTML，不产生 WKWebView 自定义协议无法跟随的 index.html 重定向。
 - `mygo/*_test.go`：原生授权、安全边界、凭据、缓存、工作区提交、数据迁移、窗口状态。
 - `mygo/stage-frontend.mjs`：仅复制 renderer/shared/资源/产品文档，生成 Go + npm 第三方许可；不复制测试宿主。
 - `scripts/run-native.mjs`：Windows / macOS 开发启动；`scripts/run-probe.mjs`：独立 profile 的原生探针。
