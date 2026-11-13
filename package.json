@@ -27,7 +27,7 @@
   "dependencies": {},
   "devDependencies": {
     "docx-preview": "0.4.1",
-    "electron": "^44.9.3",
+    "electron": "^44.10.2",
     "esbuild": "^0.28.2",
     "jszip": "^3.10.2",
     "pptx-preview": "1.0.7",
