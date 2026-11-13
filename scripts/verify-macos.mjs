@@ -23,6 +23,7 @@ try {
   const plist = path.join(app, 'Contents/Info.plist');
   const field = (key) => run('/usr/libexec/PlistBuddy', ['-c', `Print :${key}`, plist]).trim();
   assert.equal(field('CFBundleDisplayName'), 'Lit Explorer');
+  assert.equal(field('LSMinimumSystemVersion'), '13.0');
   assert.equal(field('CFBundleShortVersionString'), version);
   const binary = path.join(app, 'Contents/MacOS', field('CFBundleExecutable'));
   run('lipo', [binary, '-verify_arch', 'arm64', 'x86_64']);

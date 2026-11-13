@@ -313,4 +313,4 @@
 
 ## 发布版本选择
 
-发布 Windows 安装包、便携包及 macOS 12+ 通用 DMG（Apple Silicon / Intel）。macOS 使用系统 WKWebView、原生红黄绿按钮、Command 快捷键和 Finder 定位；网页及云文档内容交给默认浏览器，云目录列表仍在应用内；金山凭据以登录钥匙串保护密钥、AES-GCM 加密保存。产品名称、安装目录、快捷方式、卸载登记与文件夹菜单统一为 Lit Explorer；默认安装到 `%LOCALAPPDATA%\Programs\Lit Explorer`。旧版本设置与兼容授权首次启动迁移，已有设置不覆盖。
+发布 Windows 安装包、便携包及 macOS 13+ 通用 DMG（Apple Silicon / Intel）。macOS 使用系统 WKWebView、原生红黄绿按钮、Command 快捷键和 Finder 定位；网页及云文档内容交给默认浏览器，云目录列表仍在应用内；金山凭据以登录钥匙串保护密钥、AES-GCM 加密保存。产品名称、安装目录、快捷方式、卸载登记与文件夹菜单统一为 Lit Explorer；默认安装到 `%LOCALAPPDATA%\Programs\Lit Explorer`。旧版本设置与兼容授权首次启动迁移，已有设置不覆盖。

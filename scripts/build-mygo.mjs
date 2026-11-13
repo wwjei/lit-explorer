@@ -39,7 +39,7 @@ const config = {
   frontendDist: 'frontend',
   out: 'dist',
   icon: '../assets/icon-source.png',
-  macos: { minimumSystemVersion: '12.0' },
+  macos: { minimumSystemVersion: '13.0' },
 };
 fs.writeFileSync(path.join(mygoDir, 'mygo.json'), JSON.stringify(config, null, 2) + '\n');
 

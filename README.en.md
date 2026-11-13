@@ -2,7 +2,7 @@
 
 <img src="assets/icon-source.png" width="88" height="88" alt="Lit Explorer">
 
-A Windows x64 and macOS 12+ project browser with column navigation, file previews, pinned panes and split reading.
+A Windows x64 and macOS 13+ project browser with column navigation, file previews, pinned panes and split reading.
 
 ## Install
 

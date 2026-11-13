@@ -115,7 +115,7 @@ jobs:
             | --- | --- |
             | `Lit-Explorer-Setup-<版本>.exe` | Windows x64 安装包 |
             | `Lit-Explorer-<版本>-portable.exe` | Windows x64 免安装版 |
-            | `Lit-Explorer-<版本>-macOS-universal.dmg` | macOS 12+，同时支持 Apple Silicon 和 Intel；拖入 Applications 安装 |
+            | `Lit-Explorer-<版本>-macOS-universal.dmg` | macOS 13+，同时支持 Apple Silicon 和 Intel；拖入 Applications 安装 |
 
             Windows 需要 WebView2 Runtime，默认安装到 `%LOCALAPPDATA%\Programs\Lit Explorer`。
             macOS 使用系统 WKWebView，无需额外安装运行时，快捷键使用 Command。

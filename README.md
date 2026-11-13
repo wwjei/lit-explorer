@@ -3,7 +3,7 @@
 <img src="assets/icon-source.png" width="88" height="88" alt="Lit Explorer">
 
 面向开发者的本地项目文件浏览器：多栏目录导航、即时文件预览、固定与分屏阅读。
-支持 Windows x64 与 macOS 12+（Apple Silicon / Intel）。
+支持 Windows x64 与 macOS 13+（Apple Silicon / Intel）。
 
 ## 下载与安装
 

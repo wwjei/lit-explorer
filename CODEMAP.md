@@ -1,6 +1,6 @@
 # CODEMAP
 
-产品：Lit Explorer，Windows x64 / macOS 12+ 通用包，唯一宿主为 Go + 系统 WebView。Electron 只作为界面测试工具。
+产品：Lit Explorer，Windows x64 / macOS 13+ 通用包，唯一宿主为 Go + 系统 WebView。Electron 只作为界面测试工具。
 
 ## 启动、安装与状态
 
